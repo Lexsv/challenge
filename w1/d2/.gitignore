@@ -1,0 +1,30 @@
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials*
+.DS_Store
+
+# Local secrets and private configuration
+*.p8
+*.p12
+*.pfx
+id_rsa
+id_ed25519
+.aws/
+.ssh/
+.credentials/
+.secrets/
+secrets*
+tokens*
+passwords*
+
+# Local sessions and temporary artifacts
+.local/
+.cache/
+work/
+tmp/
+*.log
+*.tmp
+*.swp

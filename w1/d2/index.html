@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>API Explorer · Day 02</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="core.js" defer></script>
+  <script src="providers.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+<main class="explorer">
+  <header>
+    <p class="eyebrow">WEEK 01 / DAY 02</p>
+    <h1>API Explorer</h1>
+    <p class="subtitle">One prompt. Explore the response.</p>
+  </header>
+  <form id="explorer-form" autocomplete="off" novalidate>
+    <section class="card connection" aria-label="Connection">
+      <p class="endpoint"><span class="method">POST</span> <span id="endpoint">https://api.openai.com/v1/chat/completions</span></p>
+      <div class="connection-fields">
+        <div class="field"><label for="provider">Provider</label><select id="provider"><option value="openai">OpenAI</option><option value="gemini">Google Gemini</option><option value="anthropic">Anthropic Claude</option></select></div>
+        <div class="model-controls"><div class="field"><label for="model-choice">Model</label><select id="model-choice"></select></div><div id="custom-model-field" class="field" hidden><label for="model">Custom model ID</label><input id="model" value="gpt-4.1-mini" placeholder="Model ID" spellcheck="false" required></div></div>
+        <div class="field key-field"><label for="api-key">API Key</label><input id="api-key" type="password" placeholder="Enter your API key" autocomplete="off" autocapitalize="off" spellcheck="false" required aria-describedby="verify-help connection-message"><button id="key-visibility" type="button" class="icon-button" aria-label="Show API key" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/><path class="eye-slash" d="m3 3 18 18"/></svg></button></div>
+        <button id="verify" type="button" class="primary" disabled>Verify</button>
+        <span id="verified" role="img" aria-label="Verification succeeded" hidden>✓</span>
+      </div>
+      <p id="connection-message" role="status" class="connection-message" hidden></p>
+      <p id="verify-help" class="verification-note">Verify makes a small request and may consume tokens.</p>
+    </section>
+    <section class="card parameters" aria-labelledby="parameters-title">
+      <div class="section-heading"><h2 id="parameters-title">Request parameters</h2><button id="add-row" type="button" class="add-button" aria-label="Add parameter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"/></svg></button></div>
+      <p id="parameter-help" class="hint">Enable rows to include them. Values use JSON; quote strings.</p>
+      <div class="parameter-table" role="table" aria-label="Request parameters">
+        <div class="parameter-head" role="row"><span role="columnheader">USE</span><span role="columnheader">KEY</span><span role="columnheader">VALUE</span><span role="columnheader" class="sr-only">Actions</span></div>
+        <div id="parameter-rows" role="rowgroup"></div>
+      </div>
+    </section>
+    <section class="card prompt-card" aria-label="Prompt">
+      <div class="field"><label for="prompt">Prompt</label><textarea id="prompt" rows="2" placeholder="Enter your prompt here" required></textarea></div>
+      <button id="send" type="submit" class="primary" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="m3 3 19 9-19 9 4-9-4-9Zm4 9h15"/></svg><span>Send</span></button>
+      <p id="form-message" class="error" role="alert" hidden></p>
+    </section>
+  </form>
+  <section class="card results" aria-label="History and request inspector">
+    <aside class="history"><div class="section-heading"><h2>History</h2><button id="clear" type="button" class="text-button" disabled>Clear</button></div><p id="history-empty" class="hint">Your runs will appear here.<br>History clears on reload.</p><ul id="history-list" aria-label="Request history"></ul></aside>
+    <div class="inspector">
+      <h2 id="detail-title">Explore your first response</h2>
+      <p id="detail-status" class="detail-status" role="status">Send a prompt to begin.</p>
+      <p id="detail-meta" class="hint"></p>
+      <div id="detail-summary" aria-label="Completion and validation summary" hidden></div>
+      <div class="tabs" role="tablist" aria-label="Inspector">
+        <button id="response-tab" type="button" role="tab" aria-selected="true" aria-controls="response-panel">Response</button>
+        <button id="request-tab" type="button" role="tab" aria-selected="false" aria-controls="request-panel" tabindex="-1">Request</button>
+        <button id="raw-tab" type="button" role="tab" aria-selected="false" aria-controls="raw-panel" tabindex="-1">Raw JSON</button>
+      </div>
+      <div id="response-panel" class="panel" role="tabpanel" aria-labelledby="response-tab" tabindex="0"><p class="empty">Generated text and output checks will appear here.</p></div>
+      <div id="request-panel" class="panel" role="tabpanel" aria-labelledby="request-tab" tabindex="0" hidden><p id="request-endpoint" class="hint"></p><div id="request-content"><pre>No request selected.</pre></div></div>
+      <div id="raw-panel" class="panel" role="tabpanel" aria-labelledby="raw-tab" tabindex="0" hidden><div id="raw-content"><pre>No response selected.</pre></div></div>
+    </div>
+  </section>
+  <footer>Compare one control at a time. History stays in this page; reload clears it. <a href="README.md">Experiment guide</a></footer>
+</main>
+</body>
+</html>
