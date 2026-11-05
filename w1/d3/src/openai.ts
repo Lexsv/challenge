@@ -1,8 +1,3 @@
-import {
-  captureExecutionParameters,
-  type ExecutionParameters,
-} from "./execution-parameters";
-import { parameterPayload } from "./api-parameters";
 import { incompleteExplanation } from "./result-explanations";
 import {
   capabilities,
@@ -34,11 +29,7 @@ const statusError = (status: number) =>
           : status === 404
             ? "Model unavailable (404). Check the model ID and project access."
             : `OpenAI request failed (${status}). Check service status before retrying.`;
-async function respondInternal(
-  key: string,
-  request: Request,
-  onDispatch: (body: Record<string, unknown>) => void,
-): Promise<Omit<Attempt, "id">> {
+export const respond: Adapter = async (key, request) => {
   const start = performance.now();
   const controller = new AbortController();
   let timedOut = false;
@@ -68,33 +59,6 @@ async function respondInternal(
           "Structured generation requires a catalog model. Custom model capabilities are unverified.",
         ms: performance.now() - start,
       };
-    const body: Record<string, unknown> = {
-      model: request.settings.model,
-      store: false,
-      instructions: request.instructions,
-      input: request.input,
-      ...(request.settings.parameters
-        ? parameterPayload(request.settings.parameters)
-        : { max_output_tokens: request.settings.maxTokens }),
-      ...(capabilities(request.settings.model)?.reasoningEfforts.includes(
-        request.settings.reasoning || "",
-      ) && request.settings.reasoning
-        ? { reasoning: { effort: request.settings.reasoning } }
-        : {}),
-      ...(request.schema
-        ? {
-            text: {
-              format: {
-                type: "json_schema",
-                name: "lab_output",
-                strict: true,
-                schema: request.schema,
-              },
-            },
-          }
-        : {}),
-    };
-    onDispatch(body);
     const res = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
       redirect: "error",
@@ -104,31 +68,38 @@ async function respondInternal(
         "Content-Type": "application/json",
         Authorization: `Bearer ${key}`,
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify({
+        model: request.settings.model,
+        store: false,
+        instructions: request.instructions,
+        input: request.input,
+        max_output_tokens: request.settings.maxTokens,
+        ...(capabilities(request.settings.model)?.reasoningEfforts.includes(
+          request.settings.reasoning || "",
+        ) && request.settings.reasoning
+          ? { reasoning: { effort: request.settings.reasoning } }
+          : {}),
+        ...(request.schema
+          ? {
+              text: {
+                format: {
+                  type: "json_schema",
+                  name: "lab_output",
+                  strict: true,
+                  schema: request.schema,
+                },
+              },
+            }
+          : {}),
+      }),
     });
-    if (!res.ok) {
-      let detail = "";
-      if (res.status === 400 && request.settings.parameters) {
-        try {
-          const payload = await res.json();
-          if (typeof payload?.error?.message === "string")
-            detail = payload.error.message
-              .split(key)
-              .join("[redacted]")
-              .replace(/sk-[A-Za-z0-9_-]{8,}/g, "[redacted]")
-              .replace(/[\u0000-\u001f]/g, " ")
-              .slice(0, 500);
-        } catch {
-          /* Use the sanitized status message. */
-        }
-      }
+    if (!res.ok)
       return {
         status: "failed",
         text: "",
-        error: detail || statusError(res.status),
+        error: statusError(res.status),
         ms: performance.now() - start,
       };
-    }
     const data = await res.json();
     const number = (n: unknown) =>
       typeof n === "number" && Number.isFinite(n) && n >= 0 ? n : undefined;
@@ -205,14 +176,4 @@ async function respondInternal(
   } finally {
     clearTimeout(timer);
   }
-}
-
-export const respond: Adapter = async (key, request) => {
-  let executionParameters: ExecutionParameters | undefined;
-  const result = await respondInternal(key, request, (body) => {
-    executionParameters = captureExecutionParameters(body, key);
-  });
-  return executionParameters === undefined
-    ? result
-    : { ...result, executionParameters };
 };

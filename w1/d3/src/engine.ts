@@ -1,6 +1,5 @@
 import {
   last,
-  evaluationRequested,
   capabilities,
   settings,
   resolveExpert,
@@ -33,21 +32,16 @@ export function createRun(
   const evaluator = settings(defaultModel);
   if (
     !question.trim() ||
+    !reference.trim() ||
     !resolved.length ||
     resolved.some((e) => !validSettings(e)) ||
     !capabilities(defaultModel)?.structuredOutput
   )
     throw new Error(
-      "Complete the question, team, and supported shared model configuration.",
+      "Complete the question, reference, team, and supported shared model configuration.",
     );
   const snapshot = freeze(
-    structuredClone({
-      question,
-      reference,
-      evaluationRequested: !!reference.trim(),
-      experts: resolved,
-      evaluator,
-    }),
+    structuredClone({ question, reference, experts: resolved, evaluator }),
   );
   return {
     id: crypto.randomUUID(),
@@ -58,7 +52,7 @@ export function createRun(
       attempts: [],
     })),
     evaluations: [],
-    evaluationStatus: reference.trim() ? "pending" : "not_evaluated",
+    evaluationStatus: "pending",
     started: Date.now(),
     busy: false,
   };
@@ -128,11 +122,6 @@ export class Engine {
     this.notify();
   }
   private async evaluate(run: Run, key: CredentialSource) {
-    if (!evaluationRequested(run)) {
-      run.evaluationStatus = "not_evaluated";
-      this.notify();
-      return;
-    }
     const answers = run.results
       .filter((r) => last(r.attempts)?.status === "succeeded")
       .map((r) => ({ resultId: r.id, answer: last(r.attempts)!.text }));
@@ -198,7 +187,7 @@ export class Engine {
       if (evaluationOnly) await this.evaluate(run, key);
       else if (retryIndex !== undefined) {
         const previousStatus = run.evaluationStatus;
-        if (evaluationRequested(run)) run.evaluationStatus = "stale";
+        run.evaluationStatus = "stale";
         this.notify();
         await this.participant(run, retryIndex, key);
         if (last(run.results[retryIndex].attempts)?.status === "succeeded")

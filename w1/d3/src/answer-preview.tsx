@@ -70,7 +70,7 @@ export function AnswerPreview({
         <Button
           size="small"
           variant="text"
-          aria-label={`More: answer preview for ${expertName}`}
+          aria-label={`More: result details for ${expertName}`}
           aria-haspopup="dialog"
           onClick={onMore}
           sx={{

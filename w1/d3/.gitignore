@@ -7,9 +7,3 @@ dist/
 *.key
 .DS_Store
 work/
-
-# Local container files
-/Dockerfile
-/.dockerignore
-/expert-lab-d3.tar
-/ai-advent-d4.tar

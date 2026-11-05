@@ -1,5 +1,4 @@
 const labels: Record<string, string> = {
-  not_evaluated: "Not evaluated",
   pending: "Pending",
   running: "Running",
   succeeded: "Succeeded",
