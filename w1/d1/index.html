@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>API Explorer</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="vendor/marked.umd.js" defer></script>
+  <script src="vendor/purify.min.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <main>
+    <header>
+      <p class="course">WEEK 01 / DAY 01</p>
+      <h1>API Explorer</h1>
+      <p class="subtitle">Ask a question. Explore the response.</p>
+    </header>
+    <section class="card" aria-label="API Explorer">
+      <form id="explorer" autocomplete="off">
+        <label for="api-key">API KEY (OPENAI)</label>
+        <div class="key-field">
+          <input id="api-key" type="password" placeholder="Enter your OpenAI API key" autocomplete="off" autocapitalize="off" spellcheck="false" required aria-describedby="feedback">
+          <button id="key-visibility" type="button" aria-label="Show API key" aria-controls="api-key" aria-pressed="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/>
+              <circle cx="12" cy="12" r="3"/>
+              <path class="eye-slash" d="m3 3 18 18"/>
+            </svg>
+          </button>
+          <span id="key-check" class="key-check" role="img" aria-label="API key verified" hidden>✓</span>
+        </div>
+        <p id="feedback" class="feedback" role="alert" hidden></p>
+        <div class="question-group">
+          <label for="question">YOUR QUESTION</label>
+          <div class="question-field">
+            <input id="question" type="text" placeholder="Type your question here..." required autocomplete="off">
+            <button id="send" type="submit" aria-label="Send question" disabled>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m22 2-8 20-4-8-8-4 20-8ZM10 14 22 2"/></svg>
+            </button>
+          </div>
+        </div>
+      </form>
+      <section class="response-section" aria-labelledby="response-label">
+        <h2 id="response-label">RESPONSE</h2>
+        <div class="tabs" role="tablist" aria-label="Response format">
+          <button id="answer-tab" type="button" role="tab" aria-controls="answer-panel" aria-selected="true">Answer</button>
+          <button id="json-tab" type="button" role="tab" aria-controls="json-panel" aria-selected="false" tabindex="-1">Raw JSON</button>
+        </div>
+        <div id="response" aria-busy="false">
+          <div id="answer-panel" class="response-panel" role="tabpanel" aria-labelledby="answer-tab" tabindex="0">
+            <div id="answer" class="markdown">Your answer will appear here.</div>
+            <p id="answer-hint" class="hint">The raw API response is available in the Raw JSON tab.</p>
+          </div>
+          <div id="json-panel" class="response-panel" role="tabpanel" aria-labelledby="json-tab" tabindex="0" hidden><pre id="json">No API response yet.</pre></div>
+        </div>
+        <p id="status" class="status" role="status"></p>
+      </section>
+    </section>
+  </main>
+</body>
+</html>
