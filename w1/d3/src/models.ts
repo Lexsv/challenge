@@ -1,3 +1,9 @@
+import type { ExecutionParameters } from "./execution-parameters";
+import {
+  initialParameters,
+  validateParameters,
+  type ApiParameter,
+} from "./api-parameters";
 // Capabilities checked against official OpenAI model pages on 2026-11-04.
 export type ModelCapabilities = {
   structuredOutput: boolean;
@@ -47,7 +53,12 @@ export const catalog = Object.keys(modelCatalog).filter(
 export const capabilities = (model: string): ModelCapabilities | undefined =>
   Object.hasOwn(modelCatalog, model) ? modelCatalog[model] : undefined;
 export const known = (model: string) => capabilities(model) !== undefined;
-export type Settings = { model: string; maxTokens: number; reasoning?: string };
+export type Settings = {
+  model: string;
+  maxTokens: number;
+  reasoning?: string;
+  parameters?: ApiParameter[];
+};
 export type Expert = Settings & {
   id: string;
   name: string;
@@ -73,6 +84,7 @@ export const resolveExpert = (expert: Expert, defaultModel: string): Expert => {
   const model = expert.model || defaultModel;
   return {
     ...expert,
+    parameters: expert.parameters ?? initialParameters(expert.maxTokens),
     model,
     reasoning: known(model)
       ? (expert.reasoning ?? capabilities(model)?.defaultReasoning)
@@ -83,9 +95,16 @@ export function validSettings(s: Settings) {
   const capability = capabilities(s.model);
   return (
     !!s.model.trim() &&
-    Number.isInteger(s.maxTokens) &&
-    s.maxTokens >= 16 &&
-    s.maxTokens <= (capability?.maxOutputTokens ?? 4096) &&
+    (!s.parameters || !validateParameters(s.parameters)) &&
+    (s.parameters
+      ? s.parameters
+          .filter((p) => p.enabled && p.key === "max_output_tokens")
+          .every(
+            (p) => Number(p.value) <= (capability?.maxOutputTokens ?? 4096),
+          )
+      : Number.isInteger(s.maxTokens) &&
+        s.maxTokens >= 16 &&
+        s.maxTokens <= (capability?.maxOutputTokens ?? 4096)) &&
     (!s.reasoning || !!capability?.reasoningEfforts.includes(s.reasoning))
   );
 }
@@ -94,6 +113,7 @@ export type IncompleteReason =
   "max_output_tokens" | "content_filter" | "max_messages" | "steered";
 export type Attempt = {
   id: string;
+  executionParameters?: ExecutionParameters;
   actualModel?: string;
   status: "running" | "succeeded" | "failed" | "timed-out" | "incomplete";
   text: string;
@@ -116,17 +136,26 @@ export type Run = {
   snapshot: Readonly<{
     question: string;
     reference: string;
+    evaluationRequested?: boolean;
     experts: Expert[];
     evaluator: Settings;
   }>;
   results: Result[];
   evaluations: EvaluationAttempt[];
   evaluationStatus:
-    "pending" | "running" | "completed" | "failed" | "skipped" | "stale";
+    | "pending"
+    | "running"
+    | "completed"
+    | "failed"
+    | "skipped"
+    | "stale"
+    | "not_evaluated";
   started: number;
   ended?: number;
   busy: boolean;
 };
+export const evaluationRequested = (run: Run) =>
+  run.snapshot.evaluationRequested ?? !!run.snapshot.reference.trim();
 export const last = <T>(items: T[]) => items.at(-1);
 export function totals(attempts: Attempt[]) {
   const sum = (field: "input" | "output") => {

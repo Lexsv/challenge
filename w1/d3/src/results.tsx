@@ -30,6 +30,7 @@ import Close from "@mui/icons-material/Close";
 import ExpandMore from "@mui/icons-material/ExpandMore";
 import {
   last,
+  evaluationRequested,
   type Judgment,
   type Result,
   type Run,
@@ -43,7 +44,9 @@ import {
   verdictExplanation,
 } from "./result-explanations";
 import { ResultBadge } from "./result-badge";
+import { AnswerDialog } from "./answer-dialog";
 import { AnswerPreview } from "./answer-preview";
+import { ExecutionParametersReport } from "./execution-parameters-report";
 import { AnswerMarkdown } from "./answer-markdown";
 import { ResultMetadata, resultHeadingStyle } from "./result-metadata";
 
@@ -93,6 +96,11 @@ function AttemptHistory({ result }: { result: Result }) {
                 includeTotals={false}
                 labelPrefix={`Attempt ${index + 1}`}
               />
+              <Box sx={{ mt: 2 }}>
+                <ExecutionParametersReport
+                  parameters={attempt.executionParameters}
+                />
+              </Box>
               {attempt.error && (
                 <Alert
                   severity="error"
@@ -181,58 +189,61 @@ export function ParticipantDetails({
         </Typography>
         <ResultMetadata result={result} attempt={attempt} />
       </Box>
-      <Box component="section" sx={{ minWidth: 0 }}>
-        <Typography
-          variant="subtitle1"
-          component="h3"
-          sx={{ ...resultHeadingStyle, mb: 1 }}
-        >
-          AI evaluation
-        </Typography>
-        {run.evaluationStatus === "stale" && (
-          <Alert severity="info">
-            Previous AI evaluations are stale while the participant retry is
-            pending.
-          </Alert>
-        )}
-        {run.evaluationStatus === "running" && (
-          <Alert severity="info">
-            Evaluation is in progress. Previous AI verdicts are not current.
-          </Alert>
-        )}
-        {run.evaluationStatus === "failed" && (
-          <Alert severity="warning">
-            Evaluation failed. Previous AI verdicts are not current; answers are
-            preserved.
-          </Alert>
-        )}
-        <Typography sx={{ overflowWrap: "anywhere" }}>
-          {judgment
-            ? `${statusLabel(judgment.verdict)} — ${judgment.explanation}`
-            : "No current evaluation."}
-        </Typography>
-        {attempt?.status === "succeeded" && (
-          <TextField
-            select
-            label="Manual verdict override (this answer attempt)"
-            sx={{ mt: 2 }}
-            value={attempt.manual || "none"}
-            onChange={(event) => {
-              attempt.manual = (
-                event.target.value === "none" ? undefined : event.target.value
-              ) as Verdict | undefined;
-              refresh();
-            }}
+      <ExecutionParametersReport parameters={attempt?.executionParameters} />
+      {evaluationRequested(run) && (
+        <Box component="section" sx={{ minWidth: 0 }}>
+          <Typography
+            variant="subtitle1"
+            component="h3"
+            sx={{ ...resultHeadingStyle, mb: 1 }}
           >
-            <MenuItem value="none">No manual override</MenuItem>
-            {["correct", "incorrect", "unable_to_assess"].map((verdict) => (
-              <MenuItem key={verdict} value={verdict}>
-                {statusLabel(verdict)}
-              </MenuItem>
-            ))}
-          </TextField>
-        )}
-      </Box>
+            AI evaluation
+          </Typography>
+          {run.evaluationStatus === "stale" && (
+            <Alert severity="info">
+              Previous AI evaluations are stale while the participant retry is
+              pending.
+            </Alert>
+          )}
+          {run.evaluationStatus === "running" && (
+            <Alert severity="info">
+              Evaluation is in progress. Previous AI verdicts are not current.
+            </Alert>
+          )}
+          {run.evaluationStatus === "failed" && (
+            <Alert severity="warning">
+              Evaluation failed. Previous AI verdicts are not current; answers
+              are preserved.
+            </Alert>
+          )}
+          <Typography sx={{ overflowWrap: "anywhere" }}>
+            {judgment
+              ? `${statusLabel(judgment.verdict)} — ${judgment.explanation}`
+              : "No current evaluation."}
+          </Typography>
+          {attempt?.status === "succeeded" && (
+            <TextField
+              select
+              label="Manual verdict override (this answer attempt)"
+              sx={{ mt: 2 }}
+              value={attempt.manual || "none"}
+              onChange={(event) => {
+                attempt.manual = (
+                  event.target.value === "none" ? undefined : event.target.value
+                ) as Verdict | undefined;
+                refresh();
+              }}
+            >
+              <MenuItem value="none">No manual override</MenuItem>
+              {["correct", "incorrect", "unable_to_assess"].map((verdict) => (
+                <MenuItem key={verdict} value={verdict}>
+                  {statusLabel(verdict)}
+                </MenuItem>
+              ))}
+            </TextField>
+          )}
+        </Box>
+      )}
       {attempt &&
         attempt.status !== "succeeded" &&
         attempt.status !== "running" && (
@@ -264,6 +275,10 @@ export function RunView({
   retryEvaluation: () => void;
 }) {
   const [selectedResultId, setSelectedResultId] = useState<string | null>(null);
+  const [answerResultId, setAnswerResultId] = useState<string | null>(null);
+  const answerResult = run.results.find(
+    (result) => result.id === answerResultId,
+  );
   const selectedIndex = run.results.findIndex(
     (result) => result.id === selectedResultId,
   );
@@ -376,7 +391,7 @@ export function RunView({
             <col style={{ width: "6.5rem" }} />
             <col style={{ width: "6.5rem" }} />
             <col style={{ width: "6.5rem" }} />
-            <col style={{ width: "9rem" }} />
+            {evaluationRequested(run) && <col style={{ width: "9rem" }} />}
           </colgroup>
           <TableHead
             sx={{
@@ -402,7 +417,7 @@ export function RunView({
                 "Input tokens",
                 "Output tokens",
                 "Request time",
-                "Verdict",
+                ...(evaluationRequested(run) ? ["Verdict"] : []),
               ].map((label) => (
                 <TableCell key={label} align="center">
                   {["Input tokens", "Output tokens", "Request time"].includes(
@@ -428,26 +443,40 @@ export function RunView({
               );
               return (
                 <TableRow key={result.id}>
-                  <TableCell>
+                  <TableCell
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`View result for ${result.expert.name}`}
+                    aria-haspopup="dialog"
+                    onClick={() => setSelectedResultId(result.id)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        setSelectedResultId(result.id);
+                      }
+                    }}
+                    sx={{
+                      cursor: "pointer",
+                      "&:hover": {
+                        bgcolor: (theme) =>
+                          alpha(theme.palette.primary.main, 0.06),
+                      },
+                      ...visibleFocus,
+                    }}
+                  >
                     <Box sx={{ maxWidth: 180 }}>
-                      <Button
-                        size="small"
-                        variant="text"
-                        aria-label={`View result for ${result.expert.name}`}
-                        aria-haspopup="dialog"
-                        onClick={() => setSelectedResultId(result.id)}
+                      <Typography
+                        component="span"
                         sx={{
-                          p: 0,
-                          minWidth: 0,
-                          textAlign: "left",
-                          justifyContent: "flex-start",
-                          whiteSpace: "normal",
+                          display: "block",
+                          color: "primary.main",
+                          fontWeight: 650,
+                          fontSize: "0.8125rem",
                           overflowWrap: "anywhere",
-                          ...visibleFocus,
                         }}
                       >
                         {result.expert.name}
-                      </Button>
+                      </Typography>
                       <ExpertRoleLabel roleLabel={result.expert.roleLabel} />
                     </Box>
                   </TableCell>
@@ -464,7 +493,7 @@ export function RunView({
                     <AnswerPreview
                       text={attempt?.text || ""}
                       expertName={result.expert.name}
-                      onMore={() => setSelectedResultId(result.id)}
+                      onMore={() => setAnswerResultId(result.id)}
                     />
                   </TableCell>
                   <TableCell
@@ -489,40 +518,48 @@ export function RunView({
                         ? seconds(attempt.ms)
                         : "—"}
                   </TableCell>
-                  <TableCell>
-                    <ResultBadge
-                      automated
-                      explanation={verdictExplanation(
-                        run.evaluationStatus,
-                        judgment,
+                  {evaluationRequested(run) && (
+                    <TableCell>
+                      <ResultBadge
+                        automated
+                        explanation={verdictExplanation(
+                          run.evaluationStatus,
+                          judgment,
+                        )}
+                        value={
+                          judgment?.verdict ??
+                          (run.evaluationStatus === "stale"
+                            ? "stale"
+                            : ["pending", "running"].includes(
+                                  run.evaluationStatus,
+                                )
+                              ? run.evaluationStatus
+                              : "Not available")
+                        }
+                      />
+                      {attempt?.manual && (
+                        <Box sx={{ mt: 0.5 }}>
+                          <ResultBadge
+                            manual
+                            value={attempt.manual}
+                            explanation="This verdict was set manually for this answer attempt. It is separate from the AI evaluation and its explanation."
+                          />
+                        </Box>
                       )}
-                      value={
-                        judgment?.verdict ??
-                        (run.evaluationStatus === "stale"
-                          ? "stale"
-                          : ["pending", "running"].includes(
-                                run.evaluationStatus,
-                              )
-                            ? run.evaluationStatus
-                            : "Not available")
-                      }
-                    />
-                    {attempt?.manual && (
-                      <Box sx={{ mt: 0.5 }}>
-                        <ResultBadge
-                          manual
-                          value={attempt.manual}
-                          explanation="This verdict was set manually for this answer attempt. It is separate from the AI evaluation and its explanation."
-                        />
-                      </Box>
-                    )}
-                  </TableCell>
+                    </TableCell>
+                  )}
                 </TableRow>
               );
             })}
           </TableBody>
         </Table>
       </TableContainer>
+      <AnswerDialog
+        key={answerResultId ?? "closed"}
+        open={!!answerResult}
+        text={last(answerResult?.attempts ?? [])?.text ?? ""}
+        onClose={() => setAnswerResultId(null)}
+      />
       <Dialog
         open={!!selected}
         onClose={() => setSelectedResultId(null)}

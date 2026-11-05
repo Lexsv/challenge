@@ -19,7 +19,12 @@ export function expertConfigurationLabels(
   return [
     `Model: ${resolved.model}`,
     `Reasoning: ${reasoning}`,
-    `Output limit: ${resolved.maxTokens}`,
+    ...(resolved.parameters ?? [])
+      .filter((p) => p.enabled)
+      .map(
+        (p) =>
+          `${p.key === "max_output_tokens" ? "Output limit" : p.key}: ${p.value}`,
+      ),
   ];
 }
 

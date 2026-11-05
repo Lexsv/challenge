@@ -1,3 +1,10 @@
+import { expertSettingsError } from "./expert-settings-validation";
+import {
+  initialParameters,
+  newParameter,
+  validateParameters,
+  type ApiParameter,
+} from "./api-parameters";
 import React, { useRef, useState, useSyncExternalStore } from "react";
 import {
   ThemeProvider,
@@ -22,7 +29,15 @@ import {
   CardContent,
   CardActionArea,
   Tooltip,
+  Checkbox,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
   InputAdornment,
+  InputBase,
 } from "@mui/material";
 import SettingsOutlined from "@mui/icons-material/SettingsOutlined";
 import Add from "@mui/icons-material/Add";
@@ -34,6 +49,7 @@ import VisibilityOff from "@mui/icons-material/VisibilityOff";
 import Close from "@mui/icons-material/Close";
 import ScienceOutlined from "@mui/icons-material/ScienceOutlined";
 import CheckCircleOutline from "@mui/icons-material/CheckCircleOutline";
+import { alpha } from "@mui/material/styles";
 import { theme } from "./theme";
 import {
   catalog,
@@ -179,8 +195,8 @@ export function App({
     ? "An experiment or retry is active."
     : !experts.length
       ? "Add at least one expert to enable running an experiment."
-      : !question.trim() || !reference.trim()
-        ? "Enter both a question and reference answer."
+      : !question.trim()
+        ? "Enter a question."
         : !connectionValid
           ? "Configure an API key and supported model."
           : experts.some((e) => !validSettings(resolveExpert(e, model)))
@@ -410,7 +426,16 @@ export function App({
                       <Tooltip title={`Edit ${e.name}`}>
                         <IconButton
                           aria-label={`Edit ${e.name}`}
-                          onClick={() => setEditing(structuredClone(e))}
+                          onClick={() =>
+                            setEditing(
+                              structuredClone({
+                                ...e,
+                                parameters:
+                                  e.parameters ??
+                                  initialParameters(e.maxTokens),
+                              }),
+                            )
+                          }
                         >
                           <SettingsOutlined fontSize="small" />
                         </IconButton>
@@ -438,9 +463,7 @@ export function App({
                         </IconButton>
                       </Tooltip>
                     </Stack>
-                    <Typography sx={{ my: 2, overflowWrap: "anywhere" }}>
-                      {e.description}
-                    </Typography>
+                    <Box sx={{ mt: 2 }} />
                     <ExpertConfigurationChips expert={e} defaultModel={model} />
                   </CardContent>
                 </Card>
@@ -492,12 +515,12 @@ export function App({
                 onChange={(e) => setQuestion(e.target.value)}
               />
               <TextField
-                label="Reference answer"
+                label="Expected answer (optional)"
                 multiline
                 minRows={3}
                 value={reference}
                 onChange={(e) => setReference(e.target.value)}
-                helperText="Reserved for evaluation; never sent to participants."
+                helperText="Optional. When provided, it is used for evaluation and never sent to participants."
               />
             </Stack>
             <Button
@@ -797,7 +820,17 @@ export function App({
                   <TextField
                     label="Role prompt"
                     multiline
-                    minRows={4}
+                    rows={5}
+                    slotProps={{ input: { inputComponent: "textarea" } }}
+                    sx={{
+                      "& textarea": {
+                        boxSizing: "content-box",
+                        lineHeight: "1.4375em",
+                        height: "calc(5 * 1.4375em)",
+                        overflowY: "auto",
+                        resize: "none",
+                      },
+                    }}
                     value={editing.rolePrompt}
                     onChange={(e) =>
                       setEditing({ ...editing, rolePrompt: e.target.value })
@@ -812,10 +845,6 @@ export function App({
                         ...editing,
                         model: v,
                         reasoning: capabilities(v || model)?.defaultReasoning,
-                        maxTokens: Math.min(
-                          editing.maxTokens,
-                          capabilities(v || model)?.maxOutputTokens ?? 4096,
-                        ),
                       })
                     }
                   />
@@ -866,30 +895,198 @@ export function App({
                       ))}
                     </TextField>
                   )}
-                  <TextField
-                    label="Output token limit"
-                    type="number"
-                    value={editing.maxTokens}
-                    onChange={(e) =>
-                      setEditing({
-                        ...editing,
-                        maxTokens: Number(e.target.value),
-                      })
-                    }
-                    helperText={`16–${(capabilities(editing.model || model)?.maxOutputTokens ?? 4096).toLocaleString("en-US")} tokens; includes reasoning tokens when applicable.`}
-                  />
+                  <Box>
+                    <Typography variant="subtitle1" fontWeight={700}>
+                      API Parameters
+                    </Typography>
+                    <TableContainer
+                      sx={{
+                        mt: 1,
+                        overflowX: "auto",
+                        border: "1px solid",
+                        borderColor: (theme) =>
+                          alpha(theme.palette.primary.main, 0.22),
+                        borderRadius: 1.5,
+                      }}
+                    >
+                      <Table
+                        size="small"
+                        sx={{
+                          minWidth: 480,
+                          tableLayout: "fixed",
+                          "& th, & td": {
+                            borderColor: (theme) =>
+                              alpha(theme.palette.primary.main, 0.18),
+                          },
+                          "& th:not(:last-child), & td:not(:last-child)": {
+                            borderRight: "1px solid",
+                            borderRightColor: (theme) =>
+                              alpha(theme.palette.primary.main, 0.18),
+                          },
+                          "& tbody tr:last-child td": { borderBottom: 0 },
+                          "& tbody td": { padding: 0, verticalAlign: "middle" },
+                          "& thead th": {
+                            py: 0.75,
+                            px: 1,
+                            fontWeight: 700,
+                            fontSize: "0.75rem",
+                            color: "primary.dark",
+                            backgroundColor: (theme) =>
+                              alpha(theme.palette.primary.main, 0.1),
+                          },
+                        }}
+                        aria-label="API Parameters"
+                      >
+                        <colgroup>
+                          <col style={{ width: 56 }} />
+                          <col style={{ width: "34%" }} />
+                          <col />
+                          <col style={{ width: 60 }} />
+                        </colgroup>
+                        <TableHead>
+                          <TableRow>
+                            <TableCell align="center">USE</TableCell>
+                            <TableCell>KEY</TableCell>
+                            <TableCell>VALUE</TableCell>
+                            <TableCell align="center">DELETE</TableCell>
+                          </TableRow>
+                        </TableHead>
+                        <TableBody>
+                          {(editing.parameters ?? []).map((row, index) => {
+                            const update = (change: Partial<ApiParameter>) =>
+                              setEditing({
+                                ...editing,
+                                parameters: editing.parameters!.map(
+                                  (item, i) =>
+                                    i === index ? { ...item, ...change } : item,
+                                ),
+                              });
+                            return (
+                              <TableRow key={row.id}>
+                                <TableCell align="center">
+                                  <Checkbox
+                                    size="small"
+                                    checked={row.enabled}
+                                    onChange={(event) =>
+                                      update({ enabled: event.target.checked })
+                                    }
+                                    inputProps={{
+                                      "aria-label": `Enable parameter ${index + 1}`,
+                                    }}
+                                  />
+                                </TableCell>
+                                <TableCell>
+                                  <InputBase
+                                    fullWidth
+                                    sx={{
+                                      px: 1.25,
+                                      py: 0.75,
+                                      "&.Mui-focused": {
+                                        outline: "2px solid",
+                                        outlineColor: "primary.main",
+                                        outlineOffset: -2,
+                                        borderRadius: 0.5,
+                                      },
+                                      "& input": { minWidth: 0 },
+                                    }}
+                                    value={row.key}
+                                    onChange={(event) =>
+                                      update({ key: event.target.value })
+                                    }
+                                    inputProps={{
+                                      "aria-label": `Parameter ${index + 1} key`,
+                                    }}
+                                  />
+                                </TableCell>
+                                <TableCell>
+                                  <InputBase
+                                    fullWidth
+                                    multiline
+                                    minRows={1}
+                                    maxRows={5}
+                                    sx={{
+                                      px: 1.25,
+                                      py: 0.75,
+                                      "&.Mui-focused": {
+                                        outline: "2px solid",
+                                        outlineColor: "primary.main",
+                                        outlineOffset: -2,
+                                        borderRadius: 0.5,
+                                      },
+                                      "& textarea": {
+                                        overflowWrap: "anywhere",
+                                        wordBreak: "break-word",
+                                        overflowX: "hidden",
+                                      },
+                                    }}
+                                    value={row.value}
+                                    onChange={(event) =>
+                                      update({ value: event.target.value })
+                                    }
+                                    inputProps={{
+                                      "aria-label": `Parameter ${index + 1} value`,
+                                    }}
+                                  />
+                                </TableCell>
+                                <TableCell align="center">
+                                  <IconButton
+                                    size="small"
+                                    aria-label={`Delete parameter ${index + 1}`}
+                                    onClick={() =>
+                                      setEditing({
+                                        ...editing,
+                                        parameters: editing.parameters!.filter(
+                                          (_, i) => i !== index,
+                                        ),
+                                      })
+                                    }
+                                  >
+                                    <Close fontSize="small" />
+                                  </IconButton>
+                                </TableCell>
+                              </TableRow>
+                            );
+                          })}
+                        </TableBody>
+                      </Table>
+                    </TableContainer>
+                    {validateParameters(editing.parameters ?? []) && (
+                      <Alert severity="error" sx={{ mt: 1 }}>
+                        {validateParameters(editing.parameters ?? [])}
+                      </Alert>
+                    )}
+                    <Button
+                      startIcon={<Add />}
+                      onClick={() =>
+                        setEditing({
+                          ...editing,
+                          parameters: [
+                            ...(editing.parameters ?? []),
+                            newParameter(),
+                          ],
+                        })
+                      }
+                    >
+                      Add parameter
+                    </Button>
+                  </Box>
                 </Stack>
               </DialogContent>
-              <DialogActions>
+              <DialogActions sx={{ flexWrap: "wrap" }}>
+                {expertSettingsError(editing, model) && (
+                  <Typography
+                    role="status"
+                    color="error"
+                    variant="body2"
+                    sx={{ flexBasis: "100%", px: 1 }}
+                  >
+                    {expertSettingsError(editing, model)}
+                  </Typography>
+                )}
                 <Button onClick={() => setEditing(null)}>Cancel</Button>
                 <Button
                   variant="contained"
-                  disabled={
-                    !editing.name.trim() ||
-                    !editing.description.trim() ||
-                    !editing.rolePrompt.trim() ||
-                    !validSettings(resolveExpert(editing, model))
-                  }
+                  disabled={!!expertSettingsError(editing, model)}
                   onClick={() => {
                     setExperts((v) =>
                       v.map((e) =>

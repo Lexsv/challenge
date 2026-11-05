@@ -18,6 +18,7 @@ export function duplicateExpert(experts: Expert[], sourceId: string): Expert[] {
     model: source.model,
     reasoning: source.reasoning,
     maxTokens: source.maxTokens,
+    parameters: source.parameters,
   });
   return [...experts.slice(0, index + 1), copy, ...experts.slice(index + 1)];
 }

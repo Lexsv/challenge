@@ -36,7 +36,17 @@ export function resultMetadataRows(
         ? statusLabel(result.expert.reasoning)
         : "Not available",
     ],
-    ["Output token limit", formatTokens(result.expert.maxTokens)],
+    [
+      "Output token limit",
+      result.expert.parameters
+        ? (() => {
+            const row = result.expert.parameters.find(
+              (p) => p.enabled && p.key === "max_output_tokens",
+            );
+            return row ? formatTokens(Number(row.value)) : "Not available";
+          })()
+        : formatTokens(result.expert.maxTokens),
+    ],
   ];
   const metrics: MetadataRow[] = [
     ["Input tokens", formatTokens(attempt?.usage?.input)],
