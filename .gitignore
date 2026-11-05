@@ -36,3 +36,11 @@ tmp/
 /w1/d4/Dockerfile
 /w1/d4/.dockerignore
 /w1/d4/*.tar
+
+# Local Docker files and archives in root day directories
+/d3/Dockerfile
+/d3/.dockerignore
+/d3/*.tar
+/d4/Dockerfile
+/d4/.dockerignore
+/d4/*.tar

@@ -1,6 +1,6 @@
 # API Explorer
 
-A small Week 01 / Day 01 AI Engineering project built with HTML, CSS, vanilla JavaScript, and native `fetch()`. It runs as a static local page with no backend, build tools, package manager, or runtime CDN dependencies.
+A small Day 1 AI Engineering project built with HTML, CSS, vanilla JavaScript, and native `fetch()`. It runs as a static local page with no backend, build tools, package manager, or runtime CDN dependencies.
 
 ## Features
 

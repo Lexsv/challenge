@@ -1,4 +1,4 @@
-# API Explorer — Week 01 / Day 01
+# API Explorer — Day 1
 
 ## Scope and current phase
 
@@ -51,4 +51,4 @@ Application source files are authorized. Preserve global security requirements a
 
 ## Mandatory: no CI/CD
 
-This standalone project now lives in `w1/d1/`. Open `w1/d1/index.html` from the repository root. Use only local validation/static checks and Git/GitHub source versioning/sharing. Do not add CI/CD, `.github/workflows`, automated build/test pipelines, hosting, deployment, Docker, npm, build tools, or additional infrastructure.
+This standalone project now lives in `d1/`. Open `d1/index.html` from the repository root. Use only local validation/static checks and Git/GitHub source versioning/sharing. Do not add CI/CD, `.github/workflows`, automated build/test pipelines, hosting, deployment, Docker, npm, build tools, or additional infrastructure.

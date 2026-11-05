@@ -1,4 +1,4 @@
-# Expert Lab — Week 1 · Day 3
+# Expert Lab — Day 4
 
 Expert Lab lets you use an Architect to generate and edit a team of experts, run their answers against a question, and compare AI evaluations with a reference answer. Expert cards support model settings and duplication; run history retains captured settings, answers, verdicts, usage, and retry attempts. Results include accessible details dialogs and manual verdict overrides.
 
@@ -6,7 +6,7 @@ Expert Lab lets you use an Architect to generate and edit a team of experts, run
 
 ```sh
 git clone https://github.com/Lexsv/challenge.git
-cd challenge/w1/d3
+cd challenge/d4
 pnpm install --frozen-lockfile --ignore-scripts
 pnpm dev
 ```

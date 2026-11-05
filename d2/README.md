@@ -1,4 +1,4 @@
-# API Explorer — Week 01 / Day 02
+# API Explorer — Day 2
 
 A local, dependency-free HTML/CSS/vanilla JavaScript tool for manually comparing output controls across providers. Open `index.html` directly (`file://`). There is no build, backend, proxy, CDN, persistent storage, or automated experiment runner. [Lavender design reference](design/Lavender%20API%20Explorer%20with%20Cyrillic%20history.png).
 
