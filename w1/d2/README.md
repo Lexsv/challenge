@@ -1,6 +1,6 @@
 # API Explorer — Week 01 / Day 02
 
-A local, dependency-free HTML/CSS/vanilla JavaScript tool for manually comparing output controls across providers. Open `index.html` directly (`file://`). There is no build, backend, proxy, CDN, persistent storage, or automated experiment runner. [Lavender design reference](designer/Lavender%20API%20Explorer%20with%20Cyrillic%20history.png).
+A local, dependency-free HTML/CSS/vanilla JavaScript tool for manually comparing output controls across providers. Open `index.html` directly (`file://`). There is no build, backend, proxy, CDN, persistent storage, or automated experiment runner. [Lavender design reference](design/Lavender%20API%20Explorer%20with%20Cyrillic%20history.png).
 
 The Prompt field starts empty with **Enter your prompt here** as a placeholder. Placeholder text is never submitted. Send requires a real non-whitespace prompt, model ID, and key, and is disabled during a user request or verification. Successful Verify is helpful but not required to Send.
 
@@ -114,3 +114,9 @@ Use one provider/model/base task at a time and run each variant at least three t
 The repository does not include dedicated automated-check files, CI/CD configuration, deployment configuration, or GitHub Pages setup. Local cleanup checks cover JavaScript syntax, application file references, the intended staged diff, and exclusion of credentials/temporary artifacts. Runtime parameter validation, output JSON parsing, schema validation, and provider error handling remain part of the application.
 
 Real provider access, billing, network/key restrictions, output-control compatibility under actual accounts, and additional browsers remain unverified. Claude live integration is explicitly unavailable rather than merely untested. No real provider calls were made during cleanup.
+
+## Design
+
+[View the Lavender API Explorer design](design/Lavender%20API%20Explorer%20with%20Cyrillic%20history.png)
+
+![Lavender API Explorer design](design/Lavender%20API%20Explorer%20with%20Cyrillic%20history.png)

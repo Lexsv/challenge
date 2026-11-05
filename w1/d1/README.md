@@ -35,6 +35,14 @@ Browser JavaScript, extensions, developer tools, and compromised local scripts c
 
 Responses are redacted before display. Markdown HTML passes through DOMPurify with restricted tags, attributes, and link schemes; images, scripts, forms, styles, and embedded content are excluded. If rendering is unavailable, the Answer falls back to plain text. Responses may still contain sensitive content: avoid submitting secrets and review links before following them. `store: false` is sent for response generation, but does not guarantee zero provider retention.
 
+## Design
+
+[Default state](design/default_state.png) · [Invalid key state](design/Invalid_state.png)
+
+![API Explorer default design](design/default_state.png)
+
+![API Explorer invalid key design](design/Invalid_state.png)
+
 ## Design and third-party notices
 
 The approved screenshots and screenshot-derived token estimates are in `design/`. Project instructions are in `AGENTS.md`. Local library versions, sources, and licenses are documented in [vendor/README.md](vendor/README.md): marked 18.1.3 (MIT) and DOMPurify 3.4.17 (distributed with its Apache-2.0 license and upstream dual-license notice).

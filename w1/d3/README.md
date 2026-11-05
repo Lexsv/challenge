@@ -32,6 +32,8 @@ The key is retained in `sessionStorage` for the current tab's page session when 
 
 ## Design
 
-![Expert Lab UI design](designer/expert-lab-design.png)
+[View the Expert Lab design](design/expert-lab-design.png)
+
+![Expert Lab UI design](design/expert-lab-design.png)
 
 The design illustrates the original visual direction; the implemented interface includes subsequent improvements.
