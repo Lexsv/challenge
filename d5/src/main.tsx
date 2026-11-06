@@ -1,11 +1,6 @@
 import { initialLabTab, type LabTab } from "./navigation";
 import { expertSettingsError } from "./expert-settings-validation";
-import {
-  initialParameters,
-  newParameter,
-  validateParameters,
-  type ApiParameter,
-} from "./api-parameters";
+import { initialParameters } from "./api-parameters";
 import React, { useRef, useState, useSyncExternalStore } from "react";
 import {
   ThemeProvider,
@@ -30,15 +25,7 @@ import {
   CardContent,
   CardActionArea,
   Tooltip,
-  Checkbox,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
   InputAdornment,
-  InputBase,
   Tabs,
   Tab,
 } from "@mui/material";
@@ -51,7 +38,6 @@ import Visibility from "@mui/icons-material/Visibility";
 import VisibilityOff from "@mui/icons-material/VisibilityOff";
 import Close from "@mui/icons-material/Close";
 import ScienceOutlined from "@mui/icons-material/ScienceOutlined";
-import { alpha } from "@mui/material/styles";
 import { theme } from "./theme";
 import {
   catalog,
@@ -73,6 +59,8 @@ import {
 import { createRun, Engine } from "./engine";
 import { ConnectionController } from "./connection";
 import { ProviderStatus } from "./provider-status";
+import { ParameterEditor } from "./parameter-editor";
+import { Providers } from "./providers";
 import { statusLabel } from "./labels";
 import { ExpertConfigurationChips } from "./expert-configuration-chips";
 import { ExpertRoleLabel } from "./expert-role-label";
@@ -579,104 +567,115 @@ export function App({
           aria-labelledby="tab-settings"
           hidden={tab !== "settings"}
         >
-          <Section title="Connection settings">
-            <Stack spacing={2} sx={{ pt: 1 }}>
-              <Typography>Provider: OpenAI</Typography>
-              <TextField
-                label="API key"
-                type={visible ? "text" : "password"}
-                value={key}
-                onChange={(e) => connectionController.updateKey(e.target.value)}
-                autoComplete="off"
-                slotProps={{
-                  input: {
-                    endAdornment: (
-                      <InputAdornment position="end">
-                        <IconButton
-                          aria-label={visible ? "Hide API key" : "Show API key"}
-                          onClick={() => setVisible((v) => !v)}
-                        >
-                          {visible ? <VisibilityOff /> : <Visibility />}
-                        </IconButton>
-                      </InputAdornment>
-                    ),
-                  },
-                }}
-                helperText={
-                  connectionState.storageWarning
-                    ? "The key is available in page memory only."
-                    : "The key is retained in this tab’s sessionStorage. It is not a secure vault."
-                }
-              />
-              <Button
-                variant="text"
-                onClick={() => {
-                  connectionController.forget();
-                  setVisible(false);
-                }}
-              >
-                Forget key
-              </Button>
-              <Typography variant="body2">
-                Removes the key from the app and sessionStorage. Requests
-                already sent are not canceled.
-              </Typography>
-              {connectionState.storageWarning && (
-                <Alert severity="warning">
-                  {connectionState.storageWarning}
-                </Alert>
-              )}
-              <ModelField
-                label="Model"
-                allowCustom={false}
-                value={model}
-                onChange={(v) => changeConfig(() => setModel(v))}
-              />
-              <Typography variant="body2">
-                Used for verification, expert generation, evaluation, and as the
-                default for experts.
-              </Typography>
-              <Button
-                variant="outlined"
-                onClick={() => void verify()}
-                disabled={verifying || !key.trim() || !model.trim()}
-              >
-                {verifying ? (
-                  <>
-                    <CircularProgress size={16} sx={{ mr: 1 }} />
-                    Verifying…
-                  </>
-                ) : (
-                  "Verify"
-                )}
-              </Button>
-              <Alert
-                severity={
-                  verification === "verified"
-                    ? "success"
-                    : verification === "unverified" || verifying
-                      ? "info"
-                      : "error"
-                }
-              >
-                {verification === "verified"
-                  ? "Key verified"
-                  : verifying
-                    ? "Verifying connection..."
-                    : connectionState.error || "Key not verified"}
-              </Alert>
-              {verifyAttempts.length > 0 && (
-                <Typography variant="body2">
-                  Verification usage: {usage(verifyAttempts)} ·{" "}
-                  {seconds(verifyAttempts.reduce((n, a) => n + a.ms, 0))}
-                </Typography>
-              )}
-              <Alert severity="info">
-                Verification makes a minimal real request and may be billable.
-                Model availability depends on your OpenAI project permissions.
-              </Alert>
-            </Stack>
-          </Section>
+          <Providers
+            model={model}
+            verification={verification}
+            openAISettings={
+              <Section title="Connection settings">
+                <Stack spacing={2} sx={{ pt: 1 }}>
+                  <Typography>Provider: OpenAI</Typography>
+                  <TextField
+                    label="API key"
+                    type={visible ? "text" : "password"}
+                    value={key}
+                    onChange={(e) =>
+                      connectionController.updateKey(e.target.value)
+                    }
+                    autoComplete="off"
+                    slotProps={{
+                      input: {
+                        endAdornment: (
+                          <InputAdornment position="end">
+                            <IconButton
+                              aria-label={
+                                visible ? "Hide API key" : "Show API key"
+                              }
+                              onClick={() => setVisible((v) => !v)}
+                            >
+                              {visible ? <VisibilityOff /> : <Visibility />}
+                            </IconButton>
+                          </InputAdornment>
+                        ),
+                      },
+                    }}
+                    helperText={
+                      connectionState.storageWarning
+                        ? "The key is available in page memory only."
+                        : "The key is retained in this tab’s sessionStorage. It is not a secure vault."
+                    }
+                  />
+                  <Button
+                    variant="text"
+                    onClick={() => {
+                      connectionController.forget();
+                      setVisible(false);
+                    }}
+                  >
+                    Forget key
+                  </Button>
+                  <Typography variant="body2">
+                    Removes the key from the app and sessionStorage. Requests
+                    already sent are not canceled.
+                  </Typography>
+                  {connectionState.storageWarning && (
+                    <Alert severity="warning">
+                      {connectionState.storageWarning}
+                    </Alert>
+                  )}
+                  <ModelField
+                    label="Model"
+                    allowCustom={false}
+                    value={model}
+                    onChange={(v) => changeConfig(() => setModel(v))}
+                  />
+                  <Typography variant="body2">
+                    Used for verification, expert generation, evaluation, and as
+                    the default for experts.
+                  </Typography>
+                  <Button
+                    variant="outlined"
+                    onClick={() => void verify()}
+                    disabled={verifying || !key.trim() || !model.trim()}
+                  >
+                    {verifying ? (
+                      <>
+                        <CircularProgress size={16} sx={{ mr: 1 }} />
+                        Verifying…
+                      </>
+                    ) : (
+                      "Verify"
+                    )}
+                  </Button>
+                  <Alert
+                    severity={
+                      verification === "verified"
+                        ? "success"
+                        : verification === "unverified" || verifying
+                          ? "info"
+                          : "error"
+                    }
+                  >
+                    {verification === "verified"
+                      ? "Key verified"
+                      : verifying
+                        ? "Verifying connection..."
+                        : connectionState.error || "Key not verified"}
+                  </Alert>
+                  {verifyAttempts.length > 0 && (
+                    <Typography variant="body2">
+                      Verification usage: {usage(verifyAttempts)} ·{" "}
+                      {seconds(verifyAttempts.reduce((n, a) => n + a.ms, 0))}
+                    </Typography>
+                  )}
+                  <Alert severity="info">
+                    Verification makes a minimal real request and may be
+                    billable. Model availability depends on your OpenAI project
+                    permissions.
+                  </Alert>
+                </Stack>
+              </Section>
+            }
+          />
         </Box>
         <Dialog
           open={addOpen}
@@ -864,176 +863,12 @@ export function App({
                     <Typography variant="subtitle1" fontWeight={700}>
                       API Parameters
                     </Typography>
-                    <TableContainer
-                      sx={{
-                        mt: 1,
-                        overflowX: "auto",
-                        border: "1px solid",
-                        borderColor: (theme) =>
-                          alpha(theme.palette.primary.main, 0.22),
-                        borderRadius: 1.5,
-                      }}
-                    >
-                      <Table
-                        size="small"
-                        sx={{
-                          minWidth: 480,
-                          tableLayout: "fixed",
-                          "& th, & td": {
-                            borderColor: (theme) =>
-                              alpha(theme.palette.primary.main, 0.18),
-                          },
-                          "& th:not(:last-child), & td:not(:last-child)": {
-                            borderRight: "1px solid",
-                            borderRightColor: (theme) =>
-                              alpha(theme.palette.primary.main, 0.18),
-                          },
-                          "& tbody tr:last-child td": { borderBottom: 0 },
-                          "& tbody td": { padding: 0, verticalAlign: "middle" },
-                          "& thead th": {
-                            py: 0.75,
-                            px: 1,
-                            fontWeight: 700,
-                            fontSize: "0.75rem",
-                            color: "primary.dark",
-                            backgroundColor: (theme) =>
-                              alpha(theme.palette.primary.main, 0.1),
-                          },
-                        }}
-                        aria-label="API Parameters"
-                      >
-                        <colgroup>
-                          <col style={{ width: 56 }} />
-                          <col style={{ width: "34%" }} />
-                          <col />
-                          <col style={{ width: 60 }} />
-                        </colgroup>
-                        <TableHead>
-                          <TableRow>
-                            <TableCell align="center">USE</TableCell>
-                            <TableCell>KEY</TableCell>
-                            <TableCell>VALUE</TableCell>
-                            <TableCell align="center">DELETE</TableCell>
-                          </TableRow>
-                        </TableHead>
-                        <TableBody>
-                          {(editing.parameters ?? []).map((row, index) => {
-                            const update = (change: Partial<ApiParameter>) =>
-                              setEditing({
-                                ...editing,
-                                parameters: editing.parameters!.map(
-                                  (item, i) =>
-                                    i === index ? { ...item, ...change } : item,
-                                ),
-                              });
-                            return (
-                              <TableRow key={row.id}>
-                                <TableCell align="center">
-                                  <Checkbox
-                                    size="small"
-                                    checked={row.enabled}
-                                    onChange={(event) =>
-                                      update({ enabled: event.target.checked })
-                                    }
-                                    inputProps={{
-                                      "aria-label": `Enable parameter ${index + 1}`,
-                                    }}
-                                  />
-                                </TableCell>
-                                <TableCell>
-                                  <InputBase
-                                    fullWidth
-                                    sx={{
-                                      px: 1.25,
-                                      py: 0.75,
-                                      "&.Mui-focused": {
-                                        outline: "2px solid",
-                                        outlineColor: "primary.dark",
-                                        outlineOffset: -2,
-                                        borderRadius: 0.5,
-                                      },
-                                      "& input": { minWidth: 0 },
-                                    }}
-                                    value={row.key}
-                                    onChange={(event) =>
-                                      update({ key: event.target.value })
-                                    }
-                                    inputProps={{
-                                      "aria-label": `Parameter ${index + 1} key`,
-                                    }}
-                                  />
-                                </TableCell>
-                                <TableCell>
-                                  <InputBase
-                                    fullWidth
-                                    multiline
-                                    minRows={1}
-                                    maxRows={5}
-                                    sx={{
-                                      px: 1.25,
-                                      py: 0.75,
-                                      "&.Mui-focused": {
-                                        outline: "2px solid",
-                                        outlineColor: "primary.dark",
-                                        outlineOffset: -2,
-                                        borderRadius: 0.5,
-                                      },
-                                      "& textarea": {
-                                        overflowWrap: "anywhere",
-                                        wordBreak: "break-word",
-                                        overflowX: "hidden",
-                                      },
-                                    }}
-                                    value={row.value}
-                                    onChange={(event) =>
-                                      update({ value: event.target.value })
-                                    }
-                                    inputProps={{
-                                      "aria-label": `Parameter ${index + 1} value`,
-                                    }}
-                                  />
-                                </TableCell>
-                                <TableCell align="center">
-                                  <IconButton
-                                    size="small"
-                                    aria-label={`Delete parameter ${index + 1}`}
-                                    onClick={() =>
-                                      setEditing({
-                                        ...editing,
-                                        parameters: editing.parameters!.filter(
-                                          (_, i) => i !== index,
-                                        ),
-                                      })
-                                    }
-                                  >
-                                    <Close fontSize="small" />
-                                  </IconButton>
-                                </TableCell>
-                              </TableRow>
-                            );
-                          })}
-                        </TableBody>
-                      </Table>
-                    </TableContainer>
-                    {validateParameters(editing.parameters ?? []) && (
-                      <Alert severity="error" sx={{ mt: 1 }}>
-                        {validateParameters(editing.parameters ?? [])}
-                      </Alert>
-                    )}
-                    <Button
-                      startIcon={<Add />}
-                      onClick={() =>
-                        setEditing({
-                          ...editing,
-                          parameters: [
-                            ...(editing.parameters ?? []),
-                            newParameter(),
-                          ],
-                        })
+                    <ParameterEditor
+                      parameters={editing.parameters ?? []}
+                      onChange={(parameters) =>
+                        setEditing({ ...editing, parameters })
                       }
-                    >
-                      Add parameter
-                    </Button>
+                    />
                   </Box>
                 </Stack>
               </DialogContent>
