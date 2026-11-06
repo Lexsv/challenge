@@ -1,6 +1,6 @@
+import { expertEditDraft, generationModelFor } from "./interaction-safety";
 import { initialLabTab, type LabTab } from "./navigation";
 import { expertSettingsError } from "./expert-settings-validation";
-import { initialParameters } from "./api-parameters";
 import React, { useRef, useState, useSyncExternalStore } from "react";
 import {
   ThemeProvider,
@@ -40,25 +40,23 @@ import Close from "@mui/icons-material/Close";
 import ScienceOutlined from "@mui/icons-material/ScienceOutlined";
 import { theme } from "./theme";
 import {
-  catalog,
-  capabilities,
   resolveExpert,
-  known,
-  validSettings,
-  settings,
   type Expert,
   type Run,
   type Attempt,
+  type Settings,
 } from "./models";
+import { settings } from "./openai-model-compat";
 import { respond, type Adapter } from "./openai";
-import {
-  architectInstructions,
-  expertSchema,
-  validateExperts,
-} from "./generation";
-import { createRun, Engine } from "./engine";
+import { generateWithProvider, validateExperts } from "./generation";
+import { createRun, Engine } from "./legacy-engine";
+import { ConfigurationError, configurationProblem } from "./engine";
 import { ConnectionController } from "./connection";
 import { ProviderStatus } from "./provider-status";
+import {
+  createProviderRegistry,
+  type ProviderRegistry,
+} from "./provider-registry";
 import { ParameterEditor } from "./parameter-editor";
 import { Providers } from "./providers";
 import { statusLabel } from "./labels";
@@ -66,56 +64,87 @@ import { ExpertConfigurationChips } from "./expert-configuration-chips";
 import { ExpertRoleLabel } from "./expert-role-label";
 import { RunView } from "./results";
 import { usage, seconds } from "./result-format";
-function ModelField({
+export function ModelField({
   label,
   value,
   onChange,
+  providerId,
+  registry,
   inherit = false,
   allowCustom = true,
 }: {
   label: string;
   value: string;
   onChange: (s: string) => void;
+  providerId?: string;
+  registry: ProviderRegistry;
   inherit?: boolean;
   allowCustom?: boolean;
 }) {
-  const custom =
-    !!value && !catalog.includes(value as (typeof catalog)[number]);
+  const provider = providerId ? registry.get(providerId) : undefined;
+  const options = registry.modelOptionsFor(providerId);
+  const [customEditing, setCustomEditing] = useState(false);
+  const custom = customEditing || (!!value && !options.includes(value));
   return (
     <Stack spacing={1}>
       <TextField
         select
         label={label}
-        value={custom ? "custom" : inherit && !value ? "__default" : value}
-        onChange={(e) =>
-          onChange(
-            e.target.value === "custom"
-              ? "custom-model"
-              : e.target.value === "__default"
-                ? ""
-                : e.target.value,
-          )
+        value={
+          custom
+            ? "__custom"
+            : inherit && !value
+              ? "__default"
+              : value || "__none"
+        }
+        onChange={(event) => {
+          if (event.target.value === "__custom") {
+            setCustomEditing(true);
+            return;
+          }
+          setCustomEditing(false);
+          if (event.target.value !== "__none")
+            onChange(
+              event.target.value === "__default" ? "" : event.target.value,
+            );
+        }}
+        helperText={
+          !provider
+            ? "Select a provider first."
+            : !options.length
+              ? "No discovered models available for this provider."
+              : undefined
         }
       >
         {inherit && <MenuItem value="__default">Use default</MenuItem>}
-        {catalog.map((m) => (
-          <MenuItem key={m} value={m}>
-            {m}
+        {!value && !inherit && (
+          <MenuItem value="__none" disabled>
+            Select a model
+          </MenuItem>
+        )}
+        {options.map((id) => (
+          <MenuItem key={id} value={id}>
+            {id}
           </MenuItem>
         ))}
-        {allowCustom && <MenuItem value="custom">Custom model ID</MenuItem>}
+        {(allowCustom || custom) && (
+          <MenuItem value="__custom" disabled={!allowCustom}>
+            Custom model ID
+          </MenuItem>
+        )}
       </TextField>
-      {custom && (
+      {custom && allowCustom && (
         <TextField
           label="Custom model ID"
           value={value}
-          onChange={(e) => onChange(e.target.value)}
-          helperText="Responses text only; reasoning omitted; limit 4,096 tokens. Compatibility unverified."
+          onChange={(event) => onChange(event.target.value)}
+          helperText="Model capabilities must be confirmed for this provider."
         />
       )}
     </Stack>
   );
 }
+
 function Section({
   title,
   children,
@@ -145,9 +174,17 @@ function Section({
 export function App({
   adapter = respond,
   controller,
+  registry: suppliedRegistry,
+  initialGenerationSettings,
+  initialEvaluatorSettings,
+  getProviderKey,
 }: {
   adapter?: Adapter;
   controller?: ConnectionController;
+  registry?: ProviderRegistry;
+  initialGenerationSettings?: Settings;
+  initialEvaluatorSettings?: Settings;
+  getProviderKey?: (provider: string) => string;
 }) {
   const [connectionController] = useState(
     () => controller || new ConnectionController(),
@@ -158,9 +195,29 @@ export function App({
   );
   const { key, verification, attempts: verifyAttempts } = connectionState;
   const verifying = verification === "verifying";
-  const [model, setModel] = useState<string>("gpt-5.6-terra");
+  const [openAIModel, setOpenAIModel] = useState<string>(
+    initialGenerationSettings?.provider === "openai"
+      ? initialGenerationSettings.model
+      : "gpt-5.6-terra",
+  );
+  const [generationBase] = useState(() => initialGenerationSettings);
+  const [evaluatorBase] = useState(() => initialEvaluatorSettings);
+  const [registry] = useState(
+    () => suppliedRegistry ?? createProviderRegistry(adapter),
+  );
+  const providerId = generationBase
+    ? (generationBase.provider ?? "")
+    : "openai";
+  const model = generationModelFor(providerId, openAIModel, generationBase);
+  const credential = (id: string) =>
+    id === "openai"
+      ? connectionController.getKey()
+      : (getProviderKey?.(id) ?? "");
+  const generationSettings: Settings = generationBase
+    ? { ...generationBase, model }
+    : { ...settings(model), provider: providerId };
   const [tab, setTab] = useState<LabTab>(() =>
-    initialLabTab(connectionState.key, "gpt-5.6-terra"),
+    initialLabTab(credential(providerId), generationSettings, registry),
   );
   const navigate = (next: LabTab) => {
     setVisible(false);
@@ -183,10 +240,27 @@ export function App({
   const [, redraw] = useState(0);
   const engine = useRef<Engine | null>(null);
   if (!engine.current)
-    engine.current = new Engine(() => redraw((n) => n + 1), adapter);
+    engine.current = new Engine(
+      () => redraw((n) => n + 1),
+      adapter,
+      {},
+      registry,
+    );
   const active = !!engine.current.active;
   const connectionValid =
-    !!key.trim() && !!capabilities(model)?.structuredOutput;
+    !!credential(providerId).trim() &&
+    !registry.get(providerId)?.validate(generationSettings) &&
+    registry.get(providerId)?.capabilities(model)?.structuredOutput === true;
+  const expertProblem = experts
+    .map((expert) =>
+      configurationProblem(
+        registry,
+        resolveExpert(expert, model, providerId),
+        "Expert",
+        false,
+      ),
+    )
+    .find(Boolean);
   const disabledReason = active
     ? "An experiment or retry is active."
     : !experts.length
@@ -195,31 +269,41 @@ export function App({
         ? "Enter a question."
         : !connectionValid
           ? "Configure an API key and supported model."
-          : experts.some((e) => !validSettings(resolveExpert(e, model)))
-            ? "Check expert reasoning settings and output limits for their effective models."
-            : "";
+          : expertProblem || "";
   const changeConfig = (fn: () => void) => {
     connectionController.invalidate();
     fn();
   };
-  const verify = () => connectionController.verify(model, adapter);
+  const verify = () => connectionController.verify(openAIModel, adapter);
   async function generate(single: boolean) {
-    if (generationLock.current || !connectionValid || !known(model)) return;
+    if (generationLock.current || !connectionValid) return;
     generationLock.current = true;
     setGenerating(single ? "single" : "team");
     setGenerationError("");
-    const a = {
-      id: crypto.randomUUID(),
-      ...(await adapter(key, {
-        settings: settings(model),
-        instructions: architectInstructions(single),
-        input: single ? addText : teamText,
-        schema: expertSchema,
-      })),
-    };
+    let result: Awaited<ReturnType<typeof generateWithProvider>>;
+    try {
+      result = await generateWithProvider(
+        registry,
+        generationSettings,
+        credential,
+        single ? addText : teamText,
+        single,
+      );
+    } catch {
+      setGenerationError(
+        "The selected provider, model, or credentials could not be used for generation.",
+      );
+      setGenerating(null);
+      generationLock.current = false;
+      return;
+    }
+    const a = { id: crypto.randomUUID(), ...result };
     if (a.status === "succeeded") {
       try {
-        const generated = validateExperts(a.text, single);
+        const generated = validateExperts(a.text, single, {
+          ...generationSettings,
+          provider: providerId,
+        });
         if (single) {
           setExperts((v) => [...v, ...generated]);
           setAddOpen(false);
@@ -240,13 +324,23 @@ export function App({
   function launch() {
     if (disabledReason || engine.current!.active) return;
     try {
-      const run = createRun(question, reference, experts, model);
+      const run = createRun(
+        question,
+        reference,
+        experts,
+        model,
+        providerId,
+        registry,
+        evaluatorBase,
+      );
       setRuns((v) => [run, ...v]);
       setRunError("");
-      void engine.current!.execute(run, connectionController.getKey);
-    } catch {
+      void engine.current!.execute(run, credential);
+    } catch (error) {
       setRunError(
-        "Check required inputs, expert settings, and the shared model.",
+        error instanceof ConfigurationError
+          ? error.message
+          : "Check required inputs, expert settings, and the shared model.",
       );
     }
   }
@@ -332,10 +426,7 @@ export function App({
                   variant="contained"
                   sx={{ minWidth: 160, flexShrink: 0, py: 1.4 }}
                   disabled={
-                    !!generating ||
-                    !teamText.trim() ||
-                    !connectionValid ||
-                    !known(model)
+                    !!generating || !teamText.trim() || !connectionValid
                   }
                   onClick={() => void generate(false)}
                 >
@@ -349,7 +440,8 @@ export function App({
                   )}
                 </Button>
               </Stack>
-              {!known(model) && (
+              {registry.get(providerId)?.capabilities(model)
+                ?.structuredOutput !== true && (
                 <Alert severity="info" sx={{ mt: 2 }}>
                   Choose a catalog default model for structured Architect
                   generation.
@@ -397,16 +489,7 @@ export function App({
                         <Tooltip title={`Edit ${e.name}`}>
                           <IconButton
                             aria-label={`Edit ${e.name}`}
-                            onClick={() =>
-                              setEditing(
-                                structuredClone({
-                                  ...e,
-                                  parameters:
-                                    e.parameters ??
-                                    initialParameters(e.maxTokens),
-                                }),
-                              )
-                            }
+                            onClick={() => setEditing(expertEditDraft(e))}
                           >
                             <SettingsOutlined fontSize="small" />
                           </IconButton>
@@ -436,6 +519,8 @@ export function App({
                       </Stack>
                       <Box sx={{ mt: 2 }} />
                       <ExpertConfigurationChips
+                        registry={registry}
+                        defaultProvider={providerId}
                         expert={e}
                         defaultModel={model}
                       />
@@ -527,19 +612,16 @@ export function App({
                     <RunView
                       key={run.id}
                       run={run}
-                      disabled={active || !key.trim()}
+                      disabled={active}
+                      credential={credential}
                       refresh={() => redraw((n) => n + 1)}
                       retry={(index) =>
-                        void engine.current!.execute(
-                          run,
-                          connectionController.getKey,
-                          index,
-                        )
+                        void engine.current!.execute(run, credential, index)
                       }
                       retryEvaluation={() =>
                         void engine.current!.execute(
                           run,
-                          connectionController.getKey,
+                          credential,
                           undefined,
                           true,
                         )
@@ -568,7 +650,7 @@ export function App({
           hidden={tab !== "settings"}
         >
           <Providers
-            model={model}
+            model={openAIModel}
             verification={verification}
             openAISettings={
               <Section title="Connection settings">
@@ -623,10 +705,12 @@ export function App({
                     </Alert>
                   )}
                   <ModelField
+                    registry={registry}
+                    providerId="openai"
                     label="Model"
                     allowCustom={false}
-                    value={model}
-                    onChange={(v) => changeConfig(() => setModel(v))}
+                    value={openAIModel}
+                    onChange={(v) => changeConfig(() => setOpenAIModel(v))}
                   />
                   <Typography variant="body2">
                     Used for verification, expert generation, evaluation, and as
@@ -635,7 +719,7 @@ export function App({
                   <Button
                     variant="outlined"
                     onClick={() => void verify()}
-                    disabled={verifying || !key.trim() || !model.trim()}
+                    disabled={verifying || !key.trim() || !openAIModel.trim()}
                   >
                     {verifying ? (
                       <>
@@ -712,7 +796,7 @@ export function App({
                 {generationError}
               </Alert>
             )}
-            {!connectionValid || !known(model) ? (
+            {!connectionValid ? (
               <Alert severity="info" sx={{ mt: 2 }}>
                 Configure an API key and catalog default model first.
               </Alert>
@@ -724,12 +808,7 @@ export function App({
             </Button>
             <Button
               variant="contained"
-              disabled={
-                !!generating ||
-                !addText.trim() ||
-                !connectionValid ||
-                !known(model)
-              }
+              disabled={!!generating || !addText.trim() || !connectionValid}
               onClick={() => void generate(true)}
             >
               {generating ? "Generating…" : "Create expert"}
@@ -801,62 +880,76 @@ export function App({
                     }
                   />
                   <ModelField
+                    registry={registry}
+                    providerId={editing.provider}
                     label="Model override"
                     value={editing.model}
-                    inherit
+                    inherit={
+                      !!editing.provider && editing.provider === providerId
+                    }
                     onChange={(v) =>
                       setEditing({
                         ...editing,
                         model: v,
-                        reasoning: capabilities(v || model)?.defaultReasoning,
                       })
                     }
                   />
-                  {!!capabilities(editing.model || model)?.reasoningEfforts
-                    .length && (
+                  {(!!editing.reasoning ||
+                    !!registry.capabilitiesFor(
+                      editing.provider,
+                      resolveExpert(editing, model, providerId).model,
+                    )?.reasoningEfforts?.length) && (
                     <TextField
                       select
                       label="Reasoning"
                       error={
                         !!editing.reasoning &&
-                        !capabilities(
-                          editing.model || model,
-                        )?.reasoningEfforts.includes(editing.reasoning)
+                        !registry
+                          .capabilitiesFor(
+                            editing.provider,
+                            resolveExpert(editing, model, providerId).model,
+                          )
+                          ?.reasoningEfforts?.includes(editing.reasoning)
                       }
                       helperText={
                         editing.reasoning &&
-                        !capabilities(
-                          editing.model || model,
-                        )?.reasoningEfforts.includes(editing.reasoning)
+                        !registry
+                          .capabilitiesFor(
+                            editing.provider,
+                            resolveExpert(editing, model, providerId).model,
+                          )
+                          ?.reasoningEfforts?.includes(editing.reasoning)
                           ? "Choose a reasoning level supported by the selected model."
                           : undefined
                       }
-                      value={
-                        editing.reasoning ||
-                        capabilities(editing.model || model)
-                          ?.defaultReasoning ||
-                        ""
-                      }
+                      value={editing.reasoning || ""}
                       onChange={(e) =>
                         setEditing({ ...editing, reasoning: e.target.value })
                       }
                     >
+                      <MenuItem value="">Unspecified</MenuItem>
                       {editing.reasoning &&
-                        !capabilities(
-                          editing.model || model,
-                        )?.reasoningEfforts.includes(editing.reasoning) && (
+                        !registry
+                          .capabilitiesFor(
+                            editing.provider,
+                            resolveExpert(editing, model, providerId).model,
+                          )
+                          ?.reasoningEfforts?.includes(editing.reasoning) && (
                           <MenuItem value={editing.reasoning} disabled>
                             {statusLabel(editing.reasoning)} (unsupported for
                             selected model)
                           </MenuItem>
                         )}
-                      {capabilities(
-                        editing.model || model,
-                      )!.reasoningEfforts.map((v) => (
-                        <MenuItem key={v} value={v}>
-                          {statusLabel(v)}
-                        </MenuItem>
-                      ))}
+                      {registry
+                        .capabilitiesFor(
+                          editing.provider,
+                          resolveExpert(editing, model, providerId).model,
+                        )
+                        ?.reasoningEfforts?.map((v) => (
+                          <MenuItem key={v} value={v}>
+                            {statusLabel(v)}
+                          </MenuItem>
+                        ))}
                     </TextField>
                   )}
                   <Box>
@@ -873,20 +966,22 @@ export function App({
                 </Stack>
               </DialogContent>
               <DialogActions sx={{ flexWrap: "wrap" }}>
-                {expertSettingsError(editing, model) && (
+                {expertSettingsError(editing, model, registry, providerId) && (
                   <Typography
                     role="status"
                     color="error"
                     variant="body2"
                     sx={{ flexBasis: "100%", px: 1 }}
                   >
-                    {expertSettingsError(editing, model)}
+                    {expertSettingsError(editing, model, registry, providerId)}
                   </Typography>
                 )}
                 <Button onClick={() => setEditing(null)}>Cancel</Button>
                 <Button
                   variant="contained"
-                  disabled={!!expertSettingsError(editing, model)}
+                  disabled={
+                    !!expertSettingsError(editing, model, registry, providerId)
+                  }
                   onClick={() => {
                     setExperts((v) =>
                       v.map((e) =>

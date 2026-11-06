@@ -7,8 +7,9 @@ import {
   validateExperts,
 } from "./generation";
 import { ExpertRoleLabel } from "./expert-role-label";
-import { createRun, Engine } from "./engine";
-import { settings, type Expert } from "./models";
+import { createRun, Engine } from "./legacy-engine";
+import { type Expert } from "./models";
+import { settings } from "./openai-model-compat";
 
 const definition = {
   name: "Name sentinel",

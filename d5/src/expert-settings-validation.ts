@@ -1,30 +1,26 @@
-import {
-  capabilities,
-  resolveExpert,
-  validSettings,
-  type Expert,
-} from "./models";
+import { resolveExpert, type Expert } from "./models";
 import { validateParameters } from "./api-parameters";
+import type { ProviderRegistry } from "./provider-registry";
 
-// Match the existing Save and execution validation while explaining any blocker.
 export function expertSettingsError(
   expert: Expert,
   defaultModel: string,
+  registry?: ProviderRegistry,
+  defaultProvider?: string,
 ): string | undefined {
   if (!expert.name.trim()) return "Enter an expert name.";
   if (!expert.description.trim()) return "Enter an expert description.";
   if (!expert.rolePrompt.trim()) return "Enter a role prompt.";
-  const resolved = resolveExpert(expert, defaultModel);
+  if (!registry) return "Provider registry is required.";
+  if (!expert.provider) return "Provider identity is required.";
+  const resolved = resolveExpert(expert, defaultModel, defaultProvider);
   if (!resolved.model.trim()) return "Select a model.";
-  const parameterError = validateParameters(resolved.parameters ?? []);
-  if (parameterError) return parameterError;
-  const capability = capabilities(resolved.model);
-  if (
-    resolved.reasoning &&
-    !capability?.reasoningEfforts.includes(resolved.reasoning)
-  )
-    return "Choose a reasoning level supported by the selected model.";
-  if (!validSettings(resolved))
-    return `Check max_output_tokens: the limit for this model is ${capability?.maxOutputTokens ?? 4096}.`;
-  return undefined;
+  const error = validateParameters(resolved.parameters ?? []);
+  if (error) return error;
+  if (!resolved.provider) return "Provider identity is required.";
+  const provider = registry.get(resolved.provider);
+  if (!provider) return "Unsupported provider.";
+  if (!provider.capabilities(resolved.model))
+    return "Model capabilities are unknown.";
+  return provider.validate(resolved);
 }

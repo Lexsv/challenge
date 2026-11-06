@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { expertSettingsError } from "./expert-settings-validation";
-import { settings, type Expert } from "./models";
+import { type Expert } from "./models";
+import { settings } from "./openai-model-compat";
+import { createProviderRegistry } from "./provider-registry";
 import { newParameter } from "./api-parameters";
 const expert: Expert = {
   ...settings(""),
+  provider: "openai",
   id: "one",
   name: "Expert",
   description: "Description",
@@ -13,6 +16,9 @@ const expert: Expert = {
     { id: "two", enabled: false, key: "temperature", value: "0" },
   ],
 };
+const registry = createProviderRegistry();
+const validateExpert = (expert: Expert, model: string) =>
+  expertSettingsError(expert, model, registry, "openai");
 describe("expert settings Save validation", () => {
   it("accepts parameter edits, toggles, additions and deletions when valid", () => {
     for (const value of ["0", "0.7", "1.2"])
@@ -23,7 +29,7 @@ describe("expert settings Save validation", () => {
           newParameter(),
         ];
         expect(
-          expertSettingsError({ ...expert, parameters }, "gpt-5.6-terra"),
+          validateExpert({ ...expert, parameters }, "gpt-5.6-terra"),
         ).toBeUndefined();
         parameters[2] = {
           ...parameters[2],
@@ -32,10 +38,10 @@ describe("expert settings Save validation", () => {
           enabled: true,
         };
         expect(
-          expertSettingsError({ ...expert, parameters }, "gpt-5.6-terra"),
+          validateExpert({ ...expert, parameters }, "gpt-5.6-terra"),
         ).toBeUndefined();
         expect(
-          expertSettingsError(
+          validateExpert(
             { ...expert, parameters: parameters.slice(1) },
             "gpt-5.6-terra",
           ),
@@ -44,10 +50,10 @@ describe("expert settings Save validation", () => {
   });
   it("explains independent existing validation blockers instead of hiding them", () => {
     expect(
-      expertSettingsError({ ...expert, description: "" }, "gpt-5.6-terra"),
+      validateExpert({ ...expert, description: "" }, "gpt-5.6-terra"),
     ).toContain("description");
     expect(
-      expertSettingsError(
+      validateExpert(
         {
           ...expert,
           parameters: [
@@ -59,10 +65,21 @@ describe("expert settings Save validation", () => {
       ),
     ).toContain("key");
     expect(
-      expertSettingsError(
-        { ...expert, model: "custom-model" },
-        "gpt-5.6-terra",
-      ),
-    ).toContain("4096");
+      validateExpert({ ...expert, model: "custom-model" }, "gpt-5.6-terra"),
+    ).toContain("unknown");
   });
+});
+
+it("does not infer OpenAI when provider or registry context is missing", () => {
+  expect(
+    expertSettingsError(expert, "gpt-5.6-terra", undefined, "openai"),
+  ).toContain("registry");
+  expect(
+    expertSettingsError(
+      { ...expert, provider: undefined },
+      "gpt-5.6-terra",
+      registry,
+      "openai",
+    ),
+  ).toContain("identity");
 });

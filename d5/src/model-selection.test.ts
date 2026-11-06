@@ -1,16 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  catalog,
-  capabilities,
-  settings,
-  validSettings,
-  verificationSettings,
-  resolveExpert,
-  last,
-  type Expert,
-} from "./models";
+import { last, type Expert } from "./models";
+import { catalog, capabilities, settings, validSettings, verificationSettings, resolveExpert } from "./openai-model-compat";
 import { ConnectionController } from "./connection";
-import { createRun, Engine } from "./engine";
+import { createRun, Engine } from "./legacy-engine";
 import { expertSchema } from "./generation";
 import { respond, type Adapter, type Request } from "./openai";
 const expert = (name: string, model = ""): Expert => ({

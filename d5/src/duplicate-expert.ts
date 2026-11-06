@@ -15,6 +15,7 @@ export function duplicateExpert(experts: Expert[], sourceId: string): Expert[] {
     roleLabel: source.roleLabel,
     description: source.description,
     rolePrompt: source.rolePrompt,
+    provider: source.provider,
     model: source.model,
     reasoning: source.reasoning,
     maxTokens: source.maxTokens,

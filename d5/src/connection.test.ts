@@ -6,8 +6,9 @@ import {
   STORAGE_WARNING,
   type KeyStorage,
 } from "./connection";
-import { Engine, createRun } from "./engine";
-import { settings, last, type Attempt, type Expert } from "./models";
+import { Engine, createRun } from "./legacy-engine";
+import { last, type Attempt, type Expert } from "./models";
+import { settings } from "./openai-model-compat";
 import type { Adapter } from "./openai";
 const success = { status: "succeeded" as const, text: "OK", ms: 1 };
 function memoryStorage() {

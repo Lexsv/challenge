@@ -1,7 +1,8 @@
 // Synthetic presentation fixtures only; no API requests or credentials.
 import { Container, CssBaseline, Stack, ThemeProvider } from "@mui/material";
-import { createRun } from "./engine";
-import { settings, type Run, type Verdict } from "./models";
+import { createRun } from "./legacy-engine";
+import { type Run, type Verdict } from "./models";
+import { settings } from "./openai-model-compat";
 import { RunView } from "./results";
 import { theme } from "./theme";
 

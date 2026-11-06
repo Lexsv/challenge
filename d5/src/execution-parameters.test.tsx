@@ -1,12 +1,19 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createRun, Engine } from "./engine";
+import { createRun, Engine } from "./legacy-engine";
 import { respond } from "./openai";
-import { settings, type Expert } from "./models";
+import { createProviderRegistry, ProviderRegistry } from "./provider-registry";
+import { type Expert } from "./models";
+import { settings } from "./openai-model-compat";
 import { captureExecutionParameters } from "./execution-parameters";
 import { ExecutionParametersReport } from "./execution-parameters-report";
 import { ParticipantDetails } from "./results";
+// Snapshot serialization fixture: this mock explicitly declares these options valid.
+const provider = createProviderRegistry().get("openai")!;
+const registry = new ProviderRegistry([
+  { ...provider, validate: provider.validateHistorical! },
+]);
 const parameter = (key: string, value: string, enabled = true) => ({
   id: key,
   key,
@@ -19,6 +26,7 @@ const makeExpert = (id: string, temp: number): Expert => ({
   name: id,
   rolePrompt: "role",
   description: "description",
+  reasoning: "low",
   parameters: [
     parameter("max_output_tokens", "8000"),
     parameter("temperature", String(temp)),
@@ -48,8 +56,18 @@ describe("execution parameter snapshots", () => {
         }),
       );
       const expert = makeExpert("one", temperature);
-      const run = createRun("Question", "", [expert], "gpt-5.6-terra");
-      await new Engine(() => {}, respond).execute(run, "dummy-key");
+      const run = createRun(
+        "Question",
+        "",
+        [expert],
+        "gpt-5.6-terra",
+        "openai",
+        registry,
+      );
+      await new Engine(() => {}, respond, {}, registry).execute(
+        run,
+        "dummy-key",
+      );
       const snapshot = run.results[0].attempts[0].executionParameters!;
       expect(snapshot.temperature).toBe(sent.temperature);
       expect(snapshot.temperature).toBe(temperature);
@@ -85,8 +103,15 @@ describe("execution parameter snapshots", () => {
       ),
     );
     const experts = [makeExpert("one", 0.7), makeExpert("two", 1.2)];
-    const run = createRun("Q", "", experts, "gpt-5.6-terra");
-    await new Engine(() => {}, respond).execute(run, "dummy-key");
+    const run = createRun(
+      "Q",
+      "",
+      experts,
+      "gpt-5.6-terra",
+      "openai",
+      registry,
+    );
+    await new Engine(() => {}, respond, {}, registry).execute(run, "dummy-key");
     experts[0].parameters![1].value = "0";
     expect(run.results[0].attempts[0].executionParameters?.temperature).toBe(
       0.7,

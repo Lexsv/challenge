@@ -2,8 +2,9 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { duplicateExpert } from "./duplicate-expert";
-import { createRun, Engine } from "./engine";
-import { settings, type Attempt, type Expert } from "./models";
+import { createRun, Engine } from "./legacy-engine";
+import { type Attempt, type Expert } from "./models";
+import { settings } from "./openai-model-compat";
 import { respond } from "./openai";
 import {
   incompleteExplanation,

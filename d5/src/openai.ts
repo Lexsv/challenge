@@ -1,27 +1,15 @@
+import { capabilities } from "./openai-model-catalog";
 import {
   captureExecutionParameters,
   type ExecutionParameters,
 } from "./execution-parameters";
 import { parameterPayload } from "./api-parameters";
 import { incompleteExplanation } from "./result-explanations";
-import {
-  capabilities,
-  validSettings,
-  type Settings,
-  type Attempt,
-  type Usage,
-  type IncompleteReason,
-} from "./models";
-export type Request = {
-  settings: Settings;
-  instructions: string;
-  input: string;
-  schema?: object;
-};
-export type Adapter = (
-  key: string,
-  request: Request,
-) => Promise<Omit<Attempt, "id">>;
+import { type Usage, type IncompleteReason } from "./models";
+import { validSettings } from "./openai-model-compat";
+import type { Adapter, Request } from "./provider-contract";
+import type { Attempt } from "./models";
+export type { Adapter, Request } from "./provider-contract";
 const statusError = (status: number) =>
   status === 401
     ? "Authentication failed (401). Check your key privately in connection settings."
@@ -108,7 +96,10 @@ async function respondInternal(
     });
     if (!res.ok) {
       let detail = "";
-      if (res.status === 400 && request.settings.parameters) {
+      if (
+        (res.status === 400 || res.status === 422) &&
+        request.settings.parameters
+      ) {
         try {
           const payload = await res.json();
           if (typeof payload?.error?.message === "string")
@@ -116,6 +107,7 @@ async function respondInternal(
               .split(key)
               .join("[redacted]")
               .replace(/sk-[A-Za-z0-9_-]{8,}/g, "[redacted]")
+              .replace(/bearer\s+\S+/gi, "[redacted]")
               .replace(/[\u0000-\u001f]/g, " ")
               .slice(0, 500);
         } catch {

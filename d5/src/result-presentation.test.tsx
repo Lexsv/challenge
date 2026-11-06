@@ -5,8 +5,9 @@ import { describe, expect, it } from "vitest";
 import { AnswerMarkdown, safeMarkdownLink } from "./answer-markdown";
 import { resultMetadataRows, ResultMetadata } from "./result-metadata";
 import { ParticipantDetails } from "./results";
-import { createRun } from "./engine";
-import { settings, type Attempt, type Expert } from "./models";
+import { createRun } from "./legacy-engine";
+import { type Attempt, type Expert } from "./models";
+import { settings } from "./openai-model-compat";
 import { theme } from "./theme";
 const expert: Expert = {
   ...settings("gpt-5.6-terra"),

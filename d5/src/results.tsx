@@ -1,3 +1,4 @@
+import { retryCredentialReason } from "./interaction-safety";
 import { useState } from "react";
 import {
   Accordion,
@@ -134,6 +135,7 @@ export function ParticipantDetails({
   disabled,
   refresh,
   retry,
+  retryReason,
 }: {
   run: Run;
   result: Result;
@@ -141,6 +143,7 @@ export function ParticipantDetails({
   disabled: boolean;
   refresh: () => void;
   retry: () => void;
+  retryReason?: string;
 }) {
   const attempt = last(result.attempts);
   return (
@@ -247,14 +250,20 @@ export function ParticipantDetails({
       {attempt &&
         attempt.status !== "succeeded" &&
         attempt.status !== "running" && (
-          <Button
-            variant="outlined"
-            disabled={disabled}
-            onClick={retry}
-            sx={{ alignSelf: "flex-start" }}
-          >
-            Retry this participant
-          </Button>
+          <Box>
+            <Button
+              variant="outlined"
+              disabled={disabled || !!retryReason}
+              onClick={retry}
+            >
+              Retry this participant
+            </Button>
+            {retryReason && (
+              <Typography variant="body2" role="status">
+                {retryReason}
+              </Typography>
+            )}
+          </Box>
         )}
       <AttemptHistory result={result} />
     </Stack>
@@ -267,13 +276,18 @@ export function RunView({
   refresh,
   retry,
   retryEvaluation,
+  credential,
 }: {
   run: Run;
   disabled: boolean;
   refresh: () => void;
   retry: (index: number) => void;
   retryEvaluation: () => void;
+  credential?: (provider: string) => string;
 }) {
+  const evaluatorRetryReason = credential
+    ? retryCredentialReason(run.snapshot.evaluator.provider, credential)
+    : undefined;
   const [selectedResultId, setSelectedResultId] = useState<string | null>(null);
   const [answerResultId, setAnswerResultId] = useState<string | null>(null);
   const answerResult = run.results.find(
@@ -346,13 +360,19 @@ export function RunView({
         <Alert
           severity="error"
           action={
-            <Button disabled={disabled} onClick={retryEvaluation}>
+            <Button
+              disabled={disabled || !!evaluatorRetryReason}
+              onClick={retryEvaluation}
+            >
               Retry evaluation
             </Button>
           }
         >
           {last(run.evaluations)?.error || "Evaluation failed"}. Answers saved;
           previous verdicts are not current.
+          {evaluatorRetryReason && (
+            <Typography variant="body2">{evaluatorRetryReason}</Typography>
+          )}
         </Alert>
       )}
       <TableContainer
@@ -606,6 +626,11 @@ export function RunView({
                 (item) => item.resultId === selected.id,
               )}
               disabled={disabled}
+              retryReason={
+                credential
+                  ? retryCredentialReason(selected.expert.provider, credential)
+                  : undefined
+              }
               refresh={refresh}
               retry={() => retry(selectedIndex)}
             />

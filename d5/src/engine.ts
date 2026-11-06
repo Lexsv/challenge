@@ -1,16 +1,13 @@
 import {
   last,
   evaluationRequested,
-  capabilities,
-  settings,
   resolveExpert,
-  validSettings,
   type Run,
   type Expert,
   type Settings,
   type Attempt,
 } from "./models";
-import { respond, type Adapter } from "./openai";
+import type { ProviderRegistry } from "./provider-registry";
 import {
   evaluationSchema,
   validateEvaluation,
@@ -23,25 +20,88 @@ function freeze<T>(value: T): T {
   }
   return value;
 }
+export class ConfigurationError extends Error {}
+function sanitizedConfigText(value: string, config?: Settings): string {
+  let text = value
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/bearer\s+[^\s,;]+/gi, "Bearer [redacted]")
+    .replace(/(?:sk-|ghp_|opencode-)[a-zA-Z0-9_-]{8,}/gi, "[redacted]")
+    .replace(
+      /(authorization|api[_-]?key|token|password|secret|credential)["']?\s*[=:]\s*["']?[^\s,;"']+/gi,
+      "$1=[redacted]",
+    )
+    .replace(/https?:\/\/[^\s/@:]+:[^\s/@]+@/gi, "https://[redacted]@");
+  for (const parameter of config?.parameters ?? []) {
+    if (parameter.value.length >= 4)
+      text = text.split(parameter.value).join("[redacted]");
+  }
+  return text.slice(0, 400);
+}
+export function configurationProblem(
+  registry: ProviderRegistry,
+  config: Settings,
+  role: string,
+  structured: boolean,
+): string | undefined {
+  if (!config.provider?.trim())
+    return `${role}: provider identity is required.`;
+  if (!config.model.trim())
+    return `${role}: select a model configured for provider ${sanitizedConfigText(config.provider, config)}.`;
+  const context = `${role} (provider ${sanitizedConfigText(config.provider, config)}, model ${sanitizedConfigText(config.model, config)})`;
+  const provider = registry.get(config.provider);
+  if (!provider) return `${context}: unsupported provider.`;
+  let invalid: string | undefined;
+  try {
+    invalid = provider.validate(config);
+  } catch {
+    return `${context}: provider validation failed.`;
+  }
+  if (invalid) return `${context}: ${sanitizedConfigText(invalid, config)}`;
+  if (
+    structured &&
+    provider.capabilities(config.model)?.structuredOutput !== true
+  )
+    return `${context}: structured output support is unknown or unsupported.`;
+  return undefined;
+}
 export function createRun(
   question: string,
   reference: string,
   experts: Expert[],
   defaultModel: string,
+  defaultProvider: string,
+  registry: ProviderRegistry,
+  evaluatorSettings: Settings,
+  policy: "current-v1",
 ): Run {
-  const resolved = experts.map((expert) => resolveExpert(expert, defaultModel));
-  const evaluator = settings(defaultModel);
-  if (
-    !question.trim() ||
-    !resolved.length ||
-    resolved.some((e) => !validSettings(e)) ||
-    !capabilities(defaultModel)?.structuredOutput
-  )
-    throw new Error(
-      "Complete the question, team, and supported shared model configuration.",
+  if (policy !== "current-v1")
+    throw new Error("Current validation policy is required for new runs.");
+  if (!question.trim()) throw new ConfigurationError("Enter a question.");
+  if (!experts.length) throw new ConfigurationError("Add at least one expert.");
+  if (experts.some((expert) => !expert.provider))
+    throw new ConfigurationError(
+      "Provider identity is required for new configurations.",
     );
+  if (!evaluatorSettings.provider)
+    throw new ConfigurationError("Evaluator provider identity is required.");
+  const resolved = experts.map((expert) =>
+    resolveExpert(expert, defaultModel, defaultProvider),
+  );
+  const evaluator = { ...evaluatorSettings };
+  for (const expert of resolved) {
+    const problem = configurationProblem(registry, expert, "Expert", false);
+    if (problem) throw new ConfigurationError(problem);
+  }
+  const evaluatorProblem = configurationProblem(
+    registry,
+    evaluator,
+    "Evaluator",
+    true,
+  );
+  if (evaluatorProblem) throw new ConfigurationError(evaluatorProblem);
   const snapshot = freeze(
     structuredClone({
+      validationPolicy: policy,
       question,
       reference,
       evaluationRequested: !!reference.trim(),
@@ -63,14 +123,12 @@ export function createRun(
     busy: false,
   };
 }
-type CredentialSource = string | (() => string);
-const resolveKey = (source: CredentialSource) =>
-  typeof source === "function" ? source() : source;
+export type CredentialSource = (provider: string) => string;
 export class Engine {
   active = false;
   constructor(
     private notify: () => void,
-    private adapter: Adapter = respond,
+    private registry: ProviderRegistry,
   ) {}
   private async attempt(
     key: CredentialSource,
@@ -78,9 +136,65 @@ export class Engine {
     instructions: string,
     input: string,
     schema?: object,
+    policy?: "current-v1" | "historical-openai-v0",
   ): Promise<Attempt> {
     try {
-      const currentKey = resolveKey(key);
+      const provider = settings.provider;
+      if (!provider)
+        return {
+          id: crypto.randomUUID(),
+          status: "failed",
+          text: "",
+          ms: 0,
+          error: "Provider missing in run configuration.",
+        };
+      const providerAdapter = this.registry.get(provider);
+      const selectedAdapter = providerAdapter?.execute;
+      if (!selectedAdapter)
+        return {
+          id: crypto.randomUUID(),
+          status: "failed",
+          text: "",
+          ms: 0,
+          error: "Unsupported provider. Check expert settings.",
+        };
+      if (!policy)
+        return {
+          id: crypto.randomUUID(),
+          status: "failed",
+          text: "",
+          ms: 0,
+          error:
+            "Run validation policy is missing. Import historical runs before retrying.",
+        };
+      const validate =
+        policy === "historical-openai-v0"
+          ? (providerAdapter!.validateHistorical ?? providerAdapter!.validate)
+          : providerAdapter!.validate;
+      if (!validate)
+        return {
+          id: crypto.randomUUID(),
+          status: "failed",
+          text: "",
+          ms: 0,
+          error: "Historical provider validation is unavailable.",
+        };
+      const invalid = validate(settings);
+      const structured =
+        schema &&
+        providerAdapter!.capabilities(settings.model)?.structuredOutput !==
+          true;
+      if (invalid || structured)
+        return {
+          id: crypto.randomUUID(),
+          status: "failed",
+          text: "",
+          ms: 0,
+          error: invalid
+            ? sanitizedConfigText(invalid, settings)
+            : "Structured output support is unknown or unsupported.",
+        };
+      const currentKey = key(provider);
       if (!currentKey.trim())
         return {
           id: crypto.randomUUID(),
@@ -91,7 +205,7 @@ export class Engine {
         };
       return {
         id: crypto.randomUUID(),
-        ...(await this.adapter(currentKey, {
+        ...(await selectedAdapter(currentKey, {
           settings,
           instructions,
           input,
@@ -123,6 +237,8 @@ export class Engine {
       r.expert,
       r.expert.rolePrompt,
       run.snapshot.question,
+      undefined,
+      run.snapshot.validationPolicy,
     );
     Object.assign(pending, { ...a, id: pending.id });
     this.notify();
@@ -160,6 +276,7 @@ export class Engine {
         answers,
       }),
       evaluationSchema,
+      run.snapshot.validationPolicy,
     );
     Object.assign(pending, { ...a, id: pending.id });
     if (a.status === "succeeded") {
@@ -184,7 +301,7 @@ export class Engine {
     retryIndex?: number,
     evaluationOnly = false,
   ) {
-    if (this.active || run.busy || !resolveKey(key).trim()) return;
+    if (this.active || run.busy) return;
     if (
       retryIndex !== undefined &&
       (!run.results[retryIndex] ||

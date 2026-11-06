@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { createRun, Engine } from "./engine";
+import { createRun, Engine } from "./legacy-engine";
 import { validateExperts } from "./generation";
 import { validateEvaluation } from "./evaluation";
-import { settings, last, totals, type Expert } from "./models";
+import { last, totals, type Expert } from "./models";
+import { settings } from "./openai-model-compat";
 import { respond, type Adapter, type Request } from "./openai";
 const expert = (name: string): Expert => ({
   ...settings(""),

@@ -1,5 +1,6 @@
-import { verificationSettings, type Attempt } from "./models";
-import type { Adapter } from "./openai";
+import { type Attempt } from "./models";
+import { verificationSettings } from "./openai-model-compat";
+import type { Adapter } from "./provider-contract";
 
 export const API_KEY_STORAGE_KEY = "expert-lab:w1:d3:openai-api-key";
 export const STORAGE_WARNING =

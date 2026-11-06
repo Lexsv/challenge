@@ -1,4 +1,4 @@
-import { settings, type Expert } from "./models";
+import { type Expert, type Settings } from "./models";
 export type GeneratedExpertDefinition = Pick<
   Expert,
   "name" | "description" | "rolePrompt"
@@ -34,6 +34,7 @@ export const expertSchema = {
 export function validateExperts(
   text: string,
   single = false,
+  configuration?: Settings,
 ): (Expert & GeneratedExpertDefinition)[] {
   const data = JSON.parse(text);
   if (
@@ -58,12 +59,41 @@ export function validateExperts(
         "Each expert needs a name, role label, description, and role prompt.",
       );
     return {
-      ...settings(""),
+      ...(configuration
+        ? structuredClone(configuration)
+        : { model: "", maxTokens: 8192 }),
       id: crypto.randomUUID(),
       name: e.name as string,
       roleLabel: e.roleLabel as string,
       description: e.description as string,
       rolePrompt: e.rolePrompt as string,
     };
+  });
+}
+
+/** Validate the provider/model pair before resolving credentials or dispatching. */
+export async function generateWithProvider(
+  registry: import("./provider-registry").ProviderRegistry,
+  config: import("./models").Settings,
+  credential: (provider: string) => string,
+  input: string,
+  single: boolean,
+) {
+  const id = config.provider;
+  if (!id) throw new Error("Generation provider is required.");
+  const provider = registry.get(id);
+  if (!provider) throw new Error("Unsupported generation provider.");
+  const error = provider.validate(config);
+  if (error) throw new Error(error);
+  if (provider.capabilities(config.model)?.structuredOutput !== true)
+    throw new Error("Structured output support is unknown or unsupported.");
+  const key = credential(id);
+  if (!key.trim())
+    throw new Error("API key missing for the selected provider.");
+  return provider.execute(key, {
+    settings: config,
+    instructions: architectInstructions(single),
+    input,
+    schema: expertSchema,
   });
 }

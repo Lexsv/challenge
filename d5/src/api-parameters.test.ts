@@ -1,14 +1,15 @@
+import { initialParameters } from "./openai-model-compat";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  initialParameters,
   newParameter,
   parameterPayload,
   parseParameterValue,
   validateParameters,
 } from "./api-parameters";
-import { createRun } from "./engine";
+import { createRun } from "./legacy-engine";
 import { duplicateExpert } from "./duplicate-expert";
-import { resolveExpert, settings, type Expert } from "./models";
+import { type Expert } from "./models";
+import { resolveExpert, settings } from "./openai-model-compat";
 import { respond } from "./openai";
 const row = (key: string, value: string, enabled = true) => ({
   id: crypto.randomUUID(),
@@ -65,7 +66,7 @@ describe("API parameters", () => {
     expect(validateParameters([row("x", "1"), row("x", "2")])).toMatch(
       /Duplicate/,
     );
-    expect(validateParameters([row("model", "example")])).toMatch(/managed/);
+    expect(validateParameters([row("model", "example")])).toBeUndefined();
     expect(validateParameters([row("x", "{broken")])).toMatch(/Invalid JSON/);
     expect(
       parameterPayload([
@@ -153,4 +154,16 @@ describe("API parameters", () => {
     expect(result.error).toContain("Unsupported parameter temperature");
     expect(result.error).not.toContain("dummy-key");
   });
+});
+
+it("keeps shared row parsing neutral while OpenAI rejects its own reserved fields", async () => {
+  const { validateOpenAIParameters } = await import("./openai-model-compat");
+  const params = [
+    { id: "1", enabled: true, key: "input", value: '"example"' },
+    { id: "2", enabled: false, key: "model", value: "retained" },
+  ];
+  expect(validateParameters(params)).toBeUndefined();
+  expect(parameterPayload(params)).toEqual({ input: "example" });
+  expect(validateOpenAIParameters(params)).toMatch(/managed/);
+  expect(params[1].value).toBe("retained");
 });

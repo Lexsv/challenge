@@ -1,8 +1,9 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { createRun, Engine } from "./engine";
-import { evaluationRequested, settings, type Expert } from "./models";
+import { createRun, Engine } from "./legacy-engine";
+import { evaluationRequested, type Expert } from "./models";
+import { settings } from "./openai-model-compat";
 import { ParticipantDetails, RunView } from "./results";
 import type { Adapter } from "./openai";
 const expert = (id: string): Expert => ({

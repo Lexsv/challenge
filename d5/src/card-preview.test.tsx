@@ -3,19 +3,25 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ExpertConfigurationChips,
-  expertConfigurationLabels,
+  expertConfigurationLabels as scopedLabels,
 } from "./expert-configuration-chips";
 import { observeAnswerOverflow, AnswerPreview } from "./answer-preview";
-import { resolveExpert, settings, type Expert } from "./models";
+import { type Expert } from "./models";
+import { createProviderRegistry } from "./provider-registry";
+import { resolveExpert, settings } from "./openai-model-compat";
 
 const expert: Expert = {
   ...settings(""),
+  provider: "openai",
   id: "expert",
   name: "Reviewer",
   description: "Test",
   rolePrompt: "Review",
   maxTokens: 12345,
 };
+const registry = createProviderRegistry();
+const expertConfigurationLabels = (value: Expert, model: string) =>
+  scopedLabels(value, model, registry, "openai");
 afterEach(() => vi.unstubAllGlobals());
 describe("expert configuration chips", () => {
   it("uses execution resolution for inherited model and reasoning, retaining configured output limit", () => {
@@ -23,9 +29,7 @@ describe("expert configuration chips", () => {
       const resolved = resolveExpert(expert, model);
       const labels = expertConfigurationLabels(expert, model);
       expect(labels[0]).toBe(`Model: ${resolved.model}`);
-      expect(labels[1]).toBe(
-        model === "gpt-6.1-sol" ? "Reasoning: Medium" : "Reasoning: Low",
-      );
+      expect(labels[1]).toBe("Reasoning: Unspecified");
       expect(labels[2]).toBe(`Output limit: ${resolved.maxTokens}`);
     }
   });
@@ -47,17 +51,21 @@ describe("expert configuration chips", () => {
         { ...expert, model: "custom-model", reasoning: "low" },
         "gpt-5.6-terra",
       )[1],
-    ).toBe("Reasoning: Default");
+    ).toBe("Reasoning: Unknown");
     expect(
       expertConfigurationLabels(
         { ...expert, reasoning: "" },
         "gpt-5.6-terra",
       )[1],
-    ).toBe("Reasoning: Default");
+    ).toBe("Reasoning: Unspecified");
   });
   it("renders exactly three matching chips with wrapping enabled", () => {
     const html = renderToStaticMarkup(
-      <ExpertConfigurationChips expert={expert} defaultModel="gpt-5.6-terra" />,
+      <ExpertConfigurationChips
+        expert={expert}
+        defaultModel="gpt-5.6-terra"
+        registry={registry}
+      />,
     );
     expect((html.match(/MuiChip-labelSmall/g) || []).length).toBe(3);
     expect(html).toContain("flex-wrap:wrap");
