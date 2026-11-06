@@ -51,7 +51,6 @@ import Visibility from "@mui/icons-material/Visibility";
 import VisibilityOff from "@mui/icons-material/VisibilityOff";
 import Close from "@mui/icons-material/Close";
 import ScienceOutlined from "@mui/icons-material/ScienceOutlined";
-import CheckCircleOutline from "@mui/icons-material/CheckCircleOutline";
 import { alpha } from "@mui/material/styles";
 import { theme } from "./theme";
 import {
@@ -72,7 +71,8 @@ import {
   validateExperts,
 } from "./generation";
 import { createRun, Engine } from "./engine";
-import { ConnectionController, connectionGuidance } from "./connection";
+import { ConnectionController } from "./connection";
+import { ProviderStatus } from "./provider-status";
 import { statusLabel } from "./labels";
 import { ExpertConfigurationChips } from "./expert-configuration-chips";
 import { ExpertRoleLabel } from "./expert-role-label";
@@ -170,7 +170,6 @@ export function App({
   );
   const { key, verification, attempts: verifyAttempts } = connectionState;
   const verifying = verification === "verifying";
-  const guidance = connectionGuidance(connectionState);
   const [model, setModel] = useState<string>("gpt-5.6-terra");
   const [tab, setTab] = useState<LabTab>(() =>
     initialLabTab(connectionState.key, "gpt-5.6-terra"),
@@ -282,67 +281,17 @@ export function App({
               Expert Lab
             </Typography>
             <Typography color="text.secondary">Day 5</Typography>
-            <Stack
-              direction="row"
-              alignItems="center"
-              gap={0.5}
-              sx={{ ml: "auto" }}
+            <Box
+              sx={{
+                ml: { xs: 0, sm: "auto" },
+                display: "flex",
+                flexWrap: "wrap",
+                gap: 1,
+              }}
             >
-              <Chip
-                icon={
-                  verification === "verified" ? (
-                    <CheckCircleOutline />
-                  ) : undefined
-                }
-                label={
-                  verification === "verified" ? "Connected" : "Not verified"
-                }
-                variant="outlined"
-              />
-              <Tooltip title="Connection settings">
-                <IconButton
-                  aria-label="Connection settings"
-                  onClick={() => navigate("settings")}
-                >
-                  <SettingsOutlined />
-                </IconButton>
-              </Tooltip>
-            </Stack>
+              <ProviderStatus verification={verification} />
+            </Box>
           </Stack>
-          {guidance && (
-            <Stack
-              direction={{ xs: "column", sm: "row" }}
-              alignItems={{ xs: "flex-start", sm: "center" }}
-              gap={0.5}
-              sx={{ mt: 1 }}
-            >
-              <Typography
-                role="status"
-                aria-live="polite"
-                variant="body2"
-                sx={{ minWidth: 0, overflowWrap: "anywhere" }}
-              >
-                {guidance}
-              </Typography>
-              <Button
-                size="small"
-                sx={{ flexShrink: 0 }}
-                onClick={() => navigate("settings")}
-              >
-                Open settings
-              </Button>
-            </Stack>
-          )}
-          {connectionState.error && (
-            <Typography role="alert" variant="body2" sx={{ mt: 0.5 }}>
-              {connectionState.error}
-            </Typography>
-          )}
-          {connectionState.storageWarning && (
-            <Typography role="status" variant="body2" sx={{ mt: 0.5 }}>
-              {connectionState.storageWarning}
-            </Typography>
-          )}
         </Paper>
         <Tabs
           value={tab}
