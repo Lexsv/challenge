@@ -1,3 +1,4 @@
+import { initialLabTab, type LabTab } from "./navigation";
 import { expertSettingsError } from "./expert-settings-validation";
 import {
   initialParameters,
@@ -38,6 +39,8 @@ import {
   TableRow,
   InputAdornment,
   InputBase,
+  Tabs,
+  Tab,
 } from "@mui/material";
 import SettingsOutlined from "@mui/icons-material/SettingsOutlined";
 import Add from "@mui/icons-material/Add";
@@ -169,7 +172,13 @@ export function App({
   const verifying = verification === "verifying";
   const guidance = connectionGuidance(connectionState);
   const [model, setModel] = useState<string>("gpt-5.6-terra");
-  const [connection, setConnection] = useState(false);
+  const [tab, setTab] = useState<LabTab>(() =>
+    initialLabTab(connectionState.key, "gpt-5.6-terra"),
+  );
+  const navigate = (next: LabTab) => {
+    setVisible(false);
+    setTab(next);
+  };
   const [visible, setVisible] = useState(false);
   const [experts, setExperts] = useState<Expert[]>([]);
   const [teamText, setTeamText] = useState("");
@@ -267,7 +276,7 @@ export function App({
             <Typography variant="h4" component="h1">
               Expert Lab
             </Typography>
-            <Typography color="text.secondary">Week 1 · Day 3</Typography>
+            <Typography color="text.secondary">Day 5</Typography>
             <Stack
               direction="row"
               alignItems="center"
@@ -288,7 +297,7 @@ export function App({
               <Tooltip title="Connection settings">
                 <IconButton
                   aria-label="Connection settings"
-                  onClick={() => setConnection(true)}
+                  onClick={() => navigate("settings")}
                 >
                   <SettingsOutlined />
                 </IconButton>
@@ -313,7 +322,7 @@ export function App({
               <Button
                 size="small"
                 sx={{ flexShrink: 0 }}
-                onClick={() => setConnection(true)}
+                onClick={() => navigate("settings")}
               >
                 Open settings
               </Button>
@@ -330,280 +339,293 @@ export function App({
             </Typography>
           )}
         </Paper>
-        <Stack spacing={3}>
-          <Section title="Architect" tinted>
-            <Typography mb={2} color="text.secondary">
-              Create your expert team. Generating a team replaces the current
-              team; previous runs stay intact.
-            </Typography>
-            <Stack
-              direction={{ xs: "column", md: "row" }}
-              spacing={2}
-              alignItems="flex-start"
-            >
-              <TextField
-                label="Team description"
-                multiline
-                minRows={3}
-                maxRows={8}
+        <Tabs
+          value={tab}
+          onChange={(_, next: LabTab) => navigate(next)}
+          aria-label="Expert Lab navigation"
+          sx={{ mb: 2 }}
+        >
+          <Tab value="lab" label="Lab" id="tab-lab" aria-controls="panel-lab" />
+          <Tab
+            value="settings"
+            label="Settings"
+            id="tab-settings"
+            aria-controls="panel-settings"
+          />
+        </Tabs>
+        <Box
+          role="tabpanel"
+          id="panel-lab"
+          aria-labelledby="tab-lab"
+          hidden={tab !== "lab"}
+        >
+          <Stack spacing={3}>
+            <Section title="Architect" tinted>
+              <Typography mb={2} color="text.secondary">
+                Create your expert team. Generating a team replaces the current
+                team; previous runs stay intact.
+              </Typography>
+              <Stack
+                direction={{ xs: "column", md: "row" }}
+                spacing={2}
+                alignItems="flex-start"
+              >
+                <TextField
+                  label="Team description"
+                  multiline
+                  minRows={3}
+                  maxRows={8}
+                  sx={{
+                    minWidth: 0,
+                    "& textarea": {
+                      overflowWrap: "anywhere",
+                      wordBreak: "break-word",
+                      overflowX: "hidden",
+                    },
+                  }}
+                  value={teamText}
+                  onChange={(e) => setTeamText(e.target.value)}
+                />
+                <Button
+                  variant="contained"
+                  sx={{ minWidth: 160, flexShrink: 0, py: 1.4 }}
+                  disabled={
+                    !!generating ||
+                    !teamText.trim() ||
+                    !connectionValid ||
+                    !known(model)
+                  }
+                  onClick={() => void generate(false)}
+                >
+                  {generating === "team" ? (
+                    <>
+                      <CircularProgress size={18} sx={{ mr: 1 }} />
+                      Generating…
+                    </>
+                  ) : (
+                    "Generate team"
+                  )}
+                </Button>
+              </Stack>
+              {!known(model) && (
+                <Alert severity="info" sx={{ mt: 2 }}>
+                  Choose a catalog default model for structured Architect
+                  generation.
+                </Alert>
+              )}
+              {!key.trim() && (
+                <Typography variant="body2" mt={1}>
+                  Open connection settings to enter your API key.
+                </Typography>
+              )}
+              {generationError && (
+                <Alert severity="error" sx={{ mt: 2 }}>
+                  {generationError}
+                </Alert>
+              )}
+              {generationAttempts.length > 0 && (
+                <Typography variant="body2" mt={2}>
+                  Architect usage (all attempts): {usage(generationAttempts)} ·{" "}
+                  {seconds(generationAttempts.reduce((n, a) => n + a.ms, 0))}
+                </Typography>
+              )}
+            </Section>
+            <Section title={`Experts · ${experts.length}`}>
+              <Box
                 sx={{
-                  minWidth: 0,
-                  "& textarea": {
-                    overflowWrap: "anywhere",
-                    wordBreak: "break-word",
-                    overflowX: "hidden",
-                  },
+                  display: "grid",
+                  gridTemplateColumns:
+                    "repeat(auto-fill, minmax(min(100%, 250px), 1fr))",
+                  gap: 2,
                 }}
-                value={teamText}
-                onChange={(e) => setTeamText(e.target.value)}
-              />
+              >
+                {experts.map((e) => (
+                  <Card key={e.id}>
+                    <CardContent>
+                      <Stack direction="row" alignItems="center">
+                        <Box sx={{ flex: 1, minWidth: 0 }}>
+                          <Typography
+                            variant="h6"
+                            sx={{ overflowWrap: "anywhere" }}
+                          >
+                            {e.name}
+                          </Typography>
+                          <ExpertRoleLabel roleLabel={e.roleLabel} />
+                        </Box>
+                        <Tooltip title={`Edit ${e.name}`}>
+                          <IconButton
+                            aria-label={`Edit ${e.name}`}
+                            onClick={() =>
+                              setEditing(
+                                structuredClone({
+                                  ...e,
+                                  parameters:
+                                    e.parameters ??
+                                    initialParameters(e.maxTokens),
+                                }),
+                              )
+                            }
+                          >
+                            <SettingsOutlined fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                        <Tooltip title="Duplicate expert">
+                          <IconButton
+                            aria-label={`Duplicate expert ${e.name}`}
+                            onClick={() =>
+                              setExperts((current) =>
+                                duplicateExpert(current, e.id),
+                              )
+                            }
+                          >
+                            <ContentCopyOutlined fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                        <Tooltip title={`Delete ${e.name}`}>
+                          <IconButton
+                            aria-label={`Delete ${e.name}`}
+                            onClick={() =>
+                              setExperts((v) => v.filter((x) => x.id !== e.id))
+                            }
+                          >
+                            <DeleteOutline fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      </Stack>
+                      <Box sx={{ mt: 2 }} />
+                      <ExpertConfigurationChips
+                        expert={e}
+                        defaultModel={model}
+                      />
+                    </CardContent>
+                  </Card>
+                ))}
+                <Card
+                  variant="outlined"
+                  sx={{
+                    border: "1px dashed #606d29",
+                    minHeight: 200,
+                    boxShadow: "none",
+                  }}
+                >
+                  <CardActionArea
+                    disabled={!!generating}
+                    onClick={() => {
+                      setGenerationError("");
+                      setAddOpen(true);
+                    }}
+                    sx={{ height: "100%", p: 3, textAlign: "center" }}
+                  >
+                    <Add
+                      sx={{
+                        fontSize: 44,
+                        bgcolor: "#e9edce",
+                        borderRadius: "50%",
+                        p: 1,
+                      }}
+                    />
+                    <Typography variant="h6">Add expert</Typography>
+                    {!experts.length && (
+                      <Typography color="text.secondary">
+                        Create your first expert to run an experiment
+                      </Typography>
+                    )}
+                  </CardActionArea>
+                </Card>
+              </Box>
+              <Typography variant="body2" color="text.secondary" mt={2}>
+                Add or remove experts. Previous runs keep their original team.
+              </Typography>
+            </Section>
+            <Section title="Experiment" tinted>
+              <Stack direction={{ xs: "column", md: "row" }} spacing={2}>
+                <TextField
+                  label="Question"
+                  multiline
+                  minRows={3}
+                  value={question}
+                  onChange={(e) => setQuestion(e.target.value)}
+                />
+                <TextField
+                  label="Expected answer (optional)"
+                  multiline
+                  minRows={3}
+                  value={reference}
+                  onChange={(e) => setReference(e.target.value)}
+                  helperText="Optional. When provided, it is used for evaluation and never sent to participants."
+                />
+              </Stack>
               <Button
                 variant="contained"
-                sx={{ minWidth: 160, flexShrink: 0, py: 1.4 }}
-                disabled={
-                  !!generating ||
-                  !teamText.trim() ||
-                  !connectionValid ||
-                  !known(model)
-                }
-                onClick={() => void generate(false)}
+                startIcon={<ScienceOutlined />}
+                sx={{ mt: 2 }}
+                disabled={!!disabledReason}
+                onClick={launch}
               >
-                {generating === "team" ? (
-                  <>
-                    <CircularProgress size={18} sx={{ mr: 1 }} />
-                    Generating…
-                  </>
-                ) : (
-                  "Generate team"
-                )}
+                Run experiment
               </Button>
-            </Stack>
-            {!known(model) && (
-              <Alert severity="info" sx={{ mt: 2 }}>
-                Choose a catalog default model for structured Architect
-                generation.
-              </Alert>
-            )}
-            {!key.trim() && (
-              <Typography variant="body2" mt={1}>
-                Open connection settings to enter your API key.
-              </Typography>
-            )}
-            {generationError && (
-              <Alert severity="error" sx={{ mt: 2 }}>
-                {generationError}
-              </Alert>
-            )}
-            {generationAttempts.length > 0 && (
-              <Typography variant="body2" mt={2}>
-                Architect usage (all attempts): {usage(generationAttempts)} ·{" "}
-                {seconds(generationAttempts.reduce((n, a) => n + a.ms, 0))}
-              </Typography>
-            )}
-          </Section>
-          <Section title={`Experts · ${experts.length}`}>
-            <Box
-              sx={{
-                display: "grid",
-                gridTemplateColumns:
-                  "repeat(auto-fill, minmax(min(100%, 250px), 1fr))",
-                gap: 2,
-              }}
-            >
-              {experts.map((e) => (
-                <Card key={e.id}>
-                  <CardContent>
-                    <Stack direction="row" alignItems="center">
-                      <Box sx={{ flex: 1, minWidth: 0 }}>
-                        <Typography
-                          variant="h6"
-                          sx={{ overflowWrap: "anywhere" }}
-                        >
-                          {e.name}
-                        </Typography>
-                        <ExpertRoleLabel roleLabel={e.roleLabel} />
-                      </Box>
-                      <Tooltip title={`Edit ${e.name}`}>
-                        <IconButton
-                          aria-label={`Edit ${e.name}`}
-                          onClick={() =>
-                            setEditing(
-                              structuredClone({
-                                ...e,
-                                parameters:
-                                  e.parameters ??
-                                  initialParameters(e.maxTokens),
-                              }),
-                            )
-                          }
-                        >
-                          <SettingsOutlined fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
-                      <Tooltip title="Duplicate expert">
-                        <IconButton
-                          aria-label={`Duplicate expert ${e.name}`}
-                          onClick={() =>
-                            setExperts((current) =>
-                              duplicateExpert(current, e.id),
-                            )
-                          }
-                        >
-                          <ContentCopyOutlined fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
-                      <Tooltip title={`Delete ${e.name}`}>
-                        <IconButton
-                          aria-label={`Delete ${e.name}`}
-                          onClick={() =>
-                            setExperts((v) => v.filter((x) => x.id !== e.id))
-                          }
-                        >
-                          <DeleteOutline fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
-                    </Stack>
-                    <Box sx={{ mt: 2 }} />
-                    <ExpertConfigurationChips expert={e} defaultModel={model} />
-                  </CardContent>
-                </Card>
-              ))}
-              <Card
-                variant="outlined"
-                sx={{
-                  border: "1px dashed #606d29",
-                  minHeight: 200,
-                  boxShadow: "none",
-                }}
-              >
-                <CardActionArea
-                  disabled={!!generating}
-                  onClick={() => {
-                    setGenerationError("");
-                    setAddOpen(true);
-                  }}
-                  sx={{ height: "100%", p: 3, textAlign: "center" }}
-                >
-                  <Add
-                    sx={{
-                      fontSize: 44,
-                      bgcolor: "#e9edce",
-                      borderRadius: "50%",
-                      p: 1,
-                    }}
+              {disabledReason && (
+                <Typography variant="body2" mt={1}>
+                  {disabledReason}
+                </Typography>
+              )}
+              {runError && <Alert severity="error">{runError}</Alert>}
+            </Section>
+            <Section title="Results / run history">
+              {!runs.length ? (
+                <Box sx={{ py: 5, textAlign: "center" }}>
+                  <ScienceOutlined
+                    sx={{ fontSize: 48, color: "text.secondary" }}
                   />
-                  <Typography variant="h6">Add expert</Typography>
-                  {!experts.length && (
-                    <Typography color="text.secondary">
-                      Create your first expert to run an experiment
-                    </Typography>
-                  )}
-                </CardActionArea>
-              </Card>
-            </Box>
-            <Typography variant="body2" color="text.secondary" mt={2}>
-              Add or remove experts. Previous runs keep their original team.
+                  <Typography>No runs yet.</Typography>
+                </Box>
+              ) : (
+                <Stack spacing={3}>
+                  {runs.map((run) => (
+                    <RunView
+                      key={run.id}
+                      run={run}
+                      disabled={active || !key.trim()}
+                      refresh={() => redraw((n) => n + 1)}
+                      retry={(index) =>
+                        void engine.current!.execute(
+                          run,
+                          connectionController.getKey,
+                          index,
+                        )
+                      }
+                      retryEvaluation={() =>
+                        void engine.current!.execute(
+                          run,
+                          connectionController.getKey,
+                          undefined,
+                          true,
+                        )
+                      }
+                    />
+                  ))}
+                </Stack>
+              )}
+            </Section>
+            <Typography
+              variant="body2"
+              color="text.secondary"
+              textAlign="center"
+            >
+              Experts and history reset on reload. The key is retained in this
+              tab’s sessionStorage when available; verification resets. Requests
+              go directly to OpenAI. Verification and retries may consume
+              tokens.
             </Typography>
-          </Section>
-          <Section title="Experiment" tinted>
-            <Stack direction={{ xs: "column", md: "row" }} spacing={2}>
-              <TextField
-                label="Question"
-                multiline
-                minRows={3}
-                value={question}
-                onChange={(e) => setQuestion(e.target.value)}
-              />
-              <TextField
-                label="Expected answer (optional)"
-                multiline
-                minRows={3}
-                value={reference}
-                onChange={(e) => setReference(e.target.value)}
-                helperText="Optional. When provided, it is used for evaluation and never sent to participants."
-              />
-            </Stack>
-            <Button
-              variant="contained"
-              startIcon={<ScienceOutlined />}
-              sx={{ mt: 2 }}
-              disabled={!!disabledReason}
-              onClick={launch}
-            >
-              Run experiment
-            </Button>
-            {disabledReason && (
-              <Typography variant="body2" mt={1}>
-                {disabledReason}
-              </Typography>
-            )}
-            {runError && <Alert severity="error">{runError}</Alert>}
-          </Section>
-          <Section title="Results / run history">
-            {!runs.length ? (
-              <Box sx={{ py: 5, textAlign: "center" }}>
-                <ScienceOutlined
-                  sx={{ fontSize: 48, color: "text.secondary" }}
-                />
-                <Typography>No runs yet.</Typography>
-              </Box>
-            ) : (
-              <Stack spacing={3}>
-                {runs.map((run) => (
-                  <RunView
-                    key={run.id}
-                    run={run}
-                    disabled={active || !key.trim()}
-                    refresh={() => redraw((n) => n + 1)}
-                    retry={(index) =>
-                      void engine.current!.execute(
-                        run,
-                        connectionController.getKey,
-                        index,
-                      )
-                    }
-                    retryEvaluation={() =>
-                      void engine.current!.execute(
-                        run,
-                        connectionController.getKey,
-                        undefined,
-                        true,
-                      )
-                    }
-                  />
-                ))}
-              </Stack>
-            )}
-          </Section>
-          <Typography variant="body2" color="text.secondary" textAlign="center">
-            Experts and history reset on reload. The key is retained in this
-            tab’s sessionStorage when available; verification resets. Requests
-            go directly to OpenAI. Verification and retries may consume tokens.
-          </Typography>
-        </Stack>
-        <Dialog
-          open={connection}
-          onClose={() => {
-            setConnection(false);
-            setVisible(false);
-          }}
-          fullWidth
-          maxWidth="sm"
+          </Stack>
+        </Box>
+        <Box
+          role="tabpanel"
+          id="panel-settings"
+          aria-labelledby="tab-settings"
+          hidden={tab !== "settings"}
         >
-          <DialogTitle>
-            Connection settings
-            <IconButton
-              aria-label="Close connection settings"
-              onClick={() => {
-                setConnection(false);
-                setVisible(false);
-              }}
-              sx={{ float: "right" }}
-            >
-              <Close />
-            </IconButton>
-          </DialogTitle>
-          <DialogContent>
+          <Section title="Connection settings">
             <Stack spacing={2} sx={{ pt: 1 }}>
               <Typography>Provider: OpenAI</Typography>
               <TextField
@@ -700,19 +722,8 @@ export function App({
                 Model availability depends on your OpenAI project permissions.
               </Alert>
             </Stack>
-          </DialogContent>
-          <DialogActions>
-            <Button
-              variant="contained"
-              onClick={() => {
-                setConnection(false);
-                setVisible(false);
-              }}
-            >
-              Done
-            </Button>
-          </DialogActions>
-        </Dialog>
+          </Section>
+        </Box>
         <Dialog
           open={addOpen}
           onClose={() => {
