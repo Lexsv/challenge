@@ -1,9 +1,11 @@
 import { createTheme } from "@mui/material/styles";
 export const theme = createTheme({
   palette: {
-    primary: { main: "#606d29", dark: "#424c1c" },
-    background: { default: "#f7f4eb", paper: "#fffdf8" },
-    text: { primary: "#242810", secondary: "#626451" },
+    primary: { main: "#F5D76E", dark: "#705500", contrastText: "#34332F" },
+    secondary: { main: "#FFF3C4", contrastText: "#34332F" },
+    background: { default: "#FFFDF5", paper: "#FFFEFA" },
+    text: { primary: "#34332F", secondary: "#625B49" },
+    divider: "#E1D6AD",
   },
   shape: { borderRadius: 16 },
   typography: {
@@ -16,7 +18,53 @@ export const theme = createTheme({
   components: {
     MuiButton: {
       defaultProps: { disableElevation: true },
-      styleOverrides: { root: { borderRadius: 10 } },
+      styleOverrides: {
+        root: {
+          borderRadius: 10,
+          "&.MuiButton-textPrimary, &.MuiButton-outlinedPrimary": {
+            color: "#705500",
+          },
+          "&.Mui-focusVisible": {
+            outline: "2px solid #705500",
+            outlineOffset: 2,
+          },
+        },
+      },
+    },
+    MuiTab: {
+      styleOverrides: {
+        root: {
+          "&.Mui-selected": { color: "#705500" },
+          "&.Mui-focusVisible": {
+            outline: "2px solid #705500",
+            outlineOffset: -2,
+          },
+        },
+      },
+    },
+    MuiTabs: { styleOverrides: { indicator: { backgroundColor: "#705500" } } },
+    MuiCheckbox: {
+      styleOverrides: {
+        root: {
+          "&.Mui-checked": { color: "#705500" },
+          "&.Mui-focusVisible": {
+            outline: "2px solid #705500",
+            outlineOffset: -2,
+          },
+        },
+      },
+    },
+    MuiInputLabel: {
+      styleOverrides: { root: { "&.Mui-focused": { color: "#705500" } } },
+    },
+    MuiOutlinedInput: {
+      styleOverrides: {
+        root: {
+          "&.Mui-focused .MuiOutlinedInput-notchedOutline": {
+            borderColor: "#705500",
+          },
+        },
+      },
     },
     MuiPaper: { styleOverrides: { root: { backgroundImage: "none" } } },
     MuiTextField: {
@@ -25,8 +73,8 @@ export const theme = createTheme({
     MuiCard: {
       styleOverrides: {
         root: {
-          border: "1px solid #dedfce",
-          boxShadow: "0 3px 12px #292a1010",
+          border: "1px solid #E8DDBA",
+          boxShadow: "0 3px 12px #493C1010",
         },
       },
     },

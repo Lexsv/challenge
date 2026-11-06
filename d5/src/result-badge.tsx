@@ -22,7 +22,7 @@ export function ResultBadge({
         : ["incomplete", "timed-out", "unable_to_assess"].includes(value)
           ? "#785d24"
           : value === "running"
-            ? "#424c1c"
+            ? "#705500"
             : "#55594c";
   const description = manual
     ? `Manual verdict: ${label}`
@@ -77,7 +77,7 @@ export function ResultBadge({
           borderColor: alpha(tone, 0.18),
           "&:focus-visible": {
             outline: "2px solid",
-            outlineColor: "primary.main",
+            outlineColor: "primary.dark",
             outlineOffset: 3,
           },
           "& .MuiChip-label": {

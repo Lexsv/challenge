@@ -59,7 +59,7 @@ export function AnswerPreview({
           },
           "&:focus-visible": {
             outline: "2px solid",
-            outlineColor: "primary.main",
+            outlineColor: "primary.dark",
             outlineOffset: 3,
           },
         }}
@@ -80,7 +80,7 @@ export function AnswerPreview({
             fontSize: "0.75rem",
             "&:focus-visible": {
               outline: "2px solid",
-              outlineColor: "primary.main",
+              outlineColor: "primary.dark",
               outlineOffset: 3,
             },
           }}

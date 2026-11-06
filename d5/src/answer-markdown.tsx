@@ -217,7 +217,7 @@ export function AnswerMarkdown({ text }: { text: string }) {
         "& a": { overflowWrap: "anywhere" },
         "& :focus-visible": {
           outline: "2px solid",
-          outlineColor: "primary.main",
+          outlineColor: "primary.dark",
           outlineOffset: 2,
         },
       }}

@@ -40,7 +40,7 @@ function JsonValue({ value }: { value: string }) {
       {pieces.map((piece, index) => {
         const color = /^"/.test(piece)
           ? pieces[index + 1]?.trimStart().startsWith(":")
-            ? "#424c1c"
+            ? "#705500"
             : "#80512c"
           : /^(?:true|false|null|-?\d)/.test(piece)
             ? "#5b5682"

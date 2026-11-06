@@ -143,8 +143,8 @@ function Section({
       variant="outlined"
       sx={{
         p: { xs: 2, sm: 3 },
-        bgcolor: tinted ? "#edf0db" : undefined,
-        borderColor: "#e2e1d4",
+        bgcolor: tinted ? "secondary.main" : undefined,
+        borderColor: "divider",
       }}
     >
       <Typography variant="h5" component="h2" mb={2}>
@@ -270,7 +270,12 @@ export function App({
         <Paper
           component="header"
           variant="outlined"
-          sx={{ p: 2.5, mb: 3, bgcolor: "#e3e7cb", borderColor: "#d9dec0" }}
+          sx={{
+            p: 2.5,
+            mb: 3,
+            bgcolor: "secondary.main",
+            borderColor: "divider",
+          }}
         >
           <Stack direction="row" alignItems="center" gap={2} flexWrap="wrap">
             <Typography variant="h4" component="h1">
@@ -503,7 +508,7 @@ export function App({
                 <Card
                   variant="outlined"
                   sx={{
-                    border: "1px dashed #606d29",
+                    border: "1px dashed #A68B38",
                     minHeight: 200,
                     boxShadow: "none",
                   }}
@@ -519,7 +524,7 @@ export function App({
                     <Add
                       sx={{
                         fontSize: 44,
-                        bgcolor: "#e9edce",
+                        bgcolor: "secondary.main",
                         borderRadius: "50%",
                         p: 1,
                       }}
@@ -994,7 +999,7 @@ export function App({
                                       py: 0.75,
                                       "&.Mui-focused": {
                                         outline: "2px solid",
-                                        outlineColor: "primary.main",
+                                        outlineColor: "primary.dark",
                                         outlineOffset: -2,
                                         borderRadius: 0.5,
                                       },
@@ -1020,7 +1025,7 @@ export function App({
                                       py: 0.75,
                                       "&.Mui-focused": {
                                         outline: "2px solid",
-                                        outlineColor: "primary.main",
+                                        outlineColor: "primary.dark",
                                         outlineOffset: -2,
                                         borderRadius: 0.5,
                                       },

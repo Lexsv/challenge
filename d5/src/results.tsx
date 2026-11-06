@@ -58,7 +58,7 @@ const fullText = {
 const visibleFocus = {
   "&:focus-visible, &.Mui-focusVisible": {
     outline: "2px solid",
-    outlineColor: "primary.main",
+    outlineColor: "primary.dark",
     outlineOffset: 3,
   },
 };
@@ -469,7 +469,7 @@ export function RunView({
                         component="span"
                         sx={{
                           display: "block",
-                          color: "primary.main",
+                          color: "primary.dark",
                           fontWeight: 650,
                           fontSize: "0.8125rem",
                           overflowWrap: "anywhere",
