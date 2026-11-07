@@ -83,6 +83,6 @@ export function BuiltinConnectionSettings({ registry, keys, setKey, onDiscovery 
       <Button onClick={() => void discover()}>Discover capabilities</Button>
       <Button onClick={() => void verify()} disabled={!keys[connection].trim() || !selected?.capabilities(models[connection]) || statuses[connection] === "Verifying…"}>Verify connection</Button>
     </Stack>
-    <Alert severity="info">Discovery is manual. Verification sends a real request and may be billable.</Alert>
+    <Alert severity="info">Discovery is manual. Verification checks the selected model.</Alert>
   </Stack>;
 }

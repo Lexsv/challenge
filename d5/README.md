@@ -1,8 +1,18 @@
 # Expert Lab — Day 5
 
-Expert Lab lets you use an Architect to generate and edit a team of experts, run their answers against a question, and compare AI evaluations with a reference answer. Expert cards support model settings and duplication; run history retains captured settings, answers, verdicts, usage, and retry attempts. Results include accessible details dialogs and manual verdict overrides.
+Expert Lab is a browser-based AI experiment workspace for comparing experts across models and configurations. Day 5 focuses on configurable providers, controlled parameter experiments, and reports that make answers, performance, and costs easier to compare.
 
-## Getting started
+## Features
+
+- Create, configure, and duplicate experts; select a provider and model for each expert.
+- Experiment with enabled key-value API parameters, including `reasoning_effort` and `temperature`. Disabled parameters are not sent.
+- Run experts against a question, optionally evaluate answers against an expected answer, and inspect responses and technical errors.
+- Review in-memory run history, captured settings, retries, token usage, and request costs when pricing or provider-reported costs are available.
+- Compare expert configurations in a report and export the current session's comparison as a PDF. Unknown or partial costs remain identified.
+
+## Install and run
+
+Prerequisites: Node.js 22.13 or later and pnpm 11.
 
 ```sh
 git clone https://github.com/Lexsv/challenge.git
@@ -11,29 +21,36 @@ pnpm install --frozen-lockfile --ignore-scripts
 pnpm dev
 ```
 
-Prerequisites: Node.js 22.13+ and pnpm 11. The install skips dependency lifecycle scripts; the lockfile includes the platform-specific esbuild package. Open the local URL printed by Vite, normally http://127.0.0.1:5173.
+Open [http://127.0.0.1:5173/](http://127.0.0.1:5173/). The development server uses a fixed port and reports an error if it is occupied.
 
-## Commands
+## Environment and API keys
+
+No `.env` file is required. Open **Settings**, configure OpenAI or OpenCode Console, enter your own API key, and select a model. Verification and experiment requests are initiated by the user and may incur provider charges. OpenCode Console verification uses a model selected from its catalog; catalog availability alone does not verify a key.
+
+Keys for the built-in connections are held in browser memory and reset on reload. Experts, runs, and verification state also reset on reload. Custom provider definitions may be retained in browser session storage without their keys; custom provider execution is not currently available. Never commit keys or place them in URLs or shared files.
+
+The Vite development server includes a narrowly scoped OpenCode Console proxy to handle browser CORS. A static production build does not include that development proxy, so serving it elsewhere requires suitable CORS or an equivalent trusted proxy.
+
+## Architecture
+
+The React and TypeScript interface collects expert settings and displays runs. A provider registry routes requests to the OpenAI and OpenCode adapters, while the execution engine records immutable configuration snapshots and normalized results. Comparison and PDF modules derive their output from the current in-memory history; they do not make additional model requests.
+
+## Testing and build
 
 ```sh
 pnpm typecheck
 pnpm test
 pnpm build
-pnpm preview
 ```
 
-`pnpm preview` serves the production build locally after `pnpm build`. Tests use mocked requests and do not need an API key. No environment file is required.
+Automated tests use mocked provider requests and do not require an API key. `pnpm build` produces the Vite production files in `dist/`.
 
-## Connection and data
+## Design references
 
-Open Connection settings, enter your own OpenAI API key and select a model. You may use Verify to test the connection; generation and experiment requests use your key and may incur API charges. Requests go directly to the official OpenAI API. Never put a real key in source files, shared documents, or a URL.
+These existing mockups document the design direction and may differ from the current interface:
 
-The key is retained in `sessionStorage` for the current tab's page session when storage is available. It is masked on reload and verification resets; restoration makes no automatic request. `sessionStorage` is accessible to JavaScript on the same origin and is not a secure vault. Browser session restoration may retain the key after a tab or browser closes. Use **Forget key** to remove it from application state and storage; already-sent requests are not canceled. If storage is unavailable, the key stays in memory only and the app displays a notice. Experts and run history are kept in memory and reset on reload.
+- [Expert Lab design](designs/expert-lab-design.png)
+- [Provider overview](designs/providers-overview.png)
+- [Custom provider dialog](designs/custom-provider-modal.png)
 
-## Design
-
-[View the Expert Lab design](design/expert-lab-design.png)
-
-![Expert Lab UI design](design/expert-lab-design.png)
-
-The design illustrates the original visual direction; the implemented interface includes subsequent improvements.
+![Expert Lab design reference](designs/expert-lab-design.png)

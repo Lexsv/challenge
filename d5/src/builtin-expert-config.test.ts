@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createProviderRegistry } from "./provider-registry";
 import { catalog } from "./opencode-catalog";
+import { consoleModelSelectable } from "./opencode-console-verification";
 import { validateExperts } from "./generation";
 import { selectExpertProvider } from "./interaction-safety";
 import { expertSettingsError } from "./expert-settings-validation";
@@ -16,7 +17,7 @@ describe("built-in expert provider configuration", () => {
     const before = structuredClone(catalog);
     const registry = createProviderRegistry();
     expect(registry.modelOptionsFor("openai")).toContain("gpt-5.6-terra");
-    expect(registry.modelOptionsFor("opencode-console")).toEqual(catalog.map((model) => model.id));
+    expect(registry.modelOptionsFor("opencode-console")).toEqual(catalog.map((model) => model.id).filter((id) => consoleModelSelectable(id)));
     expect(registry.modelOptionsFor("opencode-go")).toContain("grok-4.7");
     expect(registry.modelOptionsFor("opencode-go")).not.toContain("gpt-6-astra");
     expect(registry.modelOptionsFor("gemini")).toContain("gemini-2.5-flash");

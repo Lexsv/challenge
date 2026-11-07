@@ -1,3 +1,4 @@
+import { centeredTable } from "./table-alignment";
 import {
   Box,
   Table,
@@ -34,7 +35,7 @@ export function ExecutionParametersReport({
           <Table
             size="small"
             aria-label="Executed API parameters"
-            sx={{ tableLayout: "fixed", minWidth: 240 }}
+            sx={{ tableLayout: "fixed", minWidth: 240, ...centeredTable }}
           >
             <TableHead
               sx={{

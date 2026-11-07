@@ -1,3 +1,4 @@
+import { centeredTable } from "./table-alignment";
 import {
   Paper,
   Stack,
@@ -10,6 +11,7 @@ import {
   Typography,
 } from "@mui/material";
 import { alpha } from "@mui/material/styles";
+import { requestCost, formatCost } from "./request-cost";
 import { totals, type Attempt, type Result } from "./models";
 import { formatTokens, seconds } from "./result-format";
 import { statusLabel } from "./labels";
@@ -64,6 +66,8 @@ export function resultMetadataRows(
       attempt?.status === "running" ? "Running" : duration(attempt?.ms),
     ],
   ];
+  const cost = requestCost(attempt, result.expert.provider);
+  metrics.push(["Request cost (USD)", cost ? `${cost.estimated ? "~" : ""}${formatCost(cost.usd)}${cost.estimated ? " (estimate)" : ""}` : "Not available"]);
   const aggregate = totals(result.attempts);
   if (includeTotals)
     metrics.push(
@@ -111,6 +115,7 @@ function MetadataTable({
         aria-label={label}
         sx={{
           tableLayout: "fixed",
+          ...centeredTable,
           "& th, & td": {
             px: 1.5,
             py: 0.75,
@@ -133,7 +138,7 @@ function MetadataTable({
         >
           <TableRow>
             <TableCell sx={{ width: "58%" }}>{firstColumn}</TableCell>
-            <TableCell align={numeric ? "right" : "left"}>Value</TableCell>
+            <TableCell align="center">Value</TableCell>
           </TableRow>
         </TableHead>
         <TableBody>
@@ -143,7 +148,7 @@ function MetadataTable({
                 {name}
               </TableCell>
               <TableCell
-                align={numeric ? "right" : "left"}
+                align="center"
                 sx={{
                   fontVariantNumeric: numeric ? "tabular-nums" : undefined,
                 }}

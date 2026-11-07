@@ -103,7 +103,7 @@ it("validates expert settings against its provider even when model IDs match", a
   ).toMatch(/Unsupported provider/);
 });
 
-it("renders reasoning indicators using provider-scoped model capabilities", async () => {
+it("shows only enabled parameter rows across provider identities", async () => {
   const { ProviderRegistry } = await import("./provider-registry");
   const { expertConfigurationLabels } =
     await import("./expert-configuration-chips");
@@ -137,9 +137,10 @@ it("renders reasoning indicators using provider-scoped model capabilities", asyn
     model: "shared",
     maxTokens: 100,
     reasoning: "low",
+    parameters: [{ id: "r", key: "reasoning_effort", value: "low", enabled: true }],
   };
   expect(expertConfigurationLabels(expert, "shared", registry)).toContain(
-    "Reasoning: Low",
+    "reasoning_effort: low",
   );
   expect(
     expertConfigurationLabels(
@@ -147,14 +148,14 @@ it("renders reasoning indicators using provider-scoped model capabilities", asyn
       "shared",
       registry,
     ),
-  ).toContain("Reasoning: Not supported");
+  ).toEqual(["Model: shared", "reasoning_effort: low"]);
   expect(
     expertConfigurationLabels(
       { ...expert, provider: "missing" },
       "shared",
       registry,
     ),
-  ).toContain("Reasoning: Unknown");
+  ).toEqual(["Model: shared", "reasoning_effort: low"]);
 });
 
 it("requires explicit provider identity for reasoning capability resolution", async () => {

@@ -3,10 +3,11 @@ import {
   captureExecutionParameters,
   type ExecutionParameters,
 } from "./execution-parameters";
-import { parameterPayload } from "./api-parameters";
+import { parameterPayload, validateParameters } from "./api-parameters";
 import { incompleteExplanation } from "./result-explanations";
 import { type Usage, type IncompleteReason } from "./models";
 import { validSettings } from "./openai-model-compat";
+import { sanitizeFailureText } from "./normalized-failure";
 import type { Adapter, Request } from "./provider-contract";
 import type { Attempt } from "./models";
 export type { Adapter, Request } from "./provider-contract";
@@ -38,7 +39,7 @@ async function respondInternal(
   let usage: Usage | undefined;
   let text = "";
   try {
-    if (!key.trim() || !validSettings(request.settings))
+    if (!key.trim() || !validSettings({ ...request.settings, parameters: undefined }))
       return {
         status: "failed",
         text: "",
@@ -57,14 +58,23 @@ async function respondInternal(
           "Structured generation requires a catalog model. Custom model capabilities are unverified.",
         ms: performance.now() - start,
       };
+    const parameterError = validateParameters(request.settings.parameters ?? []);
+    if (parameterError) return { status: "failed", text: "", error: parameterError, ms: performance.now() - start };
+    const parameters = request.settings.parameters ? parameterPayload(request.settings.parameters) : { max_output_tokens: request.settings.maxTokens };
+    const reserved = ["model", "store", "instructions", "input", "text", "reasoning"];
+    if (reserved.some((name) => Object.hasOwn(parameters, name)))
+      return { status: "failed", text: "", error: "A parameter conflicts with fields managed by OpenAI.", ms: performance.now() - start };
+    const effort = parameters.reasoning_effort;
+    if (effort !== undefined && request.settings.reasoning)
+      return { status: "failed", text: "", error: "A parameter conflicts with the configured OpenAI reasoning setting.", ms: performance.now() - start };
+    const { reasoning_effort: _effort, ...otherParameters } = parameters;
     const body: Record<string, unknown> = {
       model: request.settings.model,
       store: false,
       instructions: request.instructions,
       input: request.input,
-      ...(request.settings.parameters
-        ? parameterPayload(request.settings.parameters)
-        : { max_output_tokens: request.settings.maxTokens }),
+      ...otherParameters,
+      ...(effort !== undefined ? { reasoning: { effort } } : {}),
       ...(capabilities(request.settings.model)?.reasoningEfforts.includes(
         request.settings.reasoning || "",
       ) && request.settings.reasoning
@@ -97,20 +107,11 @@ async function respondInternal(
     });
     if (!res.ok) {
       let detail = "";
-      if (
-        (res.status === 400 || res.status === 422) &&
-        request.settings.parameters
-      ) {
+      {
         try {
           const payload = await res.json();
-          if (typeof payload?.error?.message === "string")
-            detail = payload.error.message
-              .split(key)
-              .join("[redacted]")
-              .replace(/sk-[A-Za-z0-9_-]{8,}/g, "[redacted]")
-              .replace(/bearer\s+\S+/gi, "[redacted]")
-              .replace(/[\u0000-\u001f]/g, " ")
-              .slice(0, 500);
+          const message = typeof payload?.error === "string" ? payload.error : payload?.error?.message ?? payload?.message;
+          if (typeof message === "string") detail = sanitizeFailureText(message, key);
         } catch {
           /* Use the sanitized status message. */
         }
@@ -118,7 +119,7 @@ async function respondInternal(
       return {
         status: "failed",
         text: "",
-        error: detail || statusError(res.status),
+        error: detail ? `OpenAI request failed (${res.status}): ${detail}` : statusError(res.status),
         ms: performance.now() - start,
       };
     }

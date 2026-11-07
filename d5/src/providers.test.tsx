@@ -7,7 +7,7 @@ import { parameterPayload } from "./api-parameters";
 import { theme } from "./theme";
 
 describe("provider settings", () => {
-  it("shows four distinct built-in provider cards with the current OpenAI verification state", () => {
+  it("hides inactive Go while showing the remaining provider cards", () => {
     const fetcher = vi.spyOn(globalThis, "fetch");
     const html = renderToStaticMarkup(
       <ThemeProvider theme={theme}>
@@ -19,16 +19,16 @@ describe("provider settings", () => {
       </ThemeProvider>,
     );
     expect(html).toContain("OpenAI");
-    expect(html).toContain("Default");
+    expect(html).not.toContain(">Default<");
     expect(html).toContain("Verified");
     expect(html).toContain("test-model");
     expect(html).toContain("Add Provider");
     expect(html).toContain("OpenCode");
-    expect(html).toContain("Google Gemini");
+    expect(html).not.toContain("Google Gemini");
     expect(html).toContain("OpenCode Console");
-    expect(html).toContain("OpenCode Go");
-    expect(html).toContain("Pay as you go");
-    expect(html).toContain("Subscription");
+    expect(html).not.toContain("OpenCode Go");
+    expect(html).toContain("OpenAI: Verified");
+    expect(html).toContain("Not verified");
     expect(fetcher).not.toHaveBeenCalled();
     fetcher.mockRestore();
   });

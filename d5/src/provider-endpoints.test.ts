@@ -55,7 +55,7 @@ describe("provider endpoint overrides", () => {
     expect(fetcher).not.toHaveBeenCalled();
     await registry.get(id)!.discover!();
     expect(fetcher.mock.calls[0][0]).toBe(discoveryEndpoint(id, endpoint.href));
-    const result = await registry.get(id)!.execute("dummy-key", { settings: { provider: id, model: "test", maxTokens: 128 }, instructions: "role", input: "q" });
+    const result = await registry.get(id)!.execute("dummy-key", { settings: { provider: id, model: mode === "console" ? "kimi-k3" : "test", maxTokens: 128 }, instructions: "role", input: "q" });
     expect(fetcher.mock.calls[1][0]).toBe(endpoint.href);
     expect(JSON.stringify(result)).not.toContain("dummy-key");
   });

@@ -1,3 +1,4 @@
+import { ConsoleParameterEditor } from "./console-expert-parameters";
 import { expertEditDraft, generationModelFor, selectExpertProvider } from "./interaction-safety";
 import { initialLabTab, type LabTab } from "./navigation";
 import { expertSettingsError } from "./expert-settings-validation";
@@ -53,6 +54,7 @@ import { createRun, Engine } from "./legacy-engine";
 import { ConfigurationError, configurationProblem } from "./engine";
 import { ConnectionController } from "./connection";
 import { ProviderStatus } from "./provider-status";
+import type { VerificationKind } from "./verification-chip";
 import {
   createProviderRegistry,
   type ProviderRegistry,
@@ -64,6 +66,7 @@ import { statusLabel } from "./labels";
 import { ExpertConfigurationChips } from "./expert-configuration-chips";
 import { ExpertRoleLabel } from "./expert-role-label";
 import { RunView } from "./results";
+import { ComparisonReport } from "./comparison-report";
 import { usage, seconds } from "./result-format";
 export function ModelField({
   label,
@@ -85,7 +88,8 @@ export function ModelField({
   const provider = providerId ? registry.get(providerId) : undefined;
   const options = registry.modelOptionsFor(providerId);
   const [customEditing, setCustomEditing] = useState(false);
-  const custom = customEditing || (!!value && !options.includes(value));
+  const unavailableConsoleModel = providerId === "opencode-console" && !!value && !options.includes(value) && !customEditing;
+  const custom = customEditing || (!!value && !options.includes(value) && !unavailableConsoleModel);
   return (
     <Stack spacing={1}>
       <TextField
@@ -123,6 +127,7 @@ export function ModelField({
             Select a model
           </MenuItem>
         )}
+        {unavailableConsoleModel && <MenuItem value={value} disabled>{value} (previously selected; unavailable)</MenuItem>}
         {options.map((id) => (
           <MenuItem key={id} value={id}>
             {id}
@@ -229,6 +234,7 @@ export function App({
     setTab(next);
   };
   const [visible, setVisible] = useState(false);
+  const [consoleHeaderStatus, setConsoleHeaderStatus] = useState<{ kind: VerificationKind; unsaved: boolean }>({ kind: "unchecked", unsaved: false });
   const [experts, setExperts] = useState<Expert[]>([]);
   const [teamText, setTeamText] = useState("");
   const [addText, setAddText] = useState("");
@@ -378,6 +384,7 @@ export function App({
               }}
             >
               <ProviderStatus verification={verification} />
+              <ProviderStatus provider="OpenCode Console" verification={consoleHeaderStatus.kind} unsaved={consoleHeaderStatus.unsaved} />
             </Box>
           </Stack>
         </Paper>
@@ -605,6 +612,7 @@ export function App({
               {runError && <Alert severity="error">{runError}</Alert>}
             </Section>
             <Section title="Results / run history">
+              <ComparisonReport runs={runs} />
               {!runs.length ? (
                 <Box sx={{ py: 5, textAlign: "center" }}>
                   <ScienceOutlined
@@ -658,6 +666,7 @@ export function App({
           <Providers
             model={openAIModel}
             verification={verification}
+            onConsoleStatusChange={setConsoleHeaderStatus}
             openAIKeyPresent={!!key.trim()}
             registry={registry}
             adapter={adapter}
@@ -769,9 +778,7 @@ export function App({
                     </Typography>
                   )}
                   <Alert severity="info">
-                    Verification makes a minimal real request and may be
-                    billable. Model availability depends on your OpenAI project
-                    permissions.
+                    Verification checks the selected model. Model availability depends on your OpenAI project permissions.
                   </Alert>
                 </Stack>
               </Section>
@@ -912,14 +919,14 @@ export function App({
                     )}
                     <MenuItem value="openai">OpenAI</MenuItem>
                     <MenuItem value="opencode">OpenCode</MenuItem>
-                    <MenuItem value="gemini">Gemini (execution unavailable)</MenuItem>
+                    {editing.provider === "gemini" && <MenuItem value="gemini" disabled>Previously selected provider unavailable</MenuItem>}
                   </TextField>
                   {editing.provider?.startsWith("opencode-") && <TextField select label="OpenCode connection" value={editing.provider === "opencode-pending" ? "" : editing.provider} onChange={(event) => { setRequireExpertModel(true); setEditing(selectExpertProvider(editing, event.target.value)); }}>
                     <MenuItem value="" disabled>Select a connection</MenuItem>
                     <MenuItem value="opencode-console">Console — Pay as you go</MenuItem>
-                    <MenuItem value="opencode-go">Go — Subscription</MenuItem>
+                    {editing.provider === "opencode-go" && <MenuItem value="opencode-go" disabled>Go — existing configuration</MenuItem>}
                   </TextField>}
-                  {editing.provider === "gemini" && <Alert severity="info">Gemini can be configured, but execution is not available yet.</Alert>}
+
                   {(editing.provider === "opencode-console" || editing.provider === "opencode-go") && !registry.capabilitiesFor(editing.provider, editing.model) && (
                     <Alert severity="info">Model capabilities must be discovered before execution.</Alert>
                   )}
@@ -1001,12 +1008,7 @@ export function App({
                     <Typography variant="subtitle1" fontWeight={700}>
                       API Parameters
                     </Typography>
-                    <ParameterEditor
-                      parameters={editing.parameters ?? []}
-                      onChange={(parameters) =>
-                        setEditing({ ...editing, parameters })
-                      }
-                    />
+                    {editing.provider === "opencode-console" ? <ConsoleParameterEditor key={editing.id} parameters={editing.parameters ?? []} onChange={(parameters) => setEditing({ ...editing, parameters })} /> : <ParameterEditor parameters={editing.parameters ?? []} onChange={(parameters) => setEditing({ ...editing, parameters })} />}
                   </Box>
                 </Stack>
               </DialogContent>

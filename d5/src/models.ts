@@ -1,3 +1,5 @@
+import type { RequestCost } from "./request-cost";
+import type { NormalizedFailure } from "./normalized-failure";
 import type { ExecutionParameters } from "./execution-parameters";
 import type { ApiParameter } from "./api-parameters";
 export type Settings = {
@@ -27,7 +29,7 @@ export const resolveExpert = (
       ? defaultModel
       : ""),
 });
-export type Usage = { input?: number; output?: number; reasoning?: number };
+export type Usage = { input?: number; output?: number; reasoning?: number; cachedInput?: number };
 export type IncompleteReason =
   "max_output_tokens" | "content_filter" | "max_messages" | "steered";
 export type Attempt = {
@@ -37,8 +39,10 @@ export type Attempt = {
   status: "running" | "succeeded" | "failed" | "timed-out" | "incomplete";
   text: string;
   error?: string;
+  failure?: NormalizedFailure;
   incompleteReason?: IncompleteReason;
   usage?: Usage;
+  cost?: RequestCost;
   ms: number;
   manual?: Verdict;
 };

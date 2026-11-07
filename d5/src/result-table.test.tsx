@@ -49,6 +49,9 @@ describe("compact results table", () => {
       />,
     );
     expect(html).toContain(">Verdict</th>");
+    expect(html).toContain("Cost (USD)");
+    expect(html).toContain("Total experiment cost:");
+    expect(html).toContain("border-bottom");
     expect(html).not.toContain("AI verdict");
     expect(html).toContain("AI evaluation: Incorrect");
     expect(html).toContain("Manual: Correct");
@@ -78,5 +81,14 @@ describe("compact results table", () => {
       expect(html).toContain(`AI evaluation: ${expected}`);
       expect(html).not.toContain("AI evaluation: Incorrect");
     }
+  });
+  it("shows each run's captured question once, immediately under its header", () => {
+    const run = structuredClone(tableFixtureRuns()[0]);
+    (run.snapshot as { question: string }).question = "Первый вопрос\nSecond line";
+    const html = render(<RunView run={run} disabled refresh={() => {}} retry={() => {}} retryEvaluation={() => {}} />);
+    expect(html.match(/Первый вопрос/g)).toHaveLength(1);
+    expect(html.indexOf("Первый вопрос")).toBeGreaterThan(html.indexOf(`Run ${run.id.slice(0, 8)}`));
+    expect(html).toContain("Первый вопрос\nSecond line");
+    expect(html).toContain("white-space:pre-wrap");
   });
 });

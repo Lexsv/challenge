@@ -1,3 +1,4 @@
+import { requestCost } from "./request-cost";
 import {
   last,
   evaluationRequested,
@@ -7,7 +8,7 @@ import {
   type Settings,
   type Attempt,
 } from "./models";
-import type { ProviderRegistry } from "./provider-registry";
+import { validateExpertConfiguration, type ProviderRegistry } from "./provider-registry";
 import {
   evaluationSchema,
   validateEvaluation,
@@ -52,7 +53,7 @@ export function configurationProblem(
   if (!provider) return `${context}: unsupported provider.`;
   let invalid: string | undefined;
   try {
-    invalid = provider.validate(config);
+    invalid = role === "Expert" ? validateExpertConfiguration(provider, config) : provider.validate(config);
   } catch {
     return `${context}: provider validation failed.`;
   }
@@ -179,7 +180,7 @@ export class Engine {
       const validate =
         policy === "historical-openai-v0"
           ? (providerAdapter!.validateHistorical ?? providerAdapter!.validate)
-          : providerAdapter!.validate;
+          : schema ? providerAdapter!.validate : (config: Settings) => validateExpertConfiguration(providerAdapter!, config);
       if (!validate)
         return {
           id: crypto.randomUUID(),
@@ -212,15 +213,11 @@ export class Engine {
           ms: 0,
           error: "API key missing. Open connection settings before retrying.",
         };
-      return {
-        id: crypto.randomUUID(),
-        ...(await selectedAdapter(currentKey, {
-          settings,
-          instructions,
-          input,
-          schema,
-        })),
-      };
+      const outcome = await selectedAdapter(currentKey, { settings, instructions, input, schema });
+      const attempt: Attempt = { id: crypto.randomUUID(), ...outcome };
+      const cost = requestCost(attempt, provider);
+      if (cost) attempt.cost = cost;
+      return attempt;
     } catch {
       return {
         id: crypto.randomUUID(),

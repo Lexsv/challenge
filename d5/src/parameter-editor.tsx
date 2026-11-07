@@ -1,3 +1,4 @@
+import { centeredTable } from "./table-alignment";
 import {
   Alert,
   Button,
@@ -53,6 +54,7 @@ export function ParameterEditor({
             },
             "& tbody tr:last-child td": { borderBottom: 0 },
             "& tbody td": { padding: 0, verticalAlign: "middle" },
+            ...centeredTable,
             "& thead th": {
               py: 0.75,
               px: 1,

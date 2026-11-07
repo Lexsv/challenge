@@ -234,3 +234,16 @@ describe("captured result settings and usage presentation", () => {
     expect(html).toContain('aria-expanded="false"');
   });
 });
+
+it("shows a concise failure with collapsed sanitized participant details", () => {
+  const failed: Attempt = { id: "failed", status: "failed", text: "", ms: 0, error: "legacy error", failure: { category: "rate_limit", summary: "The provider limited the request.", httpStatus: 429, providerMessage: "Rate limit reached", retryAfter: "30" } };
+  const historical = { ...result, expert: { ...result.expert, provider: "opencode-console", model: "kimi-k3" }, attempts: [failed] };
+  const html = render(<ParticipantDetails run={run} result={historical} disabled={false} refresh={() => {}} retry={() => {}} />);
+  expect(html).toContain("The provider limited the request.");
+  expect(html).toContain("Technical details");
+  expect(html).toContain('aria-expanded="false"');
+  expect(html).toContain("opencode-console");
+  expect(html).toContain("kimi-k3");
+  expect(html).toContain("429");
+  expect(html).toContain("Rate limit reached");
+});

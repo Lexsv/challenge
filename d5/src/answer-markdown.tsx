@@ -1,3 +1,4 @@
+import { centeredTable } from "./table-alignment";
 import type { ReactNode } from "react";
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -149,6 +150,7 @@ const components: Components = {
         sx={{
           width: "max-content",
           minWidth: "100%",
+          ...centeredTable,
           "& th": {
             fontWeight: 700,
             color: "primary.dark",

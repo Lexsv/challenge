@@ -9,6 +9,7 @@ import { respond, respondAtEndpoint } from "./openai";
 import { DEFAULT_ENDPOINTS, discoveryEndpoint, validateEndpoint, type BuiltinEndpointId } from "./provider-endpoints";
 import type { Adapter } from "./provider-contract";
 import { validateParameters, type ApiParameter } from "./api-parameters";
+import { consoleModelSelectable } from "./opencode-console-verification";
 import { openCodeAdapter } from "./opencode-adapter";
 import {
   catalog,
@@ -51,6 +52,12 @@ export type ProviderAdapter = {
   execute: Adapter;
   onEndpointChanged?: () => void;
 };
+/** Expert rows are experiments: validate their structure, not model support. */
+export function validateExpertConfiguration(provider: ProviderAdapter, config: Settings): string | undefined {
+  const error = validateParameters(config.parameters ?? []);
+  if (error) return error;
+  return provider.validate({ ...config, parameters: undefined });
+}
 export class ProviderRegistry {
   private readonly providers = new Map<string, ProviderAdapter>();
   private readonly endpoints: Record<BuiltinEndpointId, string> = { ...DEFAULT_ENDPOINTS };
@@ -134,11 +141,12 @@ export function createProviderRegistry(
     registry.register({
       id,
       allowUndiscoveredSelection: true,
-      catalog: () => mode === "console" ? catalog.map((model) => model.id) : Array.from(new Set([...catalog.map((model) => model.id).filter((model) => goModelIds.has(model)), ...discovered.keys()])),
+      catalog: () => mode === "console" ? Array.from(new Set([...catalog.map((model) => model.id), ...discovered.keys()])).filter((model) => consoleModelSelectable(model, discovered.get(model))) : Array.from(new Set([...catalog.map((model) => model.id).filter((model) => goModelIds.has(model)), ...discovered.keys()])),
       discover: async () => {
         const version = endpointVersion;
         const models = await discoverModels(mode, fetch, discoveryEndpoint(id, registry.endpointFor(id)!));
         if (version !== endpointVersion) throw new Error("Endpoint changed during model discovery.");
+        discovered.clear();
         models.forEach((model) => discovered.set(model.id, model));
         return models;
       },

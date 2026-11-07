@@ -22,3 +22,17 @@ export function discoveryEndpoint(id: "opencode-console" | "opencode-go", endpoi
   if (problem) throw new Error(problem);
   return new URL(id === "opencode-console" ? "/inference/v1/models" : "/inference/go/v1/models", endpoint).href;
 }
+
+// Console settings expose the provider base; legacy snapshots retain the chat URL.
+export function consoleBaseEndpoint(endpoint: string): string {
+  const url = new URL(endpoint);
+  url.pathname = "/inference";
+  return url.href.replace(/\/$/, "");
+}
+
+export function consoleConfiguredEndpoint(base: string): string {
+  const url = new URL(base);
+  if (url.pathname !== "/inference" && url.pathname !== "/inference/") throw new Error("Keep the required path /inference.");
+  url.pathname = "/inference/openai/v1/chat/completions";
+  return url.href;
+}

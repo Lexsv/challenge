@@ -8,7 +8,7 @@ import {
 import { observeAnswerOverflow, AnswerPreview } from "./answer-preview";
 import { type Expert } from "./models";
 import { createProviderRegistry } from "./provider-registry";
-import { resolveExpert, settings } from "./openai-model-compat";
+import { settings } from "./openai-model-compat";
 
 const expert: Expert = {
   ...settings(""),
@@ -24,42 +24,30 @@ const expertConfigurationLabels = (value: Expert, model: string) =>
   scopedLabels(value, model, registry, "openai");
 afterEach(() => vi.unstubAllGlobals());
 describe("expert configuration chips", () => {
-  it("uses execution resolution for inherited model and reasoning, retaining configured output limit", () => {
+  it("shows the model without unset or default parameter badges", () => {
     for (const model of ["gpt-5.6-terra", "gpt-6.1-sol"]) {
-      const resolved = resolveExpert(expert, model);
       const labels = expertConfigurationLabels(expert, model);
-      expect(labels[0]).toBe(`Model: ${resolved.model}`);
-      expect(labels[1]).toBe("Reasoning: Unspecified");
-      expect(labels[2]).toBe(`Output limit: ${resolved.maxTokens}`);
+      expect(labels).toEqual([`Model: ${model}`]);
     }
   });
-  it("reflects overrides and changes without claiming unsupported effort is active", () => {
-    expect(
-      expertConfigurationLabels(
-        { ...expert, model: "gpt-6.1-sol", reasoning: "high", maxTokens: 2048 },
-        "gpt-5.6-terra",
-      ),
-    ).toEqual(["Model: gpt-6.1-sol", "Reasoning: High", "Output limit: 2048"]);
-    expect(
-      expertConfigurationLabels(
-        { ...expert, model: "gpt-6.1-sol", reasoning: "none" },
-        "gpt-5.6-terra",
-      )[1],
-    ).toBe("Reasoning: Not supported");
-    expect(
-      expertConfigurationLabels(
-        { ...expert, model: "custom-model", reasoning: "low" },
-        "gpt-5.6-terra",
-      )[1],
-    ).toBe("Reasoning: Unknown");
-    expect(
-      expertConfigurationLabels(
-        { ...expert, reasoning: "" },
-        "gpt-5.6-terra",
-      )[1],
-    ).toBe("Reasoning: Unspecified");
+  it("shows enabled rows once and leaves disabled, empty and system defaults hidden", () => {
+    const parameters = [
+      { id: "1", key: "reasoning_effort", value: "low", enabled: true },
+      { id: "2", key: "temperature", value: "1.0", enabled: false },
+      { id: "3", key: "top_p", value: "0.8", enabled: true },
+      { id: "4", key: "reasoning_effort", value: "low", enabled: true },
+      { id: "5", key: "empty", value: "", enabled: true },
+    ];
+    const configured = { ...expert, model: "gpt-6.1-sol", reasoning: "high", parameters };
+    const before = structuredClone(configured);
+    expect(expertConfigurationLabels(configured, "gpt-5.6-terra")).toEqual([
+      "Model: gpt-6.1-sol", "reasoning_effort: low", "top_p: 0.8",
+    ]);
+    expect(configured).toEqual(before);
+    expect(expertConfigurationLabels({ ...configured, parameters: [{ ...parameters[1], enabled: true }] }, "gpt-5.6-terra"))
+      .toEqual(["Model: gpt-6.1-sol", "temperature: 1.0"]);
   });
-  it("renders exactly three matching chips with wrapping enabled", () => {
+  it("renders the model chip with wrapping enabled", () => {
     const html = renderToStaticMarkup(
       <ExpertConfigurationChips
         expert={expert}
@@ -67,7 +55,7 @@ describe("expert configuration chips", () => {
         registry={registry}
       />,
     );
-    expect((html.match(/MuiChip-labelSmall/g) || []).length).toBe(3);
+    expect((html.match(/MuiChip-labelSmall/g) || []).length).toBe(1);
     expect(html).toContain("flex-wrap:wrap");
     expect(html).toContain("overflow-wrap:anywhere");
   });

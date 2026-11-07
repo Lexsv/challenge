@@ -1,3 +1,5 @@
+import { centeredTable } from "./table-alignment";
+import { experimentCost, formatCost, requestCost } from "./request-cost";
 import { retryCredentialReason } from "./interaction-safety";
 import { useState } from "react";
 import {
@@ -33,6 +35,7 @@ import {
   last,
   evaluationRequested,
   type Judgment,
+  type Attempt,
   type Result,
   type Run,
   type Verdict,
@@ -63,6 +66,26 @@ const visibleFocus = {
     outlineOffset: 3,
   },
 };
+
+function AttemptError({ attempt, result }: { attempt: Attempt; result: Result }) {
+  if (!attempt.error && !attempt.failure) return null;
+  if (!attempt.failure) return <Alert severity="error" sx={{ my: 1, overflowWrap: "anywhere" }}>{attempt.error}</Alert>;
+  const failure = attempt.failure;
+  return <Box sx={{ minWidth: 0 }}>
+    <Alert severity="error" sx={{ overflowWrap: "anywhere" }}>{failure.summary}</Alert>
+    <Accordion disableGutters elevation={0}>
+      <AccordionSummary expandIcon={<ExpandMore />}><Typography variant="body2">Technical details</Typography></AccordionSummary>
+      <AccordionDetails><Stack spacing={0.5} sx={{ overflowWrap: "anywhere" }}>
+        <Typography variant="body2">Provider: {result.expert.provider || "Not available"}</Typography>
+        <Typography variant="body2">Model: {attempt.actualModel || result.expert.model || "Not available"}</Typography>
+        <Typography variant="body2">Category: {failure.category.replaceAll("_", " ")}</Typography>
+        {failure.httpStatus !== undefined && <Typography variant="body2">HTTP status: {failure.httpStatus}</Typography>}
+        {failure.retryAfter && <Typography variant="body2">Retry-After: {failure.retryAfter}</Typography>}
+        {failure.providerMessage && <Typography variant="body2">Provider message: {failure.providerMessage}</Typography>}
+      </Stack></AccordionDetails>
+    </Accordion>
+  </Box>;
+}
 
 function AttemptHistory({ result }: { result: Result }) {
   return (
@@ -102,14 +125,7 @@ function AttemptHistory({ result }: { result: Result }) {
                   parameters={attempt.executionParameters}
                 />
               </Box>
-              {attempt.error && (
-                <Alert
-                  severity="error"
-                  sx={{ my: 1, overflowWrap: "anywhere" }}
-                >
-                  {attempt.error}
-                </Alert>
-              )}
+              <AttemptError attempt={attempt} result={result} />
               {attempt.text && (
                 <Box sx={{ mt: 1.5 }}>
                   <AnswerMarkdown text={attempt.text} />
@@ -153,11 +169,7 @@ export function ParticipantDetails({
         variant="outlined"
         sx={{ alignSelf: "flex-start", maxWidth: "100%" }}
       />
-      {attempt?.error && (
-        <Alert severity="error" sx={{ overflowWrap: "anywhere" }}>
-          {attempt.error}
-        </Alert>
-      )}
+      {attempt && <AttemptError attempt={attempt} result={result} />}
       <Box component="section" sx={{ minWidth: 0 }}>
         <Typography
           variant="subtitle1"
@@ -307,6 +319,7 @@ export function RunView({
   const currentEvaluation =
     run.evaluationStatus === "completed" ? last(run.evaluations) : undefined;
   const dialogTitleId = `result-dialog-title-${run.id}`;
+  const costTotal = experimentCost(run);
   return (
     <Paper variant="outlined" sx={{ p: 2, minWidth: 0 }}>
       <Stack
@@ -327,6 +340,7 @@ export function RunView({
           {new Date(run.started).toLocaleString("en-US")}
         </Typography>
       </Stack>
+      <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", fontWeight: 400, mt: 0.5 }}>{run.snapshot.question}</Typography>
       <Box role="status" aria-live="polite" my={1}>
         <Typography variant="body2">
           {completed} of {run.results.length} finished · {succeeded} succeeded ·
@@ -394,13 +408,14 @@ export function RunView({
               px: 1.5,
               py: 1.25,
             },
+            "& tbody td": { borderBottom: (theme) => `1px solid ${alpha(theme.palette.text.primary, 0.16)}` },
             "& tbody tr:last-child td": { borderBottom: 0 },
-            "& td:first-of-type": { textAlign: "left", verticalAlign: "top" },
-            "& td:nth-of-type(4)": { textAlign: "left" },
+
             "& td:nth-of-type(5), & td:nth-of-type(6), & td:nth-of-type(7)": {
               fontVariantNumeric: "tabular-nums",
               whiteSpace: "nowrap",
             },
+            ...centeredTable,
           }}
         >
           <colgroup>
@@ -411,6 +426,7 @@ export function RunView({
             <col style={{ width: "6.5rem" }} />
             <col style={{ width: "6.5rem" }} />
             <col style={{ width: "6.5rem" }} />
+            <col style={{ width: "7.5rem" }} />
             {evaluationRequested(run) && <col style={{ width: "9rem" }} />}
           </colgroup>
           <TableHead
@@ -437,6 +453,7 @@ export function RunView({
                 "Input tokens",
                 "Output tokens",
                 "Request time",
+                "Cost (USD)",
                 ...(evaluationRequested(run) ? ["Verdict"] : []),
               ].map((label) => (
                 <TableCell key={label} align="center">
@@ -484,7 +501,7 @@ export function RunView({
                       ...visibleFocus,
                     }}
                   >
-                    <Box sx={{ maxWidth: 180 }}>
+                    <Box sx={{ maxWidth: 180, mx: "auto" }}>
                       <Typography
                         component="span"
                         sx={{
@@ -538,6 +555,9 @@ export function RunView({
                         ? seconds(attempt.ms)
                         : "—"}
                   </TableCell>
+                  <TableCell sx={{ fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>
+                    {(() => { const cost = requestCost(attempt, result.expert.provider); return cost ? `${cost.estimated ? "~" : ""}${formatCost(cost.usd)}` : "Not available"; })()}
+                  </TableCell>
                   {evaluationRequested(run) && (
                     <TableCell>
                       <ResultBadge
@@ -574,6 +594,11 @@ export function RunView({
           </TableBody>
         </Table>
       </TableContainer>
+      <Typography variant="body2" sx={{ mt: 1.5, overflowWrap: "anywhere" }}>
+        Total experiment cost: {costTotal.known ? `${costTotal.estimated ? "~" : ""}${formatCost(costTotal.amount)}` : "Not available"}
+        {costTotal.missing.length > 0 && ` (partial; unavailable: ${costTotal.missing.join(", ")})`}
+        {costTotal.estimated && " · Includes catalog estimates; historical rates or cache pricing may differ"}
+      </Typography>
       <AnswerDialog
         key={answerResultId ?? "closed"}
         open={!!answerResult}

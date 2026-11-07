@@ -4,6 +4,7 @@ import { createRun } from "./legacy-engine";
 import { type Run, type Verdict } from "./models";
 import { settings } from "./openai-model-compat";
 import { RunView } from "./results";
+import { ComparisonReport } from "./comparison-report";
 import { theme } from "./theme";
 
 export function tableFixtureRuns(): Run[] {
@@ -92,12 +93,14 @@ export function tableFixtureRuns(): Run[] {
   return [run, stale, single];
 }
 export function ResultTableFixture() {
+  const runs = tableFixtureRuns();
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
       <Container maxWidth="xl" sx={{ py: 3 }}>
         <Stack spacing={3}>
-          {tableFixtureRuns().map((run) => (
+          <ComparisonReport runs={runs} />
+          {runs.map((run) => (
             <RunView
               key={run.id}
               run={run}

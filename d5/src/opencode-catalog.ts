@@ -1,3 +1,4 @@
+import { consoleTransportUrl } from "./opencode-console-transport";
 // Supplied Console price snapshot. Prices do not establish account or Go eligibility.
 export type ModelTier = "Free" | "Paid" | "Premium" | "Unknown";
 export type Price = {
@@ -127,6 +128,8 @@ export function resolvePrice(id: string, api?: Partial<Price>) {
 export type DiscoveredModel = {
   id: string;
   name: string;
+  disabled?: boolean;
+  available?: boolean;
   price?: Partial<Price>;
   structuredOutput?: boolean;
   maxOutputTokens?: number;
@@ -168,6 +171,8 @@ export function parseModels(value: unknown): DiscoveredModel[] {
       {
         id: obj.id,
         name: typeof obj.name === "string" ? obj.name : obj.id,
+        ...(typeof obj.disabled === "boolean" ? { disabled: obj.disabled } : {}),
+        ...(typeof obj.available === "boolean" ? { available: obj.available } : {}),
         ...(Object.keys(price).length ? { price } : {}),
         ...(Number.isInteger(maxOutputTokens) && maxOutputTokens > 0
           ? { maxOutputTokens }
@@ -189,7 +194,7 @@ export async function discoverModels(
   fetcher: typeof fetch = fetch,
   endpoint: string = MODEL_ENDPOINTS[mode],
 ): Promise<DiscoveredModel[]> {
-  const response = await fetcher(endpoint, {
+  const response = await fetcher(mode === "console" ? consoleTransportUrl(endpoint) : endpoint, {
     credentials: "omit",
     redirect: "error",
   });

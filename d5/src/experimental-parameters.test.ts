@@ -6,6 +6,25 @@ import { parameterSupport } from "./provider-registry";
 
 afterEach(() => vi.unstubAllGlobals());
 describe("experimental OpenAI parameters", () => {
+  it("forwards experimental reasoning and temperature without capability substitutions", async () => {
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ status: "completed", output: [{ content: [{ type: "output_text", text: "ok" }] }] }), { status: 200 }));
+    vi.stubGlobal("fetch", fetcher);
+    const registry = createProviderRegistry();
+    const config = { ...settings("gpt-5.6-terra"), reasoning: undefined };
+    const parameters = [
+      { id: "r", enabled: true, key: "reasoning_effort", value: "experimental" },
+      { id: "t", enabled: true, key: "temperature", value: "2.5" },
+      { id: "d", enabled: false, key: "unused", value: "unchanged" },
+    ];
+    const expert = { ...config, id: "x", name: "x", description: "d", rolePrompt: "role", parameters };
+    const run = createRun("question", "", [expert], config.model, "openai", registry, config, "current-v1");
+    await new Engine(() => {}, registry).execute(run, () => "dummy");
+    const body = JSON.parse(fetcher.mock.calls[0][1].body);
+    expect(body.reasoning).toEqual({ effort: "experimental" });
+    expect(body.temperature).toBe(2.5);
+    expect(body).not.toHaveProperty("unused");
+    expect(run.snapshot.experts[0].parameters).toEqual(parameters);
+  });
   it("sends enabled temperature without changing reasoning, model, or disabled values", async () => {
     const fetcher = vi.fn().mockResolvedValue(
       new Response(
@@ -101,7 +120,7 @@ describe("experimental OpenAI parameters", () => {
   });
 });
 
-it("shows unspecified reasoning when the adapter omits it despite a catalog default", async () => {
+it("hides unspecified reasoning when the adapter omits it despite a catalog default", async () => {
   const { expertConfigurationLabels } =
     await import("./expert-configuration-chips");
   const fetcher = vi
@@ -127,7 +146,7 @@ it("shows unspecified reasoning when the adapter omits it despite a catalog defa
   };
   expect(
     expertConfigurationLabels(expert, config.model, registry, "openai"),
-  ).toContain("Reasoning: Unspecified");
+  ).toEqual([`Model: ${config.model}`]);
   const run = createRun(
     "q",
     "",

@@ -1,5 +1,8 @@
 node_modules/
 dist/
+/.pnpm-store/
+.vite/
+.vite-temp/
 .env
 .env.*
 !.env.example

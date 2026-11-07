@@ -1,34 +1,23 @@
 import { Chip, Stack } from "@mui/material";
 import { resolveExpert, type Expert } from "./models";
-import { statusLabel } from "./labels";
 import type { ProviderRegistry } from "./provider-registry";
 
 export function expertConfigurationLabels(
   expert: Expert,
   defaultModel: string,
-  registry?: ProviderRegistry,
+  _registry?: ProviderRegistry,
   defaultProvider?: string,
 ) {
   const resolved = resolveExpert(expert, defaultModel, defaultProvider);
-  const capability =
-    registry && resolved.provider
-      ? registry.get(resolved.provider)?.capabilities(resolved.model)
-      : undefined;
-  const efforts = capability?.reasoningEfforts;
-  const configured = resolved.reasoning;
-  const reasoning = !configured
-    ? "Unspecified"
-    : !efforts
-      ? "Unknown"
-      : !efforts.length || (configured && !efforts.includes(configured))
-        ? "Not supported"
-        : statusLabel(configured);
+  const seen = new Set<string>();
   return [
     `Model: ${resolved.model}`,
-    `Reasoning: ${reasoning}`,
-    ...(!resolved.parameters ? [`Output limit: ${resolved.maxTokens}`] : []),
     ...(resolved.parameters ?? [])
-      .filter((p) => p.enabled)
+      .filter((p) => {
+        if (!p.enabled || !p.key.trim() || !p.value.trim() || seen.has(p.key)) return false;
+        seen.add(p.key);
+        return true;
+      })
       .map(
         (p) =>
           `${p.key === "max_output_tokens" ? "Output limit" : p.key}: ${p.value}`,

@@ -17,3 +17,12 @@ describe("OpenAI provider verification status", () => {
     expect(html).not.toContain("Gemini");
   });
 });
+
+
+it("renders a matching Console status without confusing model verification with connectivity", () => {
+  const html = renderToStaticMarkup(<ProviderStatus provider="OpenCode Console" verification="verified" />);
+  expect(html).toContain("OpenCode Console · Verified");
+  expect(html).toContain("MuiChip-colorSuccess");
+  expect(html).not.toContain("Online");
+  expect(renderToStaticMarkup(<ProviderStatus provider="OpenCode Console" verification="unchecked" />)).toContain("OpenCode Console · Not verified");
+});

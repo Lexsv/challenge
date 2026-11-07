@@ -53,6 +53,7 @@ it.each([false, true])(
         enabled: true,
       },
       { id: "b", key: "temperature", value: "0.4", enabled: false },
+      { id: "c", key: "top_p", value: "0.8", enabled: true },
     ];
     const expert = {
       id: "x",
@@ -82,6 +83,7 @@ it.each([false, true])(
     expect(fetcher).toHaveBeenCalledTimes(2);
     const body = JSON.parse(fetcher.mock.calls[1][1].body);
     expect(body.experimental_option).toEqual({ value: 2 });
+    expect(body.top_p).toBe(0.8);
     expect(body).not.toHaveProperty("temperature");
     expect(body.model).toBe("example-model");
     expect(body.max_completion_tokens).toBe(100);
@@ -97,3 +99,24 @@ it.each([false, true])(
     }
   },
 );
+
+it("retains successful answers and associates failures with their own captured participant", async () => {
+  const fetcher = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+    if (url.endsWith("/models")) return new Response(JSON.stringify({ data: ["kimi-k3", "glm-5.3-flash"].map(id => ({ id, limit: { output: 1024 } })) }), { status: 200 });
+    const body = JSON.parse(String(init?.body));
+    return body.model === "kimi-k3"
+      ? new Response(JSON.stringify({ model: body.model, choices: [{ message: { content: "retained answer" }, finish_reason: "stop" }] }), { status: 200 })
+      : new Response(JSON.stringify({ error: { message: "Access restricted" } }), { status: 403 });
+  });
+  vi.stubGlobal("fetch", fetcher);
+  const registry = createProviderRegistry();
+  await registry.get("opencode-console")!.discover!();
+  const expert = (id: string, model: string) => ({ id, name: id, description: "", rolePrompt: "role", provider: "opencode-console", model, maxTokens: 100, parameters: [] });
+  const evaluator = settings("gpt-5.6-terra");
+  const run = createRun("question", "", [expert("one", "kimi-k3"), expert("two", "glm-5.3-flash")], evaluator.model, "openai", registry, evaluator, "current-v1");
+  await new Engine(() => {}, registry).execute(run, () => "dummy-key");
+  expect(run.results[0].attempts[0]).toMatchObject({ status: "succeeded", text: "retained answer" });
+  expect(run.results[1].expert).toMatchObject({ provider: "opencode-console", model: "glm-5.3-flash" });
+  expect(run.results[1].attempts[0].failure).toMatchObject({ httpStatus: 403, category: "permission", providerMessage: "Access restricted" });
+  expect(fetcher).toHaveBeenCalledTimes(3);
+});

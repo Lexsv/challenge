@@ -1,6 +1,6 @@
 import { resolveExpert, type Expert } from "./models";
 import { validateParameters } from "./api-parameters";
-import type { ProviderRegistry } from "./provider-registry";
+import { validateExpertConfiguration, type ProviderRegistry } from "./provider-registry";
 
 export function expertSettingsError(
   expert: Expert,
@@ -25,5 +25,5 @@ export function expertSettingsError(
     return "Model capabilities are unknown.";
   }
   if (provider.executionAvailable === false && provider.catalog().includes(resolved.model)) return undefined;
-  return provider.validate(resolved);
+  return validateExpertConfiguration(provider, resolved);
 }
