@@ -20,7 +20,10 @@ export function expertSettingsError(
   if (!resolved.provider) return "Provider identity is required.";
   const provider = registry.get(resolved.provider);
   if (!provider) return "Unsupported provider.";
-  if (!provider.capabilities(resolved.model))
+  if (!provider.capabilities(resolved.model)) {
+    if (provider.allowUndiscoveredSelection && provider.catalog().includes(resolved.model)) return undefined;
     return "Model capabilities are unknown.";
+  }
+  if (provider.executionAvailable === false && provider.catalog().includes(resolved.model)) return undefined;
   return provider.validate(resolved);
 }

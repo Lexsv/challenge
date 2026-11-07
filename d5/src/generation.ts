@@ -58,10 +58,11 @@ export function validateExperts(
       throw new Error(
         "Each expert needs a name, role label, description, and role prompt.",
       );
+    const { reasoning: _reasoning, parameters: _parameters, ...expertConfiguration } =
+      configuration ?? { model: "", maxTokens: 8192 };
     return {
-      ...(configuration
-        ? structuredClone(configuration)
-        : { model: "", maxTokens: 8192 }),
+      ...structuredClone(expertConfiguration),
+      parameters: [],
       id: crypto.randomUUID(),
       name: e.name as string,
       roleLabel: e.roleLabel as string,

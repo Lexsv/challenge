@@ -54,6 +54,7 @@ export type Run = {
   id: string;
   snapshot: Readonly<{
     validationPolicy?: "current-v1" | "historical-openai-v0";
+    providerEndpoints?: Readonly<Record<string, string>>;
     question: string;
     reference: string;
     evaluationRequested?: boolean;

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ThemeProvider } from "@mui/material";
 import { Providers } from "./providers";
@@ -7,7 +7,8 @@ import { parameterPayload } from "./api-parameters";
 import { theme } from "./theme";
 
 describe("provider settings", () => {
-  it("shows only OpenAI as the default provider with the current verification state", () => {
+  it("shows four distinct built-in provider cards with the current OpenAI verification state", () => {
+    const fetcher = vi.spyOn(globalThis, "fetch");
     const html = renderToStaticMarkup(
       <ThemeProvider theme={theme}>
         <Providers
@@ -22,7 +23,14 @@ describe("provider settings", () => {
     expect(html).toContain("Verified");
     expect(html).toContain("test-model");
     expect(html).toContain("Add Provider");
-    expect(html).not.toContain("Gemini");
+    expect(html).toContain("OpenCode");
+    expect(html).toContain("Google Gemini");
+    expect(html).toContain("OpenCode Console");
+    expect(html).toContain("OpenCode Go");
+    expect(html).toContain("Pay as you go");
+    expect(html).toContain("Subscription");
+    expect(fetcher).not.toHaveBeenCalled();
+    fetcher.mockRestore();
   });
   it("reuses the parameter editor and excludes disabled values from request payloads", () => {
     const parameters = [

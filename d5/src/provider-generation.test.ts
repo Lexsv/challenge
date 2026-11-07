@@ -126,6 +126,6 @@ it("preserves a custom generated expert configuration without OpenAI defaults", 
   expect(result.provider).toBe("custom");
   expect(result.model).toBe("same-model");
   expect(result.reasoning).toBeUndefined();
-  expect(result.parameters).toEqual(config.parameters);
+  expect(result.parameters).toEqual([]);
   expect(result.parameters).not.toBe(config.parameters);
 });

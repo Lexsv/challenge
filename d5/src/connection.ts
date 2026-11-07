@@ -41,14 +41,16 @@ export class ConnectionController {
   private version = 0;
   private memoryOnly = false;
   private listeners = new Set<() => void>();
-  constructor(private storage: () => KeyStorage = () => window.sessionStorage) {
+  constructor(private storage: () => KeyStorage = () => window.sessionStorage, private volatile = false) {
     let key = "";
     let storageWarning: string | undefined;
-    try {
-      key = this.storage().getItem(API_KEY_STORAGE_KEY) || "";
-    } catch {
-      this.memoryOnly = true;
-      storageWarning = STORAGE_WARNING;
+    if (!this.volatile) {
+      try {
+        key = this.storage().getItem(API_KEY_STORAGE_KEY) || "";
+      } catch {
+        this.memoryOnly = true;
+        storageWarning = STORAGE_WARNING;
+      }
     }
     this.state = {
       key,
@@ -76,6 +78,10 @@ export class ConnectionController {
   updateKey = (key: string) => {
     this.version++;
     let storageWarning = this.state.storageWarning;
+    if (this.volatile) {
+      this.publish({ key, verification: "unverified", error: undefined });
+      return;
+    }
     try {
       if (!key.trim()) this.storage().removeItem(API_KEY_STORAGE_KEY);
       else if (!this.memoryOnly)
@@ -98,6 +104,12 @@ export class ConnectionController {
     });
   };
   forget = () => this.updateKey("");
+  adoptVerified = (key: string) => {
+    if (key.trim() && key === this.state.key) {
+      this.version++;
+      this.publish({ verification: "verified", error: undefined });
+    }
+  };
   async verify(model: string, adapter: Adapter) {
     if (
       !this.state.key.trim() ||

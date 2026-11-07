@@ -187,8 +187,9 @@ export const MODEL_ENDPOINTS = {
 export async function discoverModels(
   mode: keyof typeof MODEL_ENDPOINTS,
   fetcher: typeof fetch = fetch,
+  endpoint: string = MODEL_ENDPOINTS[mode],
 ): Promise<DiscoveredModel[]> {
-  const response = await fetcher(MODEL_ENDPOINTS[mode], {
+  const response = await fetcher(endpoint, {
     credentials: "omit",
     redirect: "error",
   });

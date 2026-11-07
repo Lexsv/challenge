@@ -26,6 +26,7 @@ async function respondInternal(
   key: string,
   request: Request,
   onDispatch: (body: Record<string, unknown>) => void,
+  endpoint: string,
 ): Promise<Omit<Attempt, "id">> {
   const start = performance.now();
   const controller = new AbortController();
@@ -83,7 +84,7 @@ async function respondInternal(
         : {}),
     };
     onDispatch(body);
-    const res = await fetch("https://api.openai.com/v1/responses", {
+    const res = await fetch(endpoint, {
       method: "POST",
       redirect: "error",
       credentials: "omit",
@@ -199,12 +200,13 @@ async function respondInternal(
   }
 }
 
-export const respond: Adapter = async (key, request) => {
+export const respondAtEndpoint = async (key: string, request: Request, endpoint: string) => {
   let executionParameters: ExecutionParameters | undefined;
   const result = await respondInternal(key, request, (body) => {
     executionParameters = captureExecutionParameters(body, key);
-  });
+  }, endpoint);
   return executionParameters === undefined
     ? result
     : { ...result, executionParameters };
 };
+export const respond: Adapter = (key, request) => respondAtEndpoint(key, request, "https://api.openai.com/v1/responses");

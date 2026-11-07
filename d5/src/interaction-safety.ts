@@ -12,6 +12,10 @@ export function expertEditDraft(expert: Expert): Expert {
   return structuredClone(expert);
 }
 
+export function selectExpertProvider(expert: Expert, provider: string): Expert {
+  return provider === expert.provider ? expert : { ...expert, provider, model: "" };
+}
+
 export function retryCredentialReason(
   provider: string | undefined,
   credential: (id: string) => string,

@@ -12,6 +12,7 @@ export const INFERENCE_ENDPOINTS = {
 export function openCodeAdapter(
   mode: OpenCodeMode,
   fetcher: typeof fetch = fetch,
+  endpoint: () => string = () => INFERENCE_ENDPOINTS[mode],
 ): Adapter {
   return async (key: string, request: Request) => {
     const started = performance.now();
@@ -72,7 +73,7 @@ export function openCodeAdapter(
         configuration,
         key,
       );
-      const response = await fetcher(INFERENCE_ENDPOINTS[mode], {
+      const response = await fetcher(endpoint(), {
         method: "POST",
         redirect: "error",
         credentials: "omit",

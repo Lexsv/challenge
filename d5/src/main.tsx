@@ -1,4 +1,4 @@
-import { expertEditDraft, generationModelFor } from "./interaction-safety";
+import { expertEditDraft, generationModelFor, selectExpertProvider } from "./interaction-safety";
 import { initialLabTab, type LabTab } from "./navigation";
 import { expertSettingsError } from "./expert-settings-validation";
 import React, { useRef, useState, useSyncExternalStore } from "react";
@@ -59,6 +59,7 @@ import {
 } from "./provider-registry";
 import { ParameterEditor } from "./parameter-editor";
 import { Providers } from "./providers";
+import { BuiltinConnectionSettings, type OpenCodeConnection, type OpenCodeKeys } from "./builtin-connection-settings";
 import { statusLabel } from "./labels";
 import { ExpertConfigurationChips } from "./expert-configuration-chips";
 import { ExpertRoleLabel } from "./expert-role-label";
@@ -187,7 +188,7 @@ export function App({
   getProviderKey?: (provider: string) => string;
 }) {
   const [connectionController] = useState(
-    () => controller || new ConnectionController(),
+    () => controller || new ConnectionController(undefined, true),
   );
   const connectionState = useSyncExternalStore(
     connectionController.subscribe,
@@ -205,6 +206,8 @@ export function App({
   const [registry] = useState(
     () => suppliedRegistry ?? createProviderRegistry(adapter),
   );
+  const [openCodeKeys, setOpenCodeKeys] = useState<OpenCodeKeys>(() => ({ "opencode-console": getProviderKey?.("opencode-console") ?? "", "opencode-go": getProviderKey?.("opencode-go") ?? "" }));
+  const [geminiKey, setGeminiKey] = useState("");
   const providerId = generationBase
     ? (generationBase.provider ?? "")
     : "openai";
@@ -212,7 +215,9 @@ export function App({
   const credential = (id: string) =>
     id === "openai"
       ? connectionController.getKey()
-      : (getProviderKey?.(id) ?? "");
+      : id === "opencode-console" || id === "opencode-go"
+        ? openCodeKeys[id]
+        : (getProviderKey?.(id) ?? "");
   const generationSettings: Settings = generationBase
     ? { ...generationBase, model }
     : { ...settings(model), provider: providerId };
@@ -229,6 +234,7 @@ export function App({
   const [addText, setAddText] = useState("");
   const [addOpen, setAddOpen] = useState(false);
   const [editing, setEditing] = useState<Expert | null>(null);
+  const [requireExpertModel, setRequireExpertModel] = useState(false);
   const [generating, setGenerating] = useState<"team" | "single" | null>(null);
   const generationLock = useRef(false);
   const [generationAttempts, setGenerationAttempts] = useState<Attempt[]>([]);
@@ -489,7 +495,7 @@ export function App({
                         <Tooltip title={`Edit ${e.name}`}>
                           <IconButton
                             aria-label={`Edit ${e.name}`}
-                            onClick={() => setEditing(expertEditDraft(e))}
+                            onClick={() => { setRequireExpertModel(false); setEditing(expertEditDraft(e)); }}
                           >
                             <SettingsOutlined fontSize="small" />
                           </IconButton>
@@ -636,9 +642,9 @@ export function App({
               color="text.secondary"
               textAlign="center"
             >
-              Experts and history reset on reload. The key is retained in this
-              tab’s sessionStorage when available; verification resets. Requests
-              go directly to OpenAI. Verification and retries may consume
+              Experts, history, and built-in credentials reset on reload.
+              Verification resets. Requests go to the selected provider.
+              Verification and retries may consume
               tokens.
             </Typography>
           </Stack>
@@ -652,6 +658,22 @@ export function App({
           <Providers
             model={openAIModel}
             verification={verification}
+            openAIKeyPresent={!!key.trim()}
+            registry={registry}
+            adapter={adapter}
+            keys={{ openai: key, ...openCodeKeys, gemini: geminiKey }}
+            referencedProviders={experts.flatMap((expert) => expert.provider ? [expert.provider] : [])}
+            onDiscovery={() => redraw((n) => n + 1)}
+            onSaveBuiltin={(id, value, selectedModel, verified) => {
+              if (id === "openai") {
+                if (value !== connectionController.getKey()) connectionController.updateKey(value);
+                if (selectedModel && selectedModel !== openAIModel) { connectionController.invalidate(); setOpenAIModel(selectedModel); }
+                if (verified) connectionController.adoptVerified(value);
+                else if (verification !== "unverified") connectionController.invalidate();
+              } else if (id === "gemini") setGeminiKey(value);
+              else setOpenCodeKeys((current) => ({ ...current, [id]: value }));
+            }}
+            openCodeSettings={<BuiltinConnectionSettings registry={registry} keys={openCodeKeys} onDiscovery={() => redraw((n) => n + 1)} setKey={(id: OpenCodeConnection, value: string) => setOpenCodeKeys((current) => ({ ...current, [id]: value }))} />}
             openAISettings={
               <Section title="Connection settings">
                 <Stack spacing={2} sx={{ pt: 1 }}>
@@ -680,11 +702,7 @@ export function App({
                         ),
                       },
                     }}
-                    helperText={
-                      connectionState.storageWarning
-                        ? "The key is available in page memory only."
-                        : "The key is retained in this tab’s sessionStorage. It is not a secure vault."
-                    }
+                    helperText="The key is available in page memory only."
                   />
                   <Button
                     variant="text"
@@ -696,8 +714,7 @@ export function App({
                     Forget key
                   </Button>
                   <Typography variant="body2">
-                    Removes the key from the app and sessionStorage. Requests
-                    already sent are not canceled.
+                    Removes the key from the app. Requests already sent are not canceled.
                   </Typography>
                   {connectionState.storageWarning && (
                     <Alert severity="warning">
@@ -879,20 +896,48 @@ export function App({
                       setEditing({ ...editing, rolePrompt: e.target.value })
                     }
                   />
+                  <TextField
+                    select
+                    label="Provider"
+                    value={editing.provider?.startsWith("opencode-") ? "opencode" : (editing.provider ?? "")}
+                    onChange={(event) => {
+                      const next = event.target.value === "opencode" ? "opencode-pending" : event.target.value;
+                      if (next !== editing.provider) setRequireExpertModel(true);
+                      setEditing(selectExpertProvider(editing, next));
+                    }}
+                  >
+                    {!editing.provider && <MenuItem value="" disabled>Select a provider</MenuItem>}
+                    {editing.provider && !editing.provider.startsWith("opencode-") && !["openai", "gemini"].includes(editing.provider) && (
+                      <MenuItem value={editing.provider}>{editing.provider}</MenuItem>
+                    )}
+                    <MenuItem value="openai">OpenAI</MenuItem>
+                    <MenuItem value="opencode">OpenCode</MenuItem>
+                    <MenuItem value="gemini">Gemini (execution unavailable)</MenuItem>
+                  </TextField>
+                  {editing.provider?.startsWith("opencode-") && <TextField select label="OpenCode connection" value={editing.provider === "opencode-pending" ? "" : editing.provider} onChange={(event) => { setRequireExpertModel(true); setEditing(selectExpertProvider(editing, event.target.value)); }}>
+                    <MenuItem value="" disabled>Select a connection</MenuItem>
+                    <MenuItem value="opencode-console">Console — Pay as you go</MenuItem>
+                    <MenuItem value="opencode-go">Go — Subscription</MenuItem>
+                  </TextField>}
+                  {editing.provider === "gemini" && <Alert severity="info">Gemini can be configured, but execution is not available yet.</Alert>}
+                  {(editing.provider === "opencode-console" || editing.provider === "opencode-go") && !registry.capabilitiesFor(editing.provider, editing.model) && (
+                    <Alert severity="info">Model capabilities must be discovered before execution.</Alert>
+                  )}
                   <ModelField
                     registry={registry}
                     providerId={editing.provider}
                     label="Model override"
                     value={editing.model}
                     inherit={
-                      !!editing.provider && editing.provider === providerId
+                      !requireExpertModel && !!editing.provider && editing.provider === providerId
                     }
-                    onChange={(v) =>
+                    onChange={(v) => {
+                      setRequireExpertModel(false);
                       setEditing({
                         ...editing,
                         model: v,
-                      })
-                    }
+                      });
+                    }}
                   />
                   {(!!editing.reasoning ||
                     !!registry.capabilitiesFor(
@@ -966,21 +1011,21 @@ export function App({
                 </Stack>
               </DialogContent>
               <DialogActions sx={{ flexWrap: "wrap" }}>
-                {expertSettingsError(editing, model, registry, providerId) && (
+                {(requireExpertModel && !editing.model || expertSettingsError(editing, model, registry, providerId)) && (
                   <Typography
                     role="status"
                     color="error"
                     variant="body2"
                     sx={{ flexBasis: "100%", px: 1 }}
                   >
-                    {expertSettingsError(editing, model, registry, providerId)}
+                    {requireExpertModel && !editing.model ? "Select a model for the selected provider." : expertSettingsError(editing, model, registry, providerId)}
                   </Typography>
                 )}
                 <Button onClick={() => setEditing(null)}>Cancel</Button>
                 <Button
                   variant="contained"
                   disabled={
-                    !!expertSettingsError(editing, model, registry, providerId)
+                    (requireExpertModel && !editing.model) || !!expertSettingsError(editing, model, registry, providerId)
                   }
                   onClick={() => {
                     setExperts((v) =>

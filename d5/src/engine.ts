@@ -102,6 +102,10 @@ export function createRun(
   const snapshot = freeze(
     structuredClone({
       validationPolicy: policy,
+      providerEndpoints: Object.fromEntries([...new Set([...resolved.map((e) => e.provider!), evaluator.provider!])].flatMap((id) => {
+        const endpoint = registry.endpointFor(id);
+        return endpoint ? [[id, endpoint]] : [];
+      })),
       question,
       reference,
       evaluationRequested: !!reference.trim(),
@@ -137,6 +141,7 @@ export class Engine {
     input: string,
     schema?: object,
     policy?: "current-v1" | "historical-openai-v0",
+    recordedEndpoints?: Readonly<Record<string, string>>,
   ): Promise<Attempt> {
     try {
       const provider = settings.provider;
@@ -158,6 +163,10 @@ export class Engine {
           ms: 0,
           error: "Unsupported provider. Check expert settings.",
         };
+      const currentEndpoint = this.registry.endpointFor(provider);
+      const expectedEndpoint = recordedEndpoints?.[provider] ?? this.registry.originalEndpointFor(provider);
+      if (currentEndpoint && expectedEndpoint && currentEndpoint !== expectedEndpoint)
+        return { id: crypto.randomUUID(), status: "failed", text: "", ms: 0, error: "The provider endpoint changed since this run. Restore its recorded endpoint before retrying." };
       if (!policy)
         return {
           id: crypto.randomUUID(),
@@ -239,6 +248,7 @@ export class Engine {
       run.snapshot.question,
       undefined,
       run.snapshot.validationPolicy,
+      run.snapshot.providerEndpoints,
     );
     Object.assign(pending, { ...a, id: pending.id });
     this.notify();
@@ -277,6 +287,7 @@ export class Engine {
       }),
       evaluationSchema,
       run.snapshot.validationPolicy,
+      run.snapshot.providerEndpoints,
     );
     Object.assign(pending, { ...a, id: pending.id });
     if (a.status === "succeeded") {

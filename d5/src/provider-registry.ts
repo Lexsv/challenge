@@ -5,7 +5,8 @@ import {
   validateNewOpenAISettings,
 } from "./openai-model-compat";
 import { capabilities, catalog as openAICatalog } from "./openai-model-catalog";
-import { respond } from "./openai";
+import { respond, respondAtEndpoint } from "./openai";
+import { DEFAULT_ENDPOINTS, discoveryEndpoint, validateEndpoint, type BuiltinEndpointId } from "./provider-endpoints";
 import type { Adapter } from "./provider-contract";
 import { validateParameters, type ApiParameter } from "./api-parameters";
 import { openCodeAdapter } from "./opencode-adapter";
@@ -14,6 +15,10 @@ import {
   discoverModels,
   type DiscoveredModel,
 } from "./opencode-catalog";
+
+// Documented Go IDs that are also present in the existing bundled catalog.
+// https://opencode.ai/docs/console/go/
+const goModelIds = new Set(["grok-4.7", "gpt-6-luna", "claude-haiku-5-5", "gemini-4-argon", "glm-5.3-flash", "glm-5.3", "kimi-k3", "kimi-k2.7-code", "deepseek-v4.1-flash", "deepseek-v4-pro", "minimax-m3", "qwen3.8-flash", "crouton-alpha-free", "beam-free"]);
 
 export type ParameterSupport = "supported" | "unsupported" | "unknown";
 export function parameterSupport(
@@ -35,6 +40,8 @@ export type ProviderModelCapabilities = {
 };
 export type ProviderAdapter = {
   id: string;
+  allowUndiscoveredSelection?: boolean;
+  executionAvailable?: boolean;
   catalog: () => readonly string[];
   discover?: () => Promise<readonly DiscoveredModel[]>;
   capabilities: (model: string) => ProviderModelCapabilities | undefined;
@@ -42,9 +49,11 @@ export type ProviderAdapter = {
   validateHistorical?: (settings: Settings) => string | undefined;
   initialParameters?: (model: string, maxTokens: number) => ApiParameter[];
   execute: Adapter;
+  onEndpointChanged?: () => void;
 };
 export class ProviderRegistry {
   private readonly providers = new Map<string, ProviderAdapter>();
+  private readonly endpoints: Record<BuiltinEndpointId, string> = { ...DEFAULT_ENDPOINTS };
   constructor(providers: readonly ProviderAdapter[] = []) {
     providers.forEach((provider) => this.register(provider));
   }
@@ -56,10 +65,25 @@ export class ProviderRegistry {
   get(id: string) {
     return this.providers.get(id);
   }
+  endpointFor(id: string): string | undefined {
+    return Object.hasOwn(this.endpoints, id) ? this.endpoints[id as BuiltinEndpointId] : undefined;
+  }
+  originalEndpointFor(id: string): string | undefined {
+    return Object.hasOwn(DEFAULT_ENDPOINTS, id) ? DEFAULT_ENDPOINTS[id as BuiltinEndpointId] : undefined;
+  }
+  setEndpoint(id: BuiltinEndpointId, endpoint: string, confirmed = false): void {
+    const problem = validateEndpoint(id, endpoint);
+    if (problem) throw new Error(problem);
+    if (endpoint !== DEFAULT_ENDPOINTS[id] && !confirmed) throw new Error("Confirm the custom endpoint before applying it.");
+    if (this.endpoints[id] !== endpoint) {
+      this.endpoints[id] = endpoint;
+      this.get(id)?.onEndpointChanged?.();
+    }
+  }
   modelOptionsFor(providerId: string | undefined): readonly string[] {
     const provider = providerId ? this.providers.get(providerId) : undefined;
     return provider
-      ? provider.catalog().filter((model) => !!provider.capabilities(model))
+      ? provider.catalog().filter((model) => provider.allowUndiscoveredSelection || !!provider.capabilities(model))
       : [];
   }
   initialParametersFor(
@@ -101,16 +125,20 @@ export function createProviderRegistry(
     validate: validateNewOpenAISettings,
     validateHistorical: (config) =>
       validSettings(config) ? undefined : "Invalid historical OpenAI settings.",
-    execute: openAI,
+    execute: openAI === respond ? (key, request) => respondAtEndpoint(key, request, registry.endpointFor("openai")!) : openAI,
   });
   for (const mode of ["console", "go"] as const) {
-    const id = `opencode-${mode}`;
+    const id: "opencode-console" | "opencode-go" = `opencode-${mode}`;
     const discovered = new Map<string, DiscoveredModel>();
+    let endpointVersion = 0;
     registry.register({
       id,
-      catalog: () => catalog.map((model) => model.id),
+      allowUndiscoveredSelection: true,
+      catalog: () => mode === "console" ? catalog.map((model) => model.id) : Array.from(new Set([...catalog.map((model) => model.id).filter((model) => goModelIds.has(model)), ...discovered.keys()])),
       discover: async () => {
-        const models = await discoverModels(mode);
+        const version = endpointVersion;
+        const models = await discoverModels(mode, fetch, discoveryEndpoint(id, registry.endpointFor(id)!));
+        if (version !== endpointVersion) throw new Error("Endpoint changed during model discovery.");
         models.forEach((model) => discovered.set(model.id, model));
         return models;
       },
@@ -178,8 +206,21 @@ export function createProviderRegistry(
         }
         return undefined;
       },
-      execute: overrides[id] ?? openCodeAdapter(mode),
+      onEndpointChanged: () => { endpointVersion++; discovered.clear(); },
+      execute: overrides[id] ?? openCodeAdapter(mode, fetch, () => registry.endpointFor(id)!),
     });
   }
+  const geminiModels = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro"];
+  registry.register({
+    id: "gemini",
+    executionAvailable: false,
+    catalog: () => geminiModels,
+    // Google Gemini API model documentation: structured output and 65,536 output tokens.
+    capabilities: (model) => geminiModels.includes(model)
+      ? { structuredOutput: true, maxOutputTokens: 65536, supportedParameters: {} }
+      : undefined,
+    validate: () => "Gemini execution is not available yet.",
+    execute: async () => ({ status: "failed", text: "", ms: 0, error: "Gemini execution is not available yet." }),
+  });
   return registry;
 }
