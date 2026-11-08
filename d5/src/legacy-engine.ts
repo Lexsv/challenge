@@ -21,6 +21,7 @@ export function createRun(
   defaultProvider = "openai",
   registry = createProviderRegistry(),
   evaluatorSettings?: Settings,
+  batchTask?: Readonly<{ id: string; version: number }>,
 ) {
   if (experts.some((expert) => !expert.provider))
     throw new ConfigurationError(
@@ -44,6 +45,7 @@ export function createRun(
       provider: defaultProvider,
     },
     "current-v1",
+    batchTask,
   );
 }
 export class Engine extends ProviderEngine {

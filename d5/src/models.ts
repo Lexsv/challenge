@@ -61,6 +61,7 @@ export type Run = {
     providerEndpoints?: Readonly<Record<string, string>>;
     question: string;
     reference: string;
+    batchTask?: Readonly<{ id: string; version: number }>;
     evaluationRequested?: boolean;
     experts: Expert[];
     evaluator: Settings;

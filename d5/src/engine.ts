@@ -74,6 +74,7 @@ export function createRun(
   registry: ProviderRegistry,
   evaluatorSettings: Settings,
   policy: "current-v1",
+  batchTask?: Readonly<{ id: string; version: number }>,
 ): Run {
   if (policy !== "current-v1")
     throw new Error("Current validation policy is required for new runs.");
@@ -109,6 +110,7 @@ export function createRun(
       })),
       question,
       reference,
+      ...(batchTask ? { batchTask } : {}),
       evaluationRequested: !!reference.trim(),
       experts: resolved,
       evaluator,

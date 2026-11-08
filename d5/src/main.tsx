@@ -30,6 +30,7 @@ import {
   Tabs,
   Tab,
 } from "@mui/material";
+import { alpha } from "@mui/material/styles";
 import SettingsOutlined from "@mui/icons-material/SettingsOutlined";
 import Add from "@mui/icons-material/Add";
 import ContentCopyOutlined from "@mui/icons-material/ContentCopyOutlined";
@@ -68,6 +69,8 @@ import { ExpertRoleLabel } from "./expert-role-label";
 import { RunView } from "./results";
 import { ComparisonReport } from "./comparison-report";
 import { usage, seconds } from "./result-format";
+import { BatchTaskList } from "./batch-task-list";
+import { executeBatch, type BatchTask } from "./batch-tasks";
 export function ModelField({
   label,
   value,
@@ -166,7 +169,7 @@ function Section({
       variant="outlined"
       sx={{
         p: { xs: 2, sm: 3 },
-        bgcolor: tinted ? "secondary.main" : undefined,
+        bgcolor: tinted ? (theme) => alpha(theme.palette.primary.main, 0.1) : undefined,
         borderColor: "divider",
       }}
     >
@@ -245,8 +248,9 @@ export function App({
   const generationLock = useRef(false);
   const [generationAttempts, setGenerationAttempts] = useState<Attempt[]>([]);
   const [generationError, setGenerationError] = useState("");
-  const [question, setQuestion] = useState("");
-  const [reference, setReference] = useState("");
+  const [tasks, setTasks] = useState<BatchTask[]>([]);
+  const [batchRunning, setBatchRunning] = useState(false);
+  const batchLock = useRef(false);
   const [runs, setRuns] = useState<Run[]>([]);
   const [runError, setRunError] = useState("");
   const [, redraw] = useState(0);
@@ -258,7 +262,7 @@ export function App({
       {},
       registry,
     );
-  const active = !!engine.current.active;
+  const active = !!engine.current.active || batchRunning;
   const connectionValid =
     !!credential(providerId).trim() &&
     !registry.get(providerId)?.validate(generationSettings) &&
@@ -273,13 +277,11 @@ export function App({
       ),
     )
     .find(Boolean);
-  const disabledReason = active
+  const sharedDisabledReason = active
     ? "An experiment or retry is active."
     : !experts.length
       ? "Add at least one expert to enable running an experiment."
-      : !question.trim()
-        ? "Enter a question."
-        : !connectionValid
+      : !connectionValid
           ? "Configure an API key and supported model."
           : expertProblem || "";
   const changeConfig = (fn: () => void) => {
@@ -333,27 +335,25 @@ export function App({
     setGenerating(null);
     generationLock.current = false;
   }
-  function launch() {
-    if (disabledReason || engine.current!.active) return;
+  async function launchBatch(selectedTasks: readonly BatchTask[]) {
+    if (sharedDisabledReason || !selectedTasks.length || batchLock.current || engine.current!.active) return;
+    batchLock.current = true;
+    setBatchRunning(true);
+    setRunError("");
+    const capturedExperts = structuredClone(experts);
+    const capturedEvaluator = evaluatorBase ? structuredClone(evaluatorBase) : undefined;
     try {
-      const run = createRun(
-        question,
-        reference,
-        experts,
-        model,
-        providerId,
-        registry,
-        evaluatorBase,
+      await executeBatch(
+        selectedTasks,
+        (task) => createRun(task.question, task.reference, capturedExperts, model, providerId, registry, capturedEvaluator, { id: task.id, version: task.version }),
+        (run) => engine.current!.execute(run, credential),
+        (run) => setRuns((current) => [run, ...current]),
       );
-      setRuns((v) => [run, ...v]);
-      setRunError("");
-      void engine.current!.execute(run, credential);
     } catch (error) {
-      setRunError(
-        error instanceof ConfigurationError
-          ? error.message
-          : "Check required inputs, expert settings, and the shared model.",
-      );
+      setRunError(error instanceof ConfigurationError ? error.message : "The batch could not be completed. Check the task and expert settings.");
+    } finally {
+      batchLock.current = false;
+      setBatchRunning(false);
     }
   }
   return (
@@ -578,37 +578,12 @@ export function App({
               </Typography>
             </Section>
             <Section title="Experiment" tinted>
-              <Stack direction={{ xs: "column", md: "row" }} spacing={2}>
-                <TextField
-                  label="Question"
-                  multiline
-                  minRows={3}
-                  value={question}
-                  onChange={(e) => setQuestion(e.target.value)}
-                />
-                <TextField
-                  label="Expected answer (optional)"
-                  multiline
-                  minRows={3}
-                  value={reference}
-                  onChange={(e) => setReference(e.target.value)}
-                  helperText="Optional. When provided, it is used for evaluation and never sent to participants."
-                />
-              </Stack>
-              <Button
-                variant="contained"
-                startIcon={<ScienceOutlined />}
-                sx={{ mt: 2 }}
-                disabled={!!disabledReason}
-                onClick={launch}
-              >
-                Run experiment
+              <Typography variant="subtitle1" mb={1}>Batch tasks</Typography>
+              <BatchTaskList tasks={tasks} onChange={setTasks} active={active} onRunTask={(task) => void launchBatch([task])} disabledReason={sharedDisabledReason} />
+              <Button variant="contained" startIcon={<ScienceOutlined />} sx={{ mt: 2 }} disabled={active || !!sharedDisabledReason || !tasks.length} onClick={() => void launchBatch(tasks)}>
+                Run Experiment
               </Button>
-              {disabledReason && (
-                <Typography variant="body2" mt={1}>
-                  {disabledReason}
-                </Typography>
-              )}
+              {batchRunning && <Typography variant="body2" role="status" mt={1}>Running tasks in order…</Typography>}
               {runError && <Alert severity="error">{runError}</Alert>}
             </Section>
             <Section title="Results / run history">

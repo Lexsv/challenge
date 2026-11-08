@@ -340,6 +340,7 @@ export function RunView({
           {new Date(run.started).toLocaleString("en-US")}
         </Typography>
       </Stack>
+      {run.snapshot.batchTask && <Typography variant="caption" color="text.secondary">Task version {run.snapshot.batchTask.version}</Typography>}
       <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", fontWeight: 400, mt: 0.5 }}>{run.snapshot.question}</Typography>
       <Box role="status" aria-live="polite" my={1}>
         <Typography variant="body2">
