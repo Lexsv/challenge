@@ -55,6 +55,11 @@ export type UserDefinedToolLike = {
 
 export class ToolRegistry {
   private readonly tools = new Map<string, ExecutableTool<unknown, unknown>>();
+  private readonly libraries = new Map<string, ToolCatalogItem>();
+
+  registerLibrary(tool: Pick<ToolCatalogItem, "id" | "name" | "description">) {
+    this.libraries.set(tool.id, { ...tool, executable: false, kind: "built-in", executionType: "library" });
+  }
 
   register(tool: ExecutableTool<unknown, unknown>) {
     this.tools.set(tool.id, tool);
@@ -65,7 +70,7 @@ export class ToolRegistry {
   }
 
   listBuiltIn(): ToolCatalogItem[] {
-    return [...this.tools.values()].map((tool) => ({
+    const executable = [...this.tools.values()].map((tool): ToolCatalogItem => ({
       id: tool.id,
       name: tool.name,
       description: tool.description,
@@ -74,6 +79,7 @@ export class ToolRegistry {
       executionType: tool.executionType,
       inputSchema: tool.inputSchema,
     }));
+    return [...executable, ...this.libraries.values()];
   }
 
   listWithUserTools(userTools: readonly UserDefinedToolLike[] = []): ToolCatalogItem[] {
@@ -447,6 +453,7 @@ export function createBuiltInToolRegistry(
   source: ExchangeRateSource = new HttpExchangeRateSource(),
 ) {
   const registry = new ToolRegistry();
+  registry.registerLibrary({ id: 'library.js-tiktoken', name: 'js-tiktoken', description: 'Estimates the complete input locally before every Manager Agent model request; records provider usage and available cost estimates.' });
   registry.register(taxCalculatorTool as ExecutableTool<unknown, unknown>);
   registry.register(currencyConverterTool as ExecutableTool<unknown, unknown>);
   registry.register(

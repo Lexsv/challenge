@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
   ToolsPage,
+  BuiltInToolRow,
   deleteToolRecord,
   pseudocodePreviewHtml,
   rawToolConfiguration,
@@ -31,7 +32,7 @@ describe("tools page lifecycle", () => {
     expect(html).toContain(
       "Create your first custom tool to extend your agents&#x27; capabilities.",
     );
-    expect(html.match(/>Add Tool</g)).toHaveLength(1);
+    expect(html.match(/>Add custom tool</g)).toHaveLength(1);
     for (const tool of toolRegistry.listBuiltIn()) {
       expect(html).toContain(tool.name);
       expect(html).toContain(tool.id);
@@ -47,7 +48,7 @@ describe("tools page lifecycle", () => {
     expect(html).not.toContain("Run Tool");
   });
 
-  it("shows created tool cards and header add button", () => {
+  it("shows created custom tool cards and the custom-section add button", () => {
     const tools: ToolRecord[] = [
       {
         id: "tool-1",
@@ -65,7 +66,7 @@ describe("tools page lifecycle", () => {
     expect(html).toContain("Edit tool Discount Calculator");
     expect(html).toContain("Delete tool Discount Calculator");
     expect(html).toContain("View Details");
-    expect(html.match(/>Add Tool</g)).toHaveLength(1);
+    expect(html.match(/>Add custom tool</g)).toHaveLength(1);
     expect(html).toContain("max-height:240px");
     expect(html).not.toContain("aspect-ratio:1 / 1");
   });
@@ -235,4 +236,45 @@ describe("tools page lifecycle", () => {
     expect(preview).toContain("result");
     expect(tool).toEqual(before);
   });
+});
+
+it('renders a compact, scrollable four-column built-in table before Custom Tools', () => {
+  const html = renderToStaticMarkup(<ToolsPage agents={[]} toolRegistry={toolRegistry} />);
+  expect(html).toContain('aria-label="Built-in tools"');
+  expect(html).toContain('MuiTableCell-sizeSmall');
+  expect(html).toContain('overflow-x:auto');
+  expect(html).toContain('table-layout:fixed');
+  expect(html).toContain('tabindex="0"');
+  expect(html).toContain('>Name<');
+  expect(html).toContain('>Type<');
+  expect(html).toContain('>Tool ID<');
+  expect(html).toContain('>Description<');
+  expect(html.indexOf('aria-label="Built-in tools"')).toBeLessThan(html.indexOf('id="custom-tools-heading"'));
+  expect(html.match(/aria-expanded="false"/g)).toHaveLength(toolRegistry.listBuiltIn().length);
+  expect(html).toContain('data-testid="CodeOutlinedIcon"');
+  expect(html).toContain('data-testid="PublicOutlinedIcon"');
+  expect(html).toContain('data-testid="LocalLibraryOutlinedIcon"');
+  for (const color of ['#6954cc', '#087f72', '#1b5ea8']) expect(html.toLowerCase()).toContain(color);
+});
+
+it('connects each name button to collapsed details and renders full schema or automatic Library details when expanded', () => {
+  for (const tool of toolRegistry.listBuiltIn()) {
+    const closed = renderToStaticMarkup(<table><tbody><BuiltInToolRow tool={tool} onToggle={() => {}} /></tbody></table>);
+    expect(closed).toContain(`id="built-in-${tool.id}-name"`);
+    expect(closed).toContain('aria-expanded="false"');
+    expect(closed).toContain(`aria-controls="built-in-${tool.id}-details"`);
+    expect(closed).toContain('MuiCollapse-hidden');
+    expect(closed).toContain('aria-hidden="true"');
+    const open = renderToStaticMarkup(<table><tbody><BuiltInToolRow tool={tool} expanded onToggle={() => {}} /></tbody></table>);
+    expect(open).toContain('aria-expanded="true"');
+    expect(open).toContain('MuiCollapse-entered');
+    expect(open).toContain('colSpan="4"');
+    expect(open).toContain(`aria-labelledby="built-in-${tool.id}-name"`);
+    expect(open).toContain(tool.description);
+    if (tool.inputSchema) expect(open).toContain('Input schema');
+    if (tool.executionType === 'library') {
+      expect(open).toContain('Runs automatically before each Manager Agent request. Not callable by the model.');
+      expect(open).not.toContain('Input schema');
+    }
+  }
 });

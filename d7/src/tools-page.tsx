@@ -1,9 +1,10 @@
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import {
   Alert,
   Box,
   Button,
   Chip,
+  Collapse,
   Dialog,
   DialogActions,
   DialogContent,
@@ -34,7 +35,7 @@ import SettingsOutlined from "@mui/icons-material/SettingsOutlined";
 import DeleteOutline from "@mui/icons-material/DeleteOutline";
 import ChevronRight from "@mui/icons-material/ChevronRight";
 import type { Expert } from "./models";
-import type { ToolRegistry } from "./tool-runtime";
+import type { ToolCatalogItem, ToolRegistry } from "./tool-runtime";
 import { toolExecutionTypeMeta } from "./tool-execution-type";
 
 const toolTypes = ["Function", "API Tool", "AI Agent Tool"] as const;
@@ -722,6 +723,44 @@ function TypeSelectionDialog({
   );
 }
 
+export function BuiltInToolRow({ tool, expanded = false, onToggle }: {
+  tool: ToolCatalogItem; expanded?: boolean; onToggle: () => void;
+}) {
+  const meta = tool.executionType ? toolExecutionTypeMeta[tool.executionType] : undefined;
+  const ExecutionIcon = meta?.icon;
+  const nameId = `built-in-${tool.id}-name`;
+  const detailsId = `built-in-${tool.id}-details`;
+  return <Fragment>
+    <TableRow hover>
+      <TableCell component="th" scope="row">
+        <Button id={nameId} size="small" onClick={onToggle} aria-expanded={expanded} aria-controls={detailsId}
+          startIcon={<ChevronRight fontSize="small" sx={{ transform: expanded ? 'rotate(90deg)' : 'none' }} />}
+          sx={{ justifyContent: 'flex-start', textAlign: 'left', minWidth: 0, p: 0.5, overflowWrap: 'anywhere' }}>
+          {tool.name}
+        </Button>
+      </TableCell>
+      <TableCell>{meta && ExecutionIcon ? <Chip size="small" icon={<ExecutionIcon fontSize="small" />} label={meta.label}
+        sx={{ bgcolor: meta.background, color: meta.color, '& .MuiChip-icon': { color: meta.color } }} /> : '—'}</TableCell>
+      <TableCell sx={{ fontFamily: 'monospace', fontSize: '0.8rem', overflowWrap: 'anywhere' }}>{tool.id}</TableCell>
+      <TableCell><Typography variant="body2" noWrap>{tool.description}</Typography></TableCell>
+    </TableRow>
+    <TableRow aria-hidden={!expanded}>
+      <TableCell colSpan={4} sx={{ py: 0, borderBottom: expanded ? undefined : 0 }}>
+        <Collapse in={expanded} timeout="auto">
+          <Stack id={detailsId} role="region" aria-labelledby={nameId} spacing={1} sx={{ py: 1.5, minWidth: 0 }}>
+            <Typography variant="body2" sx={{ overflowWrap: 'anywhere' }}>{tool.description}</Typography>
+            {tool.inputSchema && <Box sx={{ minWidth: 0 }}>
+              <Typography variant="subtitle2">Input schema</Typography>
+              <CodeBlock source={JSON.stringify(tool.inputSchema, null, 2)} />
+            </Box>}
+            {tool.executionType === 'library' && <Typography variant="caption">Runs automatically before each Manager Agent request. Not callable by the model.</Typography>}
+          </Stack>
+        </Collapse>
+      </TableCell>
+    </TableRow>
+  </Fragment>;
+}
+
 export function ToolsPage({
   agents,
   toolRegistry,
@@ -733,6 +772,7 @@ export function ToolsPage({
 }) {
   const [tools, setTools] = useState<ToolRecord[]>(() => structuredClone(initialTools));
   const builtInTools = toolRegistry.listBuiltIn();
+  const [expandedBuiltIns, setExpandedBuiltIns] = useState<Set<string>>(() => new Set());
   const [typePickerOpen, setTypePickerOpen] = useState(false);
   const [comingSoonOpen, setComingSoonOpen] = useState(false);
   const [editor, setEditor] = useState<
@@ -753,7 +793,7 @@ export function ToolsPage({
     [tools, detailsToolId],
   );
   return (
-    <Stack spacing={2.5}>
+    <Stack spacing={2.5} sx={{ minWidth: 0 }}>
       <Stack
         direction="row"
         gap={2}
@@ -769,77 +809,34 @@ export function ToolsPage({
             Create and manage reusable tools for experiments.
           </Typography>
         </Box>
-        {tools.length > 0 && (
-          <Button variant="contained" startIcon={<Add />} onClick={() => setComingSoonOpen(true)}>
-            Add Tool
-          </Button>
-        )}
       </Stack>
-      <Stack component="section" spacing={1.5} aria-labelledby="built-in-tools-heading">
+      <Stack component="section" spacing={1.5} aria-labelledby="built-in-tools-heading" sx={{ minWidth: 0 }}>
         <Typography variant="h5" component="h3" id="built-in-tools-heading">
           Built-in Tools
         </Typography>
-        <Box
-          sx={{
-            display: "grid",
-            gridTemplateColumns: {
-              xs: "1fr",
-              sm: "repeat(2, minmax(0, 1fr))",
-              lg: "repeat(3, minmax(0, 1fr))",
-            },
-            gap: 2,
-          }}
-        >
-          {builtInTools.map((tool) => {
-            const meta = tool.executionType
-              ? toolExecutionTypeMeta[tool.executionType]
-              : undefined;
-            const ExecutionIcon = meta?.icon;
-            return (
-              <Paper key={tool.id} variant="outlined" sx={{ p: 2, minWidth: 0 }}>
-                <Stack spacing={1.2} sx={{ minWidth: 0 }}>
-                  <Typography variant="h6" sx={{ overflowWrap: "anywhere" }}>
-                    {tool.name}
-                  </Typography>
-                  {meta && ExecutionIcon && (
-                    <Chip
-                      size="small"
-                      icon={<ExecutionIcon fontSize="small" />}
-                      label={meta.label}
-                      sx={{
-                        alignSelf: "flex-start",
-                        bgcolor: meta.background,
-                        color: meta.color,
-                        "& .MuiChip-icon": { color: meta.color },
-                      }}
-                    />
-                  )}
-                  <Typography
-                    variant="caption"
-                    color="text.secondary"
-                    sx={{ overflowWrap: "anywhere", fontFamily: "monospace" }}
-                  >
-                    {tool.id}
-                  </Typography>
-                  <Typography color="text.secondary">{tool.description}</Typography>
-                  <Box component="details">
-                    <Box component="summary" sx={{ cursor: "pointer", fontWeight: 650 }}>
-                      Input schema
-                    </Box>
-                    <Box sx={{ mt: 1, minWidth: 0 }}>
-                      <CodeBlock source={JSON.stringify(tool.inputSchema, null, 2)} />
-                    </Box>
-                  </Box>
-                </Stack>
-              </Paper>
-            );
-          })}
-        </Box>
+        <TableContainer component={Paper} variant="outlined" role="region" aria-labelledby="built-in-tools-heading" tabIndex={0}
+          sx={{ maxWidth: '100%', overflowX: 'auto', '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.main', outlineOffset: 2 } }}>
+          <Table size="small" aria-label="Built-in tools" sx={{ minWidth: 680, tableLayout: 'fixed' }}>
+            <TableHead><TableRow>
+              <TableCell scope="col" sx={{ width: '26%' }}>Name</TableCell>
+              <TableCell scope="col" sx={{ width: '17%' }}>Type</TableCell>
+              <TableCell scope="col" sx={{ width: '26%' }}>Tool ID</TableCell>
+              <TableCell scope="col" sx={{ width: '31%' }}>Description</TableCell>
+            </TableRow></TableHead>
+            <TableBody>{builtInTools.map((tool) => <BuiltInToolRow key={tool.id} tool={tool} expanded={expandedBuiltIns.has(tool.id)}
+              onToggle={() => setExpandedBuiltIns((current) => {
+                const next = new Set(current);
+                if (next.has(tool.id)) next.delete(tool.id); else next.add(tool.id);
+                return next;
+              })} />)}</TableBody>
+          </Table>
+        </TableContainer>
       </Stack>
       <Stack component="section" spacing={1.5} aria-labelledby="custom-tools-heading">
-        <Typography variant="h5" component="h3" id="custom-tools-heading">
-          Custom Tools
-        </Typography>
+        <Stack direction="row" gap={1} justifyContent="space-between" alignItems="center" flexWrap="wrap">
+          <Typography variant="h5" component="h3" id="custom-tools-heading">Custom Tools</Typography>
+          {tools.length > 0 && <Button variant="contained" startIcon={<Add />} onClick={() => setComingSoonOpen(true)}>Add custom tool</Button>}
+        </Stack>
       {tools.length === 0 ? (
         <Paper variant="outlined" sx={{ px: 2, py: { xs: 7, md: 10 } }}>
           <Stack alignItems="center" spacing={1.5} textAlign="center">
@@ -851,7 +848,7 @@ export function ToolsPage({
               Create your first custom tool to extend your agents&apos; capabilities.
             </Typography>
             <Button variant="contained" startIcon={<Add />} onClick={() => setComingSoonOpen(true)}>
-              Add Tool
+              Add custom tool
             </Button>
           </Stack>
         </Paper>

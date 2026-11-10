@@ -1,3 +1,4 @@
+import type { ModelRequestMeter, RequestMeter } from "./token-meter";
 import type { HistoryEvent } from "./conversation-history";
 import type {
   AgentRun,
@@ -30,6 +31,7 @@ export interface ManagerLlmAdapter {
   complete(input: {
     messages: readonly ManagerLlmMessage[];
     tools: readonly ToolCatalogItem[];
+    onMeter?: (meter: RequestMeter) => Promise<void>;
   }): Promise<ManagerLlmResponse>;
 }
 
@@ -38,6 +40,7 @@ export type ManagerConversationState = {
   messages: TextMessage[];
   runs: AgentRun[];
   toolExecutions: ToolExecution[];
+  requestMeters?: ModelRequestMeter[];
 };
 
 export type ManagerRunResult = {
@@ -119,7 +122,7 @@ export class ManagerAgent {
     input.state.runs.push(run);
     input.state.conversation.runIds.push(run.id);
 
-    const emit = async (type: HistoryEvent['type'], payload: TextMessage | AgentRun | ToolExecution) => {
+    const emit = async (type: HistoryEvent['type'], payload: TextMessage | AgentRun | ToolExecution | ModelRequestMeter) => {
       await input.onEvent?.(structuredClone({ id: id(), sessionId: input.state.conversation.id, type, payload }) as HistoryEvent);
     };
     if (input.onEvent) {
@@ -141,6 +144,13 @@ export class ManagerAgent {
         response = await this.llm.complete({
           messages: llmMessages,
           tools: executableTools,
+          onMeter: async (meter) => {
+            const linked: ModelRequestMeter = { ...meter, sessionId: input.state.conversation.id, runId: run.id, toolExecutionOffset: input.state.toolExecutions.length };
+            const meters = input.state.requestMeters ??= [];
+            const index = meters.findIndex((item) => item.id === linked.id);
+            if (index < 0) meters.push(linked); else meters[index] = linked;
+            await emit('metering', linked);
+          },
         });
       } catch (error) {
         run.status = "failed";

@@ -64,6 +64,7 @@ Execution type is metadata separate from built-in/custom origin:
 - **Function**
 - **HTTP API**
 - **Agent**
+- **Library**
 
 Built-in tools currently use:
 
@@ -150,7 +151,7 @@ See [designs/README.md](designs/README.md) and the linked design assets.
 
 ## Day 7 session storage
 
-The local backend uses Node's built-in `node:sqlite` (Node 22.13+; verified on Node 26). No additional dependencies are needed. It initializes `data/sessions.sqlite` safely on startup with `CREATE TABLE IF NOT EXISTS`. The database and SQLite sidecar files are excluded from Git. Vite proxies `/api/sessions` to the loopback backend; run `pnpm server` and `pnpm dev` in separate terminals. A static frontend build alone does not serve the session API.
+The local backend uses Node's built-in `node:sqlite` (Node 22.13+; verified on Node 26). No additional SQLite dependency is needed. It initializes `data/sessions.sqlite` safely on startup with `CREATE TABLE IF NOT EXISTS`. The database and SQLite sidecar files are excluded from Git. Vite proxies `/api/sessions` to the loopback backend; run `pnpm server` and `pnpm dev` in separate terminals. A static frontend build alone does not serve the session API.
 
 In Labs → Week 2, clicking **+** asks the backend to save a new session with a stable ID, the title **New session**, and its creation time. After the save succeeds, the app adds and selects its row and opens an empty chat. The row menu offers Rename and confirmed Delete. Failed operations keep the last successfully saved state; deleting a session removes its metadata and history in one transaction.
 
@@ -247,3 +248,17 @@ Each session row has a trailing keyboard-accessible three-dot menu containing Re
 `DELETE /api/sessions/:id` removes history rows and session metadata in a single SQLite transaction. It is idempotent for safe deletion retries. Event writes recheck session existence after reading the request body, and SQLite foreign keys enforce session ownership. Pending runs cannot insert events for a deleted session or recreate its metadata; tool calls awaiting their pre-execution history save are not dispatched if that save is rejected. Deletion never touches provider credentials or Keychain.
 
 `src/session-actions.test.ts` uses temporary databases and deterministic model responses. It covers cancellation, deletion of a full calculation history, keeping another session intact across restart, transaction rollback on an injected failure, late writes from a pending run, failed deletion UI state, duplicate confirmation, accessible row actions, and legacy Go send validation. Manual review: inspect the picker and row menus, cancel then confirm a deletion, verify the selected chat becomes empty, and reload to confirm the deleted row stays gone. Restart `pnpm server` to load the new DELETE endpoint before reviewing the UI.
+
+## Library tool: js-tiktoken request metering
+
+Week 2 runs `js-tiktoken` locally before every Manager Agent model request, including every follow-up request after tool execution. It is the first **Library** tool, with a distinct blue label in Tools and Timeline. It runs automatically; it is not an LLM-callable function and is excluded from the tool definitions sent to the model. Week 1 experiments and credential checks retain their existing workflows.
+
+The tokenizer counts the entire serialized outgoing JSON body: instructions/system messages, restored history, prior tool results, current input, role framing, and callable tool definitions. Headers and credentials are excluded. JSON framing is an approximation of provider-side input formatting; the estimate is not billed usage. Only `o200k_base`/`cl100k_base` mappings known to the installed `js-tiktoken` model map are used, plus an explicit list of newer local GPT-5 model IDs covered by the [official OpenAI tiktoken GPT-5 encoding rule](https://github.com/openai/tiktoken/blob/main/tiktoken/model.py), checked 2026-11-10. Unknown model names do not receive a guessed fallback: the item says **Estimate unavailable**. Encoding ranks are bundled and lazy-loaded locally, with no CDN/token-counting service calls.
+
+Each model request has one **Library · js-tiktoken** Timeline item with a stable request ID. The pre-request snapshot displays **Estimated input tokens** and, if rates are known, **Estimated input cost**. After the response it updates the same item with provider-reported **Actual input**, **Actual output**, **Total**, and **Estimated request cost**. Missing usage remains **Not reported**, distinct from an actual zero. Request failures and interrupted requests keep their own item; reopening history never issues a model request.
+
+Pricing is a dated snapshot, not a bill. The current rate sources are the existing OpenCode Console catalog and the [official GPT-4o Mini model page](https://developers.openai.com/api/docs/models/gpt-4o-mini) for its alias and dated snapshot (standard text USD rates, checked 2026-11-10). Other OpenAI models, custom endpoints, Go pricing, unknown actual response models, incomplete input/output usage, or unavailable applicable rates display **Cost unavailable**. Cached input is discounted only when a matching rate is known. The pre-request estimate uses uncached input rates. Currency, per-million rates, source, and snapshot date are saved with the numeric estimates; requested-model and actual-model pricing are kept separate. Account discounts, provider fees and other billing adjustments are not calculated.
+
+History stores immutable `metering` snapshots linked to session, run and request ID. Rebuilding the Timeline folds the snapshots into one item per request. The metering payload has numeric counts/costs and bounded model/library/pricing metadata; it never duplicates prompts, tool arguments, raw provider responses or credentials. Startup migrates the event table's allowed-type constraint in a transaction, preserving existing session IDs and every existing history row. Failed saves retain their stable event IDs for safe retries. A pre-request meter must save before the provider is contacted. Incomplete restored meters remain visible without replay.
+
+Tests in `token-meter.test.ts` and `token-meter-history.test.ts` use placeholders, mocked provider responses, real local tokenization and temporary SQLite databases. They cover supported/unsupported encodings, full outgoing input coverage, pre-request persistence, multiple requests, missing versus zero usage, missing and cached pricing, failed requests, request identity, old-schema migration, Timeline restoration and isolation. Tokenizer rank chunks add bundle size; they load only when their encoding is needed. Restart `pnpm server` before reviewing the new history event type. No token budgets or compression policies are introduced.

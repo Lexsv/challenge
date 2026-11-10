@@ -1,8 +1,12 @@
+import { createAndSelectSession } from "./session-creation";
+import { EmptySessionChat, SessionCreateButton } from "./session-empty-state";
+import { RequestMeterCard } from "./request-meter-card";
+import type { ModelRequestMeter } from "./token-meter";
 import { isWeek2Provider, unsupportedWeek2ProviderMessage, week2ProviderOptions } from "./week2-provider";
 import { SessionDeletion } from "./session-deletion";
 import { SessionRow } from "./session-row";
 import { submitSession } from "./session-send";
-import { credentials, credentialLabel } from "./saved-credentials";
+import { credentials } from "./saved-credentials";
 import { HistoryWriter, restoreHistory } from "./conversation-history";
 import { listSessions, createSession as persistSession, renameSession, emptySession, loadHistory, saveHistoryEvent, deleteSession } from "./session-api";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
@@ -56,6 +60,7 @@ function formatTimelineTime(timestamp: number): string {
 }
 
 type TimelineEvent =
+  | { kind: "metering"; id: string; createdAt: number; runId: string; meter: ModelRequestMeter }
   | {
       kind: "message";
       id: string;
@@ -163,16 +168,19 @@ export function buildWeek2Timeline(
   const messageOrder = new Map(state.messages.map((message, index) => [message.id, index]));
   const toolOrder = new Map(state.toolExecutions.map((execution, index) => [execution.id, index]));
   const phase = (event: TimelineEvent): number => {
+    if (event.kind === "metering") return 2;
     if (event.kind === "message") return event.role === "user" ? 0 : 3;
     if (event.kind === "tool") return 2;
     return event.id.endsWith(":start") ? 1 : 4;
   };
   const insertionOrder = (event: TimelineEvent): number => {
     if (event.kind === "message") return messageOrder.get(event.id) ?? 0;
-    if (event.kind === "tool") return toolOrder.get(event.id) ?? 0;
+    if (event.kind === "tool") return (toolOrder.get(event.id) ?? 0) * 2 + 1;
+    if (event.kind === "metering") return (event.meter.toolExecutionOffset ?? 0) * 2;
     return 0;
   };
-  return [...messages, ...tools, ...runs].sort(
+  const meters: TimelineEvent[] = (state.requestMeters ?? []).map((meter) => ({ kind: 'metering', id: meter.id, createdAt: meter.startedAt, runId: meter.runId, meter }));
+  return [...messages, ...tools, ...runs, ...meters].sort(
     (a, b) =>
       a.createdAt - b.createdAt ||
       (runOrder.get(a.runId) ?? 0) - (runOrder.get(b.runId) ?? 0) ||
@@ -221,19 +229,16 @@ export function Week2AgentToolLab(props: LabProps) {
     }).finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [loadAttempt]);
-  const createSession = async () => {
-    if (saveLock.current || !loaded) return;
-    saveLock.current = true;
-    setSaving(true);
-    setError("");
-    try {
-      const session = emptySession(await persistSession());
+  const createDisabled = loading || !loaded || saving || deleteState.pending;
+  const createSession = () => { void createAndSelectSession({
+    lock: saveLock, ready: loaded && !loading && !deleteState.pending, create: persistSession,
+    onPending: setSaving, onError: setError,
+    onCreated: (saved) => {
+      const session = emptySession(saved);
       setSessions((current) => [...current, session]);
       setSelectedId(session.conversation.id);
-    } catch {
-      setError("Could not create session. No local session was added. Please retry.");
-    } finally { saveLock.current = false; setSaving(false); }
-  };
+    },
+  }); };
   const rename = async () => {
     if (!title.trim() || !renameId || saveLock.current) return;
     saveLock.current = true;
@@ -256,7 +261,7 @@ export function Week2AgentToolLab(props: LabProps) {
       <Paper component="aside" variant="outlined" aria-label="Sessions" sx={{ p: 1, minWidth: 0 }}>
         <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ px: 1 }}>
           <Typography variant="subtitle2" color="text.secondary">Sessions</Typography>
-          <IconButton aria-label="New session" disabled={loading || !loaded || saving || deleteState.pending} onClick={() => void createSession()}>+</IconButton>
+          <SessionCreateButton compact onCreate={createSession} pending={saving} disabled={createDisabled} />
         </Stack>
         {loading && <Typography variant="caption" role="status">Loading sessions…</Typography>}
         {error && <Alert severity="error" action={!loaded ? <Button onClick={() => setLoadAttempt((n) => n + 1)}>Retry</Button> : undefined}>{error}</Alert>}
@@ -271,9 +276,8 @@ export function Week2AgentToolLab(props: LabProps) {
       </Paper>
       <Box sx={{ minWidth: 0 }}>
         {!selectedId && (
-          <Paper variant="outlined" aria-label="Empty chat" sx={{ minHeight: 500, p: 2 }}>
-            <Typography variant="h6" component="h3">Agent Tool Lab</Typography>
-          </Paper>
+          <EmptySessionChat showEmptyState={loaded && !loading && sessions.length === 0}
+            onCreate={createSession} pending={saving} disabled={createDisabled} />
         )}
         {/* Keep each keyed chat mounted: its draft, timeline and pending run belong to that session. */}
         {sessions.map((session) => (
@@ -405,7 +409,7 @@ export function SessionChat({
     const container = scrollRef.current;
     if (!container) return;
     container.scrollTop = container.scrollHeight;
-  }, [timeline.length, running]);
+  }, [timeline, running]);
 
   const send = () => submitSession({
     lock: sendLock, draft: input, ready: !running && historyLoaded && !saveFailed,
@@ -510,7 +514,6 @@ export function SessionChat({
             </Typography>
           )}
           {!isWeek2Provider(provider) && <Alert severity="warning">{unsupportedWeek2ProviderMessage}</Alert>}
-          {useSavedKey && <Typography variant="caption" color="text.secondary">Saved key: present · Verification: {credentialLabel(savedCredential)} · Requests use the local backend.</Typography>}
           {!hasCredential && (
             <Typography variant="caption" color="text.secondary">
               Credentials for {providerLabel} are managed in Providers.
@@ -588,7 +591,7 @@ export function SessionChat({
                   minWidth: 0,
                 }}
               >
-              {event.kind === "message" ? (
+              {event.kind === "metering" ? <RequestMeterCard meter={event.meter} /> : event.kind === "message" ? (
                 <Box
                   key={event.id}
                   sx={{

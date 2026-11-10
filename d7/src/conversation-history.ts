@@ -1,3 +1,4 @@
+import type { ModelRequestMeter } from "./token-meter";
 import type { AgentRun, TextMessage, ToolExecution } from './agent-tool-contracts';
 import type { ManagerConversationState } from './manager-agent';
 
@@ -7,22 +8,29 @@ export type HistoryEvent = {
   sequence?: number;
 } & ({ type: 'message'; payload: TextMessage }
   | { type: 'run'; payload: AgentRun }
-  | { type: 'tool-call' | 'tool-result'; payload: ToolExecution });
+  | { type: 'tool-call' | 'tool-result'; payload: ToolExecution }
+  | { type: 'metering'; payload: ModelRequestMeter });
 
 export function restoreHistory(initial: ManagerConversationState, events: HistoryEvent[]): ManagerConversationState {
   const state = structuredClone(initial);
   state.messages = []; state.runs = []; state.toolExecutions = [];
+  delete state.requestMeters;
   for (const event of structuredClone(events).sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0))) {
     if (event.sessionId !== state.conversation.id) throw new Error('History belongs to another session.');
     if (event.type === 'message') state.messages.push(event.payload);
     else if (event.type === 'run') {
       const index = state.runs.findIndex((run) => run.id === event.payload.id);
       if (index < 0) state.runs.push(event.payload); else state.runs[index] = event.payload;
+    } else if (event.type === 'metering') {
+      const meters = state.requestMeters ??= [];
+      const index = meters.findIndex((meter) => meter.id === event.payload.id);
+      if (index < 0) meters.push(event.payload); else meters[index] = event.payload;
     } else {
       const index = state.toolExecutions.findIndex((tool) => tool.id === event.payload.id);
       if (index < 0) state.toolExecutions.push(event.payload); else state.toolExecutions[index] = event.payload;
     }
   }
+  for (const meter of state.requestMeters ?? []) if (!meter.endedAt) meter.status = 'incomplete';
   // Interrupted work is displayed, never resumed or dispatched during restoration.
   for (const tool of state.toolExecutions) if (!tool.endedAt) {
     tool.status = 'incomplete';

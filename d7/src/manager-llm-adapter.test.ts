@@ -251,6 +251,10 @@ describe("manager llm provider mapping", () => {
     expect(
       JSON.parse((openaiRequest[1] as RequestInit).body as string).tools[0].name,
     ).toBe("builtin_tax_calculator");
+    expect(JSON.parse((openaiRequest[1] as RequestInit).body as string).tools).toEqual([{
+      type: 'function', name: 'builtin_tax_calculator', description: 'Calculates tax.',
+      parameters: { type: 'object', properties: {}, required: [] },
+    }]);
 
     const opencodeRequest = fetcher.mock.calls[1];
     expect(opencodeRequest[0]).toContain("https://opencode.ai/inference/openai/v1/chat/completions");
@@ -259,8 +263,12 @@ describe("manager llm provider mapping", () => {
       messages: [{ role: "user", content: "hello" }],
     });
     expect(
-      JSON.parse((opencodeRequest[1] as RequestInit).body as string).tools[0].name,
+      JSON.parse((opencodeRequest[1] as RequestInit).body as string).tools[0].function.name,
     ).toBe("builtin_tax_calculator");
+    expect(JSON.parse((opencodeRequest[1] as RequestInit).body as string).tools).toEqual([{
+      type: 'function', function: { name: 'builtin_tax_calculator', description: 'Calculates tax.',
+        parameters: { type: 'object', properties: {}, required: [] } },
+    }]);
   });
 
   it("maps provider tool calls back to registered tool ids", async () => {

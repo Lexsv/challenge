@@ -49,7 +49,7 @@ describe("Day 7 baseline application shell", () => {
     expect(html).toContain(
       "Create your first custom tool to extend your agents&#x27; capabilities.",
     );
-    expect(html).toContain("Add Tool");
+    expect(html).toContain("Add custom tool");
     expect(html).not.toContain(">Run Tool<");
   });
 });

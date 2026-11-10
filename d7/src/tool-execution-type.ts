@@ -1,8 +1,9 @@
+import LocalLibraryOutlined from "@mui/icons-material/LocalLibraryOutlined";
 import CodeOutlined from "@mui/icons-material/CodeOutlined";
 import PublicOutlined from "@mui/icons-material/PublicOutlined";
 import SmartToyOutlined from "@mui/icons-material/SmartToyOutlined";
 
-export type ToolExecutionType = "function" | "http" | "agent";
+export type ToolExecutionType = "function" | "http" | "agent" | "library";
 
 export const toolExecutionTypeMeta: Record<
   ToolExecutionType,
@@ -13,6 +14,7 @@ export const toolExecutionTypeMeta: Record<
     icon: typeof CodeOutlined;
   }
 > = {
+  library: { label: "Library", color: "#1B5EA8", background: "#E3EFFD", icon: LocalLibraryOutlined },
   function: {
     label: "Function",
     color: "#6954CC",

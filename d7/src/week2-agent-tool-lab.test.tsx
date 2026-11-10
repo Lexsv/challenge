@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { credentials } from "./saved-credentials";
+import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ProviderRegistry } from "./provider-registry";
 import {
@@ -83,7 +84,7 @@ function useIdenticalTimestamps(state: ManagerConversationState): void {
 }
 
 describe("week 2 agent tool lab", () => {
-  it("starts with an empty session list and blank chat", () => {
+  it("keeps the chat blank while the session list is loading", () => {
     const html = renderToStaticMarkup(
       <Week2AgentToolLab toolRegistry={toolRegistry} registry={new ProviderRegistry()}
         openAIModel="gpt-5.6-terra" onOpenAIModelChange={() => {}} openAIKey=""
@@ -95,6 +96,7 @@ describe("week 2 agent tool lab", () => {
     expect(html).toContain('aria-label="New session"');
     expect(html).toContain('aria-label="Empty chat"');
     expect(html).not.toContain('aria-label="Send message"');
+    expect(html).not.toContain("Start a new session");
     expect(html).not.toContain('MuiListItemButton-root');
   });
 
@@ -115,6 +117,8 @@ describe("week 2 agent tool lab", () => {
     expect(html).toContain("Start a conversation with OpenAI · gpt-5.6-terra");
     expect(html).toContain("Open chat settings");
     expect(html).toContain("managed in Providers");
+    expect(html).not.toContain("Saved key: present");
+    expect(html).not.toContain("Requests use the local backend");
     expect(html).toContain("Send message");
     expect(html).toContain("width:48px");
     expect(html).toContain("height:48px");
@@ -249,4 +253,25 @@ describe("week 2 agent tool lab", () => {
       "r2:end",
     ]);
   });
+});
+
+it("omits the session-title credential caption even when a saved key is present", async () => {
+  const fetcher = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ saved: true, verification: 'verified' }) });
+  vi.stubGlobal('fetch', fetcher);
+  try {
+    await credentials.verify('openai');
+    const html = renderToStaticMarkup(<SessionChat
+      initialConversation={createManagerConversation()} title="Saved session"
+      toolRegistry={toolRegistry} registry={new ProviderRegistry()} openAIModel="gpt-5.6-terra"
+      onOpenAIModelChange={() => {}} openAIKey=""
+      openCodeKeys={{ 'opencode-console': '', 'opencode-go': '' }} />);
+    expect(html).toContain('Saved session');
+    expect(html).not.toContain('Saved key: present');
+    expect(html).not.toContain('Verification:');
+    expect(html).not.toContain('Requests use the local backend');
+  } finally {
+    fetcher.mockResolvedValue({ ok: true, json: async () => ({ saved: false, verification: 'unchecked' }) });
+    await credentials.forget('openai');
+    vi.unstubAllGlobals();
+  }
 });

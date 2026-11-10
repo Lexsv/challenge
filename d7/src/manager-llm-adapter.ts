@@ -1,3 +1,5 @@
+import { beginMeter, finishMeter, type RequestMeter } from "./token-meter";
+import { DEFAULT_ENDPOINTS } from "./provider-endpoints";
 import type { ProviderRegistry } from "./provider-registry";
 import { consoleTransportUrl } from "./opencode-console-transport";
 import type {
@@ -296,7 +298,28 @@ export function createManagerLlmAdapter(input: {
     });
   };
 
-  const executeOpenAI = async (payload: { messages: readonly ManagerLlmMessage[]; tools: readonly ToolCatalogItem[]; }) => {
+  const meteredRequest = async (body: unknown, target: string, onMeter?: (meter: RequestMeter) => Promise<void>) => {
+    const pricingEndpoint = input.useSavedKey ? DEFAULT_ENDPOINTS[input.providerId] : endpoint;
+    const initial = await beginMeter(input.providerId, input.model, body, pricingEndpoint);
+    await onMeter?.(initial);
+    let data: unknown;
+    try {
+      const response = await providerFetch(body, target);
+      if (!response.ok) throw new Error(`Manager provider request failed (${response.status}).`);
+      data = await response.json();
+    } catch (error) {
+      await onMeter?.({ ...initial, status: 'failed', endedAt: Date.now() });
+      throw error;
+    }
+    const completed = finishMeter(initial, data, pricingEndpoint);
+    if (input.apiKey && completed.actualModel?.includes(input.apiKey)) {
+      delete completed.actualModel; delete completed.actualPricing; delete completed.estimatedRequestCost;
+    }
+    await onMeter?.(completed);
+    return data;
+  };
+
+  const executeOpenAI = async (payload: { messages: readonly ManagerLlmMessage[]; tools: readonly ToolCatalogItem[]; onMeter?: (meter: RequestMeter) => Promise<void> }) => {
     const nameMap = buildProviderToolNameMap(payload.tools);
     const body = {
       model: input.model,
@@ -305,35 +328,27 @@ export function createManagerLlmAdapter(input: {
       tools: toolSchemas(payload.tools, nameMap),
       tool_choice: "auto",
     };
-    const response = await providerFetch(body, endpoint);
-    if (!response.ok) {
-      throw new Error(`OpenAI manager request failed (${response.status}).`);
-    }
-    return parseOpenAIResponses(await response.json(), nameMap);
+    return parseOpenAIResponses(await meteredRequest(body, endpoint, payload.onMeter), nameMap);
   };
 
-  const executeOpenCode = async (payload: { messages: readonly ManagerLlmMessage[]; tools: readonly ToolCatalogItem[]; }) => {
+  const executeOpenCode = async (payload: { messages: readonly ManagerLlmMessage[]; tools: readonly ToolCatalogItem[]; onMeter?: (meter: RequestMeter) => Promise<void> }) => {
     const nameMap = buildProviderToolNameMap(payload.tools);
     const body = {
       model: input.model,
       messages: toOpenAIChatMessages(payload.messages, nameMap),
-      tools: toolSchemas(payload.tools, nameMap),
+      tools: toolSchemas(payload.tools, nameMap).map(({ type, ...definition }) => ({ type, function: definition })),
       tool_choice: "auto",
     };
-    const response = await providerFetch(body, consoleTransportUrl(endpoint));
-    if (!response.ok) {
-      throw new Error(`OpenCode manager request failed (${response.status}).`);
-    }
-    return parseOpenAIChatCompletions(await response.json(), nameMap);
+    return parseOpenAIChatCompletions(await meteredRequest(body, consoleTransportUrl(endpoint), payload.onMeter), nameMap);
   };
 
   return {
-    complete: async ({ messages, tools }) => {
+    complete: async ({ messages, tools, onMeter }) => {
       if (!input.useSavedKey && !input.apiKey.trim()) {
         throw new Error("Provider API key is missing.");
       }
-      if (input.providerId === "openai") return executeOpenAI({ messages, tools });
-      return executeOpenCode({ messages, tools });
+      if (input.providerId === "openai") return executeOpenAI({ messages, tools, onMeter });
+      return executeOpenCode({ messages, tools, onMeter });
     },
   };
 }

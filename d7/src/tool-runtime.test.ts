@@ -257,12 +257,14 @@ describe("built-in tool runtime", () => {
       "builtin.currency_converter",
       "builtin.exchange_rate",
       "builtin.tax_calculator",
+      "library.js-tiktoken",
     ]);
     const executionTypes = Object.fromEntries(
       builtIns.map((tool) => [tool.id, tool.executionType]),
     );
     expect(executionTypes).toEqual({
       "builtin.tax_calculator": "function",
+      "library.js-tiktoken": "library",
       "builtin.currency_converter": "function",
       "builtin.exchange_rate": "http",
     });
