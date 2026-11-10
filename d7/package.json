@@ -8,7 +8,9 @@
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",
-    "preview": "vite preview --host 127.0.0.1"
+    "preview": "vite preview --host 127.0.0.1",
+    "server": "node server/sessions.mjs",
+    "test:server": "node --test server/session-integration.mjs"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",

@@ -17,3 +17,14 @@ work/
 /expert-lab-d3.tar
 /ai-advent-d4.tar
 /challenge-d6.tar
+
+# Local session database and SQLite sidecars
+/data/
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+
+# These are source modules, not credential data files.
+!/server/credentials.mjs
+!/server/credentials.d.mts

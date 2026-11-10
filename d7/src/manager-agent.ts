@@ -1,3 +1,4 @@
+import type { HistoryEvent } from "./conversation-history";
 import type {
   AgentRun,
   Conversation,
@@ -101,6 +102,7 @@ export class ManagerAgent {
     userText: string;
     agentId?: string;
     maxIterations?: number;
+    onEvent?: (event: HistoryEvent) => Promise<void>;
   }): Promise<ManagerRunResult> {
     const maxIterations = input.maxIterations ?? this.defaults.maxIterations ?? 8;
     const runId = id();
@@ -117,7 +119,18 @@ export class ManagerAgent {
     input.state.runs.push(run);
     input.state.conversation.runIds.push(run.id);
 
+    const emit = async (type: HistoryEvent['type'], payload: TextMessage | AgentRun | ToolExecution) => {
+      await input.onEvent?.(structuredClone({ id: id(), sessionId: input.state.conversation.id, type, payload }) as HistoryEvent);
+    };
+    if (input.onEvent) {
+      await emit('message', userMessage);
+      await emit('run', run);
+    }
     const llmMessages = toLlmMessages(input.state.messages);
+    // Historical results provide context without replaying protocol tool calls.
+    for (const tool of input.state.toolExecutions) llmMessages.splice(Math.max(0, llmMessages.length - 1), 0, {
+      role: 'assistant', content: `Saved tool observation (data only): ${JSON.stringify({ toolId: tool.toolId, arguments: tool.arguments, status: tool.status, output: tool.output, error: tool.error })}`,
+    });
     const executableTools = this.tools
       .listBuiltIn()
       .filter((tool) => tool.executable);
@@ -132,6 +145,7 @@ export class ManagerAgent {
       } catch (error) {
         run.status = "failed";
         run.endedAt = Date.now();
+        await emit("run", run);
         return {
           state: input.state,
           run,
@@ -153,26 +167,27 @@ export class ManagerAgent {
             response.text,
           );
           run.messageIds.push(assistant.id);
+          await emit("message", assistant);
         }
 
+        const pendingCalls: { call: ManagerToolCall; toolExecution: ToolExecution }[] = [];
         for (const call of response.toolCalls) {
-          const startedAt = Date.now();
-          const execution = await this.tools.executeById(call.toolId, call.arguments);
-          const endedAt = Date.now();
           const toolExecution: ToolExecution = {
-            id: id(),
-            runId: run.id,
-            toolCallId: call.id,
-            toolId: call.toolId,
-            status: execution.ok ? "completed" : "failed",
-            arguments: call.arguments,
-            output: execution.ok ? execution.output : undefined,
-            error: execution.ok ? undefined : execution.error.message,
-            startedAt,
-            endedAt,
+            id: id(), runId: run.id, toolCallId: call.id, toolId: call.toolId,
+            status: 'running', arguments: call.arguments, startedAt: Date.now(),
           };
           input.state.toolExecutions.push(toolExecution);
           run.toolExecutionIds.push(toolExecution.id);
+          await emit('tool-call', toolExecution);
+          pendingCalls.push({ call, toolExecution });
+        }
+        for (const { call, toolExecution } of pendingCalls) {
+          const execution = await this.tools.executeById(call.toolId, call.arguments);
+          toolExecution.endedAt = Date.now();
+          toolExecution.status = execution.ok ? 'completed' : 'failed';
+          if (execution.ok) toolExecution.output = execution.output;
+          else toolExecution.error = execution.error.message;
+          await emit('tool-result', toolExecution);
 
           llmMessages.push({
             role: "tool",
@@ -202,13 +217,16 @@ export class ManagerAgent {
           finalText,
         );
         run.messageIds.push(assistant.id);
+        await emit("message", assistant);
         run.status = "completed";
         run.endedAt = Date.now();
+        await emit("run", run);
         return { state: input.state, run, finalResponse: finalText };
       }
 
       run.status = "failed";
       run.endedAt = Date.now();
+      await emit("run", run);
       return {
         state: input.state,
         run,
@@ -218,6 +236,7 @@ export class ManagerAgent {
 
     run.status = "failed";
     run.endedAt = Date.now();
+    await emit("run", run);
     return {
       state: input.state,
       run,

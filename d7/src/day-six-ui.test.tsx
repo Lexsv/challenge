@@ -20,7 +20,9 @@ describe("Day 7 baseline application shell", () => {
     expect(html).toContain(">Week 1<");
     expect(html).toContain(">Week 2<");
     expect(html).toContain("Agent Tool Lab");
-    expect(html).toContain("Start a conversation with OpenAI · gpt-5.6-terra");
+    expect(html).toContain("Sessions");
+    expect(html).toContain('aria-label="Empty chat"');
+    expect(html).not.toContain("Start a conversation with");
     expect(html.match(/>Run Experiment</g)).toHaveLength(1);
     expect(html).toContain("Run Mode");
     expect(html).toContain("Open Full Report");

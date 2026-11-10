@@ -2,7 +2,8 @@ export type AgentExecutionStatus =
   | "pending"
   | "running"
   | "completed"
-  | "failed";
+  | "failed"
+  | "incomplete";
 
 export interface BaseMessage {
   id: string;

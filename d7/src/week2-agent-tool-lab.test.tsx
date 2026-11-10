@@ -3,10 +3,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { ProviderRegistry } from "./provider-registry";
 import {
   Week2AgentToolLab,
+  SessionChat,
   buildWeek2Timeline,
   technicalEventMaxWidth,
   timelineToolCategoryLabel,
 } from "./week2-agent-tool-lab";
+import { createManagerConversation } from "./manager-agent";
 import type { ManagerConversationState } from "./manager-agent";
 import { createBuiltInToolRegistry } from "./tool-runtime";
 
@@ -81,9 +83,26 @@ function useIdenticalTimestamps(state: ManagerConversationState): void {
 }
 
 describe("week 2 agent tool lab", () => {
+  it("starts with an empty session list and blank chat", () => {
+    const html = renderToStaticMarkup(
+      <Week2AgentToolLab toolRegistry={toolRegistry} registry={new ProviderRegistry()}
+        openAIModel="gpt-5.6-terra" onOpenAIModelChange={() => {}} openAIKey=""
+        openCodeKeys={{ "opencode-console": "", "opencode-go": "" }} />,
+    );
+    expect(html).toContain('aria-label="Session list"');
+    expect(html.indexOf('aria-label="Sessions"')).toBeLessThan(html.indexOf('aria-label="Empty chat"'));
+    expect(html).toContain("240px minmax(0, 1fr)");
+    expect(html).toContain('aria-label="New session"');
+    expect(html).toContain('aria-label="Empty chat"');
+    expect(html).not.toContain('aria-label="Send message"');
+    expect(html).not.toContain('MuiListItemButton-root');
+  });
+
   it("renders compact chat workspace", () => {
     const html = renderToStaticMarkup(
-      <Week2AgentToolLab
+      <SessionChat
+        initialConversation={createManagerConversation()}
+        title="Agent Tool Lab"
         toolRegistry={toolRegistry}
         registry={new ProviderRegistry()}
         openAIModel="gpt-5.6-terra"

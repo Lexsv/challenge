@@ -1,6 +1,6 @@
 import { defineConfig } from "vite";
 
-// Only these two same-origin paths are proxied; the upstream host is fixed.
+// Provider routes use a fixed upstream; session metadata stays on the loopback backend.
 export default defineConfig({
   server: {
     proxy: {
@@ -9,6 +9,8 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path) => path === "/__d5_opencode_console/models" ? "/inference/v1/models" : path.replace(/^\/__d5_opencode_console\//, "/inference/openai/v1/"),
       },
+      "/api/credentials": { target: "http://127.0.0.1:3001" },
+      "/api/sessions": { target: "http://127.0.0.1:3001" },
     },
   },
 });

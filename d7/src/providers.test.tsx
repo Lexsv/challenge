@@ -33,6 +33,8 @@ describe("provider settings", () => {
     expect(html).not.toContain("OpenCode Go");
     expect(html).toContain("OpenAI: Verified");
     expect(html).toContain("Not verified");
+    expect(html).toContain("Forget all keys");
+    expect(html).not.toContain("Remember on this Mac");
     expect(fetcher).not.toHaveBeenCalled();
     fetcher.mockRestore();
   });

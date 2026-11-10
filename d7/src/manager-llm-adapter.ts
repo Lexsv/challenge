@@ -275,6 +275,7 @@ export function createManagerLlmAdapter(input: {
   providerId: ProviderId;
   model: string;
   apiKey: string;
+  useSavedKey?: boolean;
   registry: ProviderRegistry;
   fetcher?: typeof fetch;
 }): ManagerLlmAdapter {
@@ -283,6 +284,17 @@ export function createManagerLlmAdapter(input: {
   if (!endpoint) {
     throw new Error(`Endpoint is not configured for provider: ${input.providerId}`);
   }
+
+  const providerFetch = async (body: unknown, target: string) => {
+    if (input.useSavedKey) {
+      return fetcher(`/api/credentials/${input.providerId}/request`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+    }
+    return fetcher(target, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${input.apiKey}` }, body: JSON.stringify(body),
+    });
+  };
 
   const executeOpenAI = async (payload: { messages: readonly ManagerLlmMessage[]; tools: readonly ToolCatalogItem[]; }) => {
     const nameMap = buildProviderToolNameMap(payload.tools);
@@ -293,14 +305,7 @@ export function createManagerLlmAdapter(input: {
       tools: toolSchemas(payload.tools, nameMap),
       tool_choice: "auto",
     };
-    const response = await fetcher(endpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${input.apiKey}`,
-      },
-      body: JSON.stringify(body),
-    });
+    const response = await providerFetch(body, endpoint);
     if (!response.ok) {
       throw new Error(`OpenAI manager request failed (${response.status}).`);
     }
@@ -315,14 +320,7 @@ export function createManagerLlmAdapter(input: {
       tools: toolSchemas(payload.tools, nameMap),
       tool_choice: "auto",
     };
-    const response = await fetcher(consoleTransportUrl(endpoint), {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${input.apiKey}`,
-      },
-      body: JSON.stringify(body),
-    });
+    const response = await providerFetch(body, consoleTransportUrl(endpoint));
     if (!response.ok) {
       throw new Error(`OpenCode manager request failed (${response.status}).`);
     }
@@ -331,7 +329,7 @@ export function createManagerLlmAdapter(input: {
 
   return {
     complete: async ({ messages, tools }) => {
-      if (!input.apiKey.trim()) {
+      if (!input.useSavedKey && !input.apiKey.trim()) {
         throw new Error("Provider API key is missing.");
       }
       if (input.providerId === "openai") return executeOpenAI({ messages, tools });

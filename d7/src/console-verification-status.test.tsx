@@ -11,8 +11,9 @@ describe("Console verification presentation", () => {
     const html = renderToStaticMarkup(<ConsoleVerificationStatus status={success} />);
     expect(html).toContain("Verified");
     expect(html).toContain("MuiChip-colorSuccess");
-    expect(html).toContain("kimi-k3");
-    expect(renderToStaticMarkup(<ConsoleVerificationStatus status={success} unsaved />)).toContain("Verified (unsaved)");
+    expect(html).not.toContain("kimi-k3");
+    expect(html).not.toContain("https://opencode.ai");
+    expect(renderToStaticMarkup(<ConsoleVerificationStatus status={success} unsaved />)).toContain("Provider settings have unsaved changes.");
   });
   it("keeps catalog availability, failures, and partial checks distinct", () => {
     expect(consoleStatusKind("Verifying connection…")).toBe("verifying");
@@ -28,4 +29,12 @@ describe("Console verification presentation", () => {
     const expert = { id: "x", name: "A", description: "D", rolePrompt: "R", provider: "opencode-go", model: "kimi-k3", maxTokens: 128, parameters: [] };
     expect(resolveExpert(expert, "other", "openai")).toEqual(expert);
   });
+});
+
+it('does not expose raw provider messages or mark permission errors as rejected keys', () => {
+  const html = renderToStaticMarkup(<ConsoleVerificationStatus status="Authentication: not established. Model access or permission denied (403). placeholder-private-message" />);
+  expect(html).toContain('Not verified');
+  expect(html).not.toContain('MuiChip-colorError');
+  expect(html).not.toContain('placeholder-private-message');
+  expect(html).toContain('Check permissions and retry Verify in Providers.');
 });

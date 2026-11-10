@@ -1,3 +1,5 @@
+import { CredentialIndicator, credentialStatusFromText } from "./credential-indicator";
+import type { SavedCredentialStatus } from "./saved-credentials";
 import { useState } from "react";
 import { Accordion, AccordionDetails, AccordionSummary, Alert, Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, IconButton, InputAdornment, MenuItem, Stack, TextField, Typography } from "@mui/material";
 import Close from "@mui/icons-material/Close";
@@ -8,14 +10,12 @@ import VisibilityOff from "@mui/icons-material/VisibilityOff";
 import { ParameterEditor } from "./parameter-editor";
 import { validateParameters, type ApiParameter } from "./api-parameters";
 import { validateEndpoint, consoleConfiguredEndpoint, type BuiltinEndpointId } from "./provider-endpoints";
-import { consoleStatusKind } from "./console-verification-status";
-import { VerificationChip } from "./verification-chip";
 
 export type ProviderDraft = { id: string; name: string; endpoint: string; key: string; model: string; models: string[]; parameters: ApiParameter[]; builtin: boolean };
 
-export function ProviderConfigurationDialog({ draft, onChange, onClose, onSave, onDelete, onVerify, status, onDiscover, isVerifying = false }: {
+export function ProviderConfigurationDialog({ draft, onChange, onClose, onSave, onDelete, onVerify, status, onDiscover, isVerifying = false, hasSavedKey = false, credentialStatus }: {
   draft: ProviderDraft; onChange: (draft: ProviderDraft) => void; onClose: () => void; onSave: () => void;
-  onDelete?: () => void; onVerify?: () => void; status: string; onDiscover?: () => void; isVerifying?: boolean;
+  onDelete?: () => void; onVerify?: () => void; status: string; onDiscover?: () => void; isVerifying?: boolean; hasSavedKey?: boolean; credentialStatus?: SavedCredentialStatus;
 }) {
   const [visible, setVisible] = useState(false);
   const [modelInput, setModelInput] = useState("");
@@ -36,16 +36,11 @@ export function ProviderConfigurationDialog({ draft, onChange, onClose, onSave, 
         <MenuItem value="">Select a model</MenuItem>{draft.model && !draft.models.includes(draft.model) && <MenuItem value={draft.model} disabled>{draft.model} (previously selected; unavailable)</MenuItem>}{draft.models.map((id) => <MenuItem key={id} value={id}>{id}</MenuItem>)}
       </TextField>
       <Stack direction={{ xs: "column", sm: "row" }} spacing={2} alignItems="flex-start">
-        <TextField fullWidth label="API Key" type={visible ? "text" : "password"} autoComplete="off" value={draft.key} onChange={(e) => onChange({ ...draft, key: e.target.value })} helperText="Stored in memory only." slotProps={{ input: { endAdornment: <InputAdornment position="end"><IconButton aria-label={visible ? "Hide API key" : "Show API key"} onClick={() => setVisible(!visible)}>{visible ? <VisibilityOff /> : <Visibility />}</IconButton></InputAdornment> } }} />
-        <Button variant="contained" size="small" onClick={onVerify} disabled={!onVerify || !draft.key.trim() || (draft.id !== "opencode-console" && !draft.model) || isVerifying} sx={{ flexShrink: 0 }}>{isVerifying ? "Verifying…" : "Verify"}</Button>
+        <TextField fullWidth label="API Key" type={visible ? "text" : "password"} autoComplete="off" value={draft.key} onChange={(e) => onChange({ ...draft, key: e.target.value })} helperText={draft.builtin && ["openai", "opencode-console"].includes(draft.id) ? "Verify saves an accepted key in this Mac’s Keychain. Saved keys are never displayed. Console checks may use tokens." : "Stored in memory only."} slotProps={{ input: { endAdornment: <InputAdornment position="end"><IconButton aria-label={visible ? "Hide API key" : "Show API key"} onClick={() => setVisible(!visible)}>{visible ? <VisibilityOff /> : <Visibility />}</IconButton></InputAdornment> } }} />
+        <Button variant="contained" size="small" onClick={onVerify} disabled={!onVerify || (!draft.key.trim() && !hasSavedKey) || (draft.id !== "opencode-console" && !draft.model) || isVerifying} sx={{ flexShrink: 0 }}>Verify</Button>
       </Stack>
       <Stack direction={{ xs: "column", sm: "row" }} gap={1} justifyContent="space-between" alignItems={{ sm: "center" }}>
-        <Box sx={{ minWidth: 0 }}>{draft.id === "opencode-console" ? <Stack spacing={0.5} alignItems="flex-start">
-          <VerificationChip kind={consoleStatusKind(status)} />
-          {(consoleStatusKind(status) === "failed" || status.startsWith("Save the endpoint")) && (
-            <Typography variant="body2" sx={{ overflowWrap: "anywhere" }}>{status.split(" Model: not verified.")[0]}</Typography>
-          )}
-        </Stack> : <Alert severity={status === "Verified" ? "success" : status.startsWith("Verification failed") || status.startsWith("Authentication failed") || status.includes("denied (403)") || status.includes("rejected (") ? "error" : "info"}>{status}</Alert>}</Box>
+        <Box sx={{ minWidth: 0 }}><CredentialIndicator provider={draft.name} showProvider={false} status={isVerifying ? { saved: hasSavedKey, verification: 'checking' } : credentialStatus ?? credentialStatusFromText(status, hasSavedKey)} /></Box>
       </Stack>
       {error && <Alert severity="error">Check the parameter templates in Advanced settings.</Alert>}
       <Accordion disableGutters elevation={0} sx={{ borderTop: 1, borderColor: "divider", "&:before": { display: "none" } }}>
@@ -61,6 +56,6 @@ export function ProviderConfigurationDialog({ draft, onChange, onClose, onSave, 
         </Stack></AccordionDetails>
       </Accordion>
     </Stack></DialogContent>
-    <DialogActions sx={{ p: 2, justifyContent: "space-between", flexWrap: "wrap", gap: 1 }}><Button color="error" onClick={onDelete} disabled={!onDelete}>Delete</Button><Box><Button onClick={onClose}>Cancel</Button><Button variant="contained" onClick={onSave} disabled={!draft.name.trim() || !validEndpoint || !!error || (!draft.model && draft.parameters.length > 0) || isVerifying}>Save</Button></Box></DialogActions>
+    <DialogActions sx={{ p: 2, justifyContent: "space-between", flexWrap: "wrap", gap: 1 }}><Button color="error" onClick={onDelete} disabled={!onDelete}>Forget key</Button><Box><Button onClick={onClose}>Cancel</Button><Button variant="contained" onClick={onSave} disabled={!draft.name.trim() || !validEndpoint || !!error || (!draft.model && draft.parameters.length > 0) || isVerifying}>Save</Button></Box></DialogActions>
   </Dialog>;
 }

@@ -1,5 +1,7 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Alert, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle, IconButton, List, ListItemButton, ListItemIcon, ListItemText, MenuItem, Paper, Stack, Tabs, Tab, TextField, Typography } from "@mui/material";
+import { CredentialIndicator, credentialStatusFromText } from "./credential-indicator";
+import { credentials, credentialLabel, savedProviders, type SavedProvider } from "./saved-credentials";
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { Alert, Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, IconButton, List, ListItemButton, ListItemIcon, ListItemText, MenuItem, Paper, Stack, Tabs, Tab, TextField, Typography } from "@mui/material";
 import StorageOutlined from "@mui/icons-material/StorageOutlined";
 import Refresh from "@mui/icons-material/Refresh";
 import SettingsOutlined from "@mui/icons-material/SettingsOutlined";
@@ -13,7 +15,7 @@ import { verificationSettings } from "./openai-model-compat";
 import { validateParameters, type ApiParameter } from "./api-parameters";
 import { ParameterEditor } from "./parameter-editor";
 import type { VerificationStatus } from "./connection";
-import { deleteTemplates, openTemplates, saveTemplates, switchTemplateModel } from "./provider-template-state";
+import { openTemplates, saveTemplates, switchTemplateModel } from "./provider-template-state";
 import { DEFAULT_ENDPOINTS, consoleBaseEndpoint, consoleConfiguredEndpoint } from "./provider-endpoints";
 import { consoleVerificationPlan, selectConsoleVerificationPlan, verifyConsoleModel } from "./opencode-console-verification";
 import { consoleStatusKind } from "./console-verification-status";
@@ -85,6 +87,11 @@ export function Providers({ model, verification, openAISettings: _oldOpenAISetti
   adapter?: Adapter; referencedProviders?: string[]; onDiscovery?: () => void; onConsoleStatusChange?: (value: { kind: VerificationKind; unsaved: boolean }) => void;
 }) {
   const [registry] = useState(() => suppliedRegistry ?? createProviderRegistry());
+  const credentialStates = useSyncExternalStore(credentials.subscribe, credentials.getSnapshot, credentials.getSnapshot);
+  useEffect(() => { credentials.start(); }, []);
+  const [forgetError, setForgetError] = useState("");
+  const [forgetting, setForgetting] = useState(false);
+  const [confirmForgetAll, setConfirmForgetAll] = useState(false);
   const [providers, setProviders] = useState(readProviders);
   const [selectedId, setSelectedId] = useState("openai");
   const [view, setView] = useState<ModelView | "settings">("models");
@@ -110,7 +117,7 @@ export function Providers({ model, verification, openAISettings: _oldOpenAISetti
   };
   const saveCustomProvider = (provider: CustomProvider) =>
     persist([...providers.filter((entry) => entry.id !== provider.id), provider]);
-  const close = () => { version.current++; setDraft(null); setConfirmDelete(false); setConfirmEndpoint(false); };
+  const close = () => { version.current++; setIsVerifying(false); setDraft(null); setConfirmDelete(false); setConfirmEndpoint(false); };
   const configuredEndpoint = (id: string, endpoint: string) => {
     try { return id === "opencode-console" ? consoleConfiguredEndpoint(endpoint) : endpoint; } catch { return ""; }
   };
@@ -123,7 +130,7 @@ export function Providers({ model, verification, openAISettings: _oldOpenAISetti
     setDraft({ ...provider, endpoint: id === "opencode-console" ? consoleBaseEndpoint(registry.endpointFor(id) ?? provider.endpoint) : registry.endpointFor(id) ?? provider.endpoint, builtin: true, key: keys?.[id] ?? "", model: chosen, models: [...registry.modelOptionsFor(id)], parameters: params[chosen] ?? [] });
     const unverifiedStatus = id === "opencode-console" ? "Authentication: not checked. Model: not checked." : "Not verified";
     const savedStatus = statuses[id] ?? (id === "openai" && verification === "verified" ? "Verified" : unverifiedStatus);
-    setStatus(id === "opencode-console" || chosen === savedModel ? savedStatus : unverifiedStatus);
+    setStatus(credentialStates[id as SavedProvider] ? credentialLabel(credentialStates[id as SavedProvider]) : id === "opencode-console" || chosen === savedModel ? savedStatus : unverifiedStatus);
   };
   const openCustom = (provider?: CustomProvider, requestedModel?: string) => {
     const p = provider ?? { id: crypto.randomUUID(), name: "", endpoint: "", key: "", models: [] };
@@ -139,6 +146,7 @@ export function Providers({ model, verification, openAISettings: _oldOpenAISetti
     const verifiedModelChanged = next.id !== "opencode-console" && next.model !== draft.model;
     if (connectionChanged || verifiedModelChanged) {
       version.current++;
+      setIsVerifying(false);
       setStatus(next.id === "gemini" ? "Verification not supported yet. Gemini execution is also unavailable." : !next.builtin ? "Custom provider verification and execution are unavailable." : next.id === "opencode-console" ? "Authentication: not checked. Model: not checked." : "Not verified");
     }
     if (next.model !== draft.model) {
@@ -169,7 +177,26 @@ export function Providers({ model, verification, openAISettings: _oldOpenAISetti
     }
     close();
   };
+  useEffect(() => {
+    if (draft?.builtin && !draft.key.trim() && credentialStates[draft.id as SavedProvider]) setStatus(credentialLabel(credentialStates[draft.id as SavedProvider]));
+  }, [credentialStates, draft?.id, draft?.key]);
   const requestVerify = () => {
+    if (draft && (draft.id === 'openai' || draft.id === 'opencode-console')) {
+      if (isVerifying || forgetting) return;
+      const selected = draft;
+      const revision = ++version.current;
+      setIsVerifying(true); setStatus('Checking…');
+      void credentials.verify(selected.id as SavedProvider, selected.key.trim() || undefined).then((result) => {
+        if (version.current !== revision || !result) return;
+        setStatus(credentialLabel(result));
+        if (result.verification === 'verified' && selected.key.trim()) {
+          setDraft((current) => current?.id === selected.id ? { ...current, key: '' } : current);
+          onSaveBuiltin?.(selected.id as BuiltinId, '', selected.id === 'openai' ? model : savedModels[selected.id] ?? '', false);
+        }
+      }).finally(() => { if (version.current === revision) setIsVerifying(false); });
+      return;
+    }
+
     if (!draft || !draft.builtin || draft.id === "gemini" || !draft.key.trim() || (draft.id !== "opencode-console" && !draft.model)) return;
     const selected = structuredClone(draft);
     const endpoint = configuredEndpoint(selected.id, selected.endpoint);
@@ -228,19 +255,35 @@ export function Providers({ model, verification, openAISettings: _oldOpenAISetti
       if (version.current === current) { setDraft((p) => p && p.id === id ? { ...p, models: [...registry.modelOptionsFor(id)] } : p); if (id === "opencode-console") setConsoleCatalogStatus(`Catalog available: ${models?.length ?? 0} discovered models. The catalog does not verify authentication.`); else setStatus("Model capabilities refreshed. Verification is still required."); }
     } catch { if (version.current === current) { if (id === "opencode-console") setConsoleCatalogStatus("Catalog discovery failed. Authentication was not checked."); else setStatus("Model discovery failed."); } }
   };
-  const remove = () => {
-    if (!draft) return;
-    if (draft.builtin) {
-      registry.setEndpoint(draft.id as BuiltinId, DEFAULT_ENDPOINTS[draft.id as BuiltinId]);
-      setSavedParameters((current) => deleteTemplates(current, draft.id));
-      setSavedModels((current) => { const next = { ...current }; delete next[draft.id]; return next; });
-      setStatuses((current) => ({ ...current, [draft.id]: "Not verified" }));
-      onSaveBuiltin?.(draft.id as BuiltinId, "", draft.id === "openai" ? model : "", false);
-    } else {
-      persist(providers.filter((p) => p.id !== draft.id));
-      setSelectedId("openai");
-    }
-    close();
+  const clearTemporary = (ids: readonly string[]) => {
+    version.current++;
+    setIsVerifying(false);
+    setDraft((current) => current && ids.includes(current.id) ? { ...current, key: '' } : current);
+    setProviders((current) => current.map((provider) => ids.includes(provider.id) ? { ...provider, key: '' } : provider));
+    setStatuses((current) => ({ ...current, ...Object.fromEntries(ids.map((id) => [id, 'Not verified'])) }));
+    setStatus('Not verified');
+    for (const id of ids) if (['openai', 'opencode-console', 'opencode-go', 'gemini'].includes(id)) onSaveBuiltin?.(id as BuiltinId, '', id === 'openai' ? model : savedModels[id] ?? '', false);
+  };
+  const remove = async () => {
+    if (!draft || forgetting) return;
+    const id = draft.id;
+    clearTemporary([id]); setForgetting(true); setForgetError('');
+    try {
+      if (savedProviders.includes(id as SavedProvider)) {
+        const result = await credentials.forget(id as SavedProvider);
+        if (result.removalFailed) { setForgetError('Could not remove the saved key. Temporary credentials were cleared. Retry Forget key.'); return; }
+      }
+      close();
+    } finally { setForgetting(false); }
+  };
+  const forgetAll = async () => {
+    if (forgetting) return;
+    clearTemporary([...savedProviders, 'gemini', ...providers.map((provider) => provider.id)]);
+    setForgetting(true); setForgetError(''); setConfirmForgetAll(false); setConfirmDelete(false);
+    try {
+      const failed = await credentials.forgetAll();
+      if (failed.length) setForgetError(`Could not remove saved keys for: ${failed.join(', ')}. Temporary credentials were cleared. Retry Forget all keys.`);
+    } finally { setForgetting(false); }
   };
   const savedConsoleStatus = statuses["opencode-console"] ?? "Authentication: not checked. Model: not checked.";
   const consoleDraft = draft?.id === "opencode-console" ? draft : null;
@@ -277,10 +320,16 @@ export function Providers({ model, verification, openAISettings: _oldOpenAISetti
   };
   const connection = selectedBuiltin ?? selectedCustom;
   const isConsole = selectedId === "opencode-console";
-  const verified = isConsole
+  const legacyVerified = isConsole
     ? consoleStatusKind(savedConsoleStatus) === "verified"
     : selectedId === "openai" && verification === "verified";
-  const badgeLabel = verified ? "Verified" : "Not verified";
+  const selectedCredential = credentialStates[selectedId as SavedProvider];
+  const verified = selectedCredential ? selectedCredential.verification === "verified" : legacyVerified;
+  const draftCredential = draft && ['openai', 'opencode-console'].includes(draft.id)
+    ? credentialStates[draft.id as SavedProvider] && status === credentialLabel(credentialStates[draft.id as SavedProvider])
+      ? credentialStates[draft.id as SavedProvider]
+      : credentialStatusFromText(status, !!credentialStates[draft.id as SavedProvider]?.saved)
+    : undefined;
   const configuredUrl = registry.endpointFor(selectedId) ?? connection?.endpoint ?? "";
   const endpoint = isConsole
     ? consoleVerificationPlan(selectedModel, configuredUrl)?.endpoint ?? configuredUrl
@@ -318,7 +367,8 @@ export function Providers({ model, verification, openAISettings: _oldOpenAISetti
         </List>
       </Paper>
       <Stack spacing={2} sx={{ minWidth: 0 }}>
-        <Typography variant="h4" component="h2">Providers</Typography>
+        <Stack direction="row" alignItems="center" justifyContent="space-between"><Typography variant="h4" component="h2">Providers</Typography><Button color="error" disabled={forgetting} onClick={() => setConfirmForgetAll(true)}>Forget all keys</Button></Stack>
+        {forgetError && <Alert severity="error">{forgetError}</Alert>}
         {connection && <Paper variant="outlined" sx={{ p: 2.5 }}>
           <Stack spacing={1}>
             <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1}>
@@ -328,9 +378,9 @@ export function Providers({ model, verification, openAISettings: _oldOpenAISetti
               </IconButton>
             </Stack>
             <Box>
-              <Chip size="small" role="status" aria-label={`${connection.name}: ${badgeLabel}`}
-                label={badgeLabel} color={verified ? "success" : "default"} variant={verified ? "filled" : "outlined"} />
+              <CredentialIndicator provider={connection.name} showProvider={false} status={selectedCredential ?? { saved: verified, verification: verified ? 'verified' : 'unchecked' }} />
             </Box>
+            {selectedCredential?.verification === 'retryable' && <Button disabled={forgetting} onClick={() => void credentials.verify(selectedId as SavedProvider)}>Verify</Button>}
             <Typography variant="body2" sx={{ overflowWrap: "anywhere" }}>Model: {selectedModel || "No model selected"}</Typography>
             <Typography variant="body2" color="text.secondary" sx={{ overflowWrap: "anywhere" }}>{endpoint}</Typography>
           </Stack>
@@ -368,8 +418,9 @@ export function Providers({ model, verification, openAISettings: _oldOpenAISetti
         </Paper>
       </Stack>
     </Box>
-    {draft && <ProviderConfigurationDialog key={draft.id} draft={draft} onChange={changeDraft} onClose={close} onSave={() => save()} status={draft.builtin && configuredEndpoint(draft.id, draft.endpoint) !== registry.endpointFor(draft.id) ? "Save the endpoint before verification or discovery." : status} onDelete={draft.builtin || providers.some((p) => p.id === draft.id) ? () => setConfirmDelete(true) : undefined} isVerifying={isVerifying} onVerify={draft.builtin && draft.id !== "gemini" && configuredEndpoint(draft.id, draft.endpoint) === registry.endpointFor(draft.id) ? requestVerify : undefined} onDiscover={(draft.id === "opencode-console" || draft.id === "opencode-go") && configuredEndpoint(draft.id, draft.endpoint) === registry.endpointFor(draft.id) ? () => void discover() : undefined} />}
+    {draft && <ProviderConfigurationDialog key={draft.id} draft={draft} onChange={changeDraft} onClose={close} onSave={() => save()} hasSavedKey={!!credentialStates[draft.id as SavedProvider]?.saved || credentialStates[draft.id as SavedProvider]?.verification === "retryable"} status={draft.builtin && !["openai", "opencode-console"].includes(draft.id) && configuredEndpoint(draft.id, draft.endpoint) !== registry.endpointFor(draft.id) ? "Save the endpoint before verification or discovery." : status} onDelete={draft.builtin || providers.some((p) => p.id === draft.id) ? () => setConfirmDelete(true) : undefined} isVerifying={isVerifying} credentialStatus={draftCredential} onVerify={draft.builtin && draft.id !== "gemini" && !forgetting ? requestVerify : undefined} onDiscover={(draft.id === "opencode-console" || draft.id === "opencode-go") && configuredEndpoint(draft.id, draft.endpoint) === registry.endpointFor(draft.id) ? () => void discover() : undefined} />}
     <Dialog open={confirmEndpoint} onClose={() => setConfirmEndpoint(false)}><DialogTitle>Confirm custom endpoint</DialogTitle><DialogContent><Typography>Requests for {draft?.name} will send its API credential to {draft?.endpoint}. Confirm only if you trust this destination.</Typography></DialogContent><DialogActions><Button onClick={() => setConfirmEndpoint(false)}>Cancel</Button><Button onClick={() => save(true)}>Confirm endpoint</Button></DialogActions></Dialog>
-    <Dialog open={confirmDelete} onClose={() => setConfirmDelete(false)}><DialogTitle>Delete provider configuration?</DialogTitle><DialogContent><Typography>{draft?.builtin ? "This clears its user configuration; the built-in provider remains available." : "This removes the saved custom provider."} {draft && referencedProviders.includes(draft.id) ? "Existing experts reference this provider and will not be reassigned." : "Existing experts will not be reassigned."}</Typography></DialogContent><DialogActions><Button onClick={() => setConfirmDelete(false)}>Cancel</Button><Button color="error" onClick={remove}>Delete</Button></DialogActions></Dialog>
+    <Dialog open={confirmDelete} onClose={() => { if (!forgetting) setConfirmDelete(false); }}><DialogTitle>Forget key?</DialogTitle><DialogContent><Typography>This clears the saved key and temporary credential. Provider settings and all conversation history are preserved.</Typography>{forgetError && <Alert severity="error">{forgetError}</Alert>}</DialogContent><DialogActions><Button disabled={forgetting} onClick={() => setConfirmDelete(false)}>Cancel</Button><Button disabled={forgetting} color="error" onClick={() => void remove()}>Forget key</Button></DialogActions></Dialog>
+    <Dialog open={confirmForgetAll} onClose={() => setConfirmForgetAll(false)}><DialogTitle>Forget all keys?</DialogTitle><DialogContent><Typography>Clear all saved provider keys and temporary credentials? Provider settings, sessions, messages, and Timeline entries will be preserved.</Typography></DialogContent><DialogActions><Button onClick={() => setConfirmForgetAll(false)}>Cancel</Button><Button color="error" onClick={() => void forgetAll()}>Forget all keys</Button></DialogActions></Dialog>
   </Stack>;
 }

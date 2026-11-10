@@ -1,3 +1,4 @@
+import { credentials } from "./saved-credentials";
 import { ConsoleParameterEditor } from "./console-expert-parameters";
 import {
   adjacentExpert,
@@ -248,6 +249,7 @@ export function App({
   initialEvaluatorSettings?: Settings;
   getProviderKey?: (provider: string) => string;
 }) {
+  const credentialStates = useSyncExternalStore(credentials.subscribe, credentials.getSnapshot, credentials.getSnapshot);
   const [connectionController] = useState(
     () => controller || new ConnectionController(undefined, true),
   );
@@ -539,7 +541,7 @@ export function App({
               <ViewInArOutlined color="primary" sx={{ fontSize: 36 }} />
               <Box>
                 <Typography variant="h6" component="h1">
-                  D7 AI Lab Baseline
+                  Day 7 AI Lab
                 </Typography>
                 <Typography variant="caption" color="text.secondary">
                   Week 2 / Day 7
@@ -593,9 +595,10 @@ export function App({
               flexWrap="wrap"
               justifyContent={{ lg: "flex-end" }}
             >
-              <ProviderStatus verification={verification} />
+              <ProviderStatus verification={verification} savedStatus={credentialStates.openai} />
               <ProviderStatus
                 provider="OpenCode Console"
+                savedStatus={credentialStates["opencode-console"]}
                 verification={consoleHeaderStatus.kind}
                 unsaved={consoleHeaderStatus.unsaved}
               />
@@ -875,7 +878,7 @@ export function App({
               />
             </Box>
             <Typography variant="caption" color="text.secondary">
-              Agents, history, and built-in credentials reset on reload.
+              Week 2 conversation history is saved locally. Agents, Week 1 history, and built-in credentials reset on reload.
               Verification and retries may consume tokens.
             </Typography>
           </Stack>
