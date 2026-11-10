@@ -2,6 +2,20 @@
 
 This project implements the D6 AI Lab: a React + Material UI application for experimenting with agents, tools, and provider/model configurations.
 
+## Design Preview
+
+![D6 AI Lab interface](designs/Experiment%20Studio%20Dashboard.png)
+
+## Design Gallery
+
+- **D6 UI kit and design system board** — [D6 UI Kit Design System Board](designs/D6%20UI%20Kit%20Design%20System%20Board.png)
+- **Experiment Studio dashboard** — [Experiment Studio Dashboard](designs/Experiment%20Studio%20Dashboard.png)
+- **Agent analyst settings** — [Expert Lab Analyst Settings](designs/Expert%20Lab%20Analyst%20Settings.png)
+- **Agent parameters dashboard** — [Expert Lab Agent Parameters Dashboard](designs/Expert%20Lab%20Agent%20Parameters%20Dashboard.png)
+- **Provider dashboard** — [Expert Lab Provider Dashboard](designs/Expert%20Lab%20Provider%20Dashboard.png)
+- **AI Agent tool setup modal** — [AI Agent Tool Setup Modal-1](designs/AI%20Agent%20Tool%20Setup%20Modal-1.png)
+- **API Tool configuration modal** — [API Tool Configuration Modal-2](designs/API%20Tool%20Configuration%20Modal-2.png)
+
 ## D6 overview and learning objectives
 
 D6 focuses on building and validating a browser-based manager-agent workflow where:
