@@ -1,0 +1,238 @@
+import { describe, expect, it } from "vitest";
+import { renderToStaticMarkup } from "react-dom/server";
+import {
+  ToolsPage,
+  deleteToolRecord,
+  pseudocodePreviewHtml,
+  rawToolConfiguration,
+  saveToolRecord,
+  validateToolDraft,
+  type ToolRecord,
+} from "./tools-page";
+import { createBuiltInToolRegistry } from "./tool-runtime";
+
+const toolRegistry = createBuiltInToolRegistry();
+
+const agent = {
+  id: "agent-1",
+  name: "Analyst",
+  description: "Analyzes",
+  rolePrompt: "Analyze",
+  model: "gpt-5.6-terra",
+  maxTokens: 1024,
+};
+
+describe("tools page lifecycle", () => {
+  it("shows built-in metadata and a separate custom empty state", () => {
+    const html = renderToStaticMarkup(<ToolsPage agents={[]} toolRegistry={toolRegistry} />);
+    expect(html).toContain("Built-in Tools");
+    expect(html).toContain("Custom Tools");
+    expect(html).toContain("No custom tools yet");
+    expect(html).toContain(
+      "Create your first custom tool to extend your agents&#x27; capabilities.",
+    );
+    expect(html.match(/>Add Tool</g)).toHaveLength(1);
+    for (const tool of toolRegistry.listBuiltIn()) {
+      expect(html).toContain(tool.name);
+      expect(html).toContain(tool.id);
+      expect(html).toContain(tool.description);
+      expect(html).toContain("Input schema");
+    }
+    expect(html).toContain("Tax rate percentage.");
+    expect(html).toContain("Function");
+    expect(html).toContain("HTTP API");
+    expect(html).not.toContain(">Built-in<");
+    expect(html).not.toContain("Edit tool Tax Calculator");
+    expect(html).not.toContain("Delete tool Tax Calculator");
+    expect(html).not.toContain("Run Tool");
+  });
+
+  it("shows created tool cards and header add button", () => {
+    const tools: ToolRecord[] = [
+      {
+        id: "tool-1",
+        name: "Discount Calculator",
+        type: "Function",
+        description: "Calculates discount totals.",
+        config: { definition: "result = price * 0.9" },
+      },
+    ];
+    const html = renderToStaticMarkup(
+      <ToolsPage agents={[agent]} toolRegistry={toolRegistry} initialTools={tools} />,
+    );
+    expect(html).toContain("Discount Calculator");
+    expect(html).toContain("Function");
+    expect(html).toContain("Edit tool Discount Calculator");
+    expect(html).toContain("Delete tool Discount Calculator");
+    expect(html).toContain("View Details");
+    expect(html.match(/>Add Tool</g)).toHaveLength(1);
+    expect(html).toContain("max-height:240px");
+    expect(html).not.toContain("aspect-ratio:1 / 1");
+  });
+
+  it("renders tool details affordance and dialog hooks", () => {
+    const tools: ToolRecord[] = [
+      {
+        id: "tool-1",
+        name: "Endpoint Reader",
+        type: "API Tool",
+        description: "Reads endpoint value.",
+        config: {
+          endpoint: "https://api.example.com/items",
+          method: "GET",
+          resultPath: "result.value",
+          parameters: [],
+        },
+      },
+    ];
+    const html = renderToStaticMarkup(
+      <ToolsPage agents={[agent]} toolRegistry={toolRegistry} initialTools={tools} />,
+    );
+    expect(html).toContain('aria-label="Edit tool Endpoint Reader"');
+    expect(html).toContain('aria-label="Delete tool Endpoint Reader"');
+    expect(html).toContain("View Details");
+    expect(html).toContain("tabindex=\"0\"");
+  });
+
+  it("validates required fields for tool creation", () => {
+    const base = {
+      id: "tool-1",
+      type: "Function" as const,
+      name: "",
+      description: "",
+      config: { definition: "" },
+    };
+    expect(validateToolDraft(base, [agent])).toBe("Tool name is required.");
+    expect(
+      validateToolDraft({ ...base, name: "Calc", description: "" }, [agent]),
+    ).toBe("Description is required.");
+  });
+
+  it("validates type-specific requirements", () => {
+    expect(
+      validateToolDraft(
+        {
+          id: "tool-api",
+          type: "API Tool",
+          name: "Currency",
+          description: "Converts",
+          config: { endpoint: "", method: "GET", resultPath: "", parameters: [] },
+        },
+        [agent],
+      ),
+    ).toBe("Endpoint URL is required.");
+    expect(
+      validateToolDraft(
+        {
+          id: "tool-ai",
+          type: "AI Agent Tool",
+          name: "Expert",
+          description: "Delegates",
+          config: { agentId: "" },
+        },
+        [agent],
+      ),
+    ).toBe("Select an agent for this tool.");
+  });
+
+  it("creates exactly one new tool and preserves ids on edit", () => {
+    const created = saveToolRecord(
+      [],
+      {
+        id: "tool-1",
+        name: "Discount",
+        type: "Function",
+        description: "Calculates",
+        config: { definition: "result = price * 0.9" },
+      },
+      "create",
+    );
+    expect(created).toHaveLength(1);
+    const edited = saveToolRecord(
+      created,
+      {
+        ...created[0],
+        name: "Discount v2",
+      },
+      "edit",
+    );
+    expect(edited).toHaveLength(1);
+    expect(edited[0].id).toBe("tool-1");
+    expect(edited[0].name).toBe("Discount v2");
+  });
+
+  it("deletes only the selected tool and returns to empty when last is removed", () => {
+    const tools: ToolRecord[] = [
+      {
+        id: "tool-1",
+        name: "A",
+        type: "Function",
+        description: "A desc",
+        config: { definition: "a" },
+      },
+      {
+        id: "tool-2",
+        name: "B",
+        type: "API Tool",
+        description: "B desc",
+        config: { endpoint: "https://api.example.com", method: "GET", resultPath: "", parameters: [] },
+      },
+    ];
+    const oneLeft = deleteToolRecord(tools, "tool-1");
+    expect(oneLeft.map((tool) => tool.id)).toEqual(["tool-2"]);
+    const empty = deleteToolRecord(oneLeft, "tool-2");
+    expect(empty).toEqual([]);
+  });
+
+  it("keeps raw and preview representations aligned for function pseudocode", () => {
+    const source = "if score >= 80\n  return \"pass\"\n# keep spacing";
+    const html = pseudocodePreviewHtml(source);
+    expect(html).toContain("pass");
+    expect(html).toContain("font-weight:600");
+    expect(html).toContain("font-style:italic");
+    expect(source).toContain("# keep spacing");
+  });
+
+  it("renders raw sanitized configuration for API and AI tools", () => {
+    const apiTool: ToolRecord = {
+      id: "api-1",
+      name: "API",
+      type: "API Tool",
+      description: "desc",
+      config: {
+        endpoint: "https://api.example.com",
+        method: "POST",
+        resultPath: "payload.id",
+        parameters: [{ id: 1, name: "q", location: "query", example: "x" }],
+      },
+    };
+    const aiTool: ToolRecord = {
+      id: "ai-1",
+      name: "Agent Ref",
+      type: "AI Agent Tool",
+      description: "desc",
+      config: { agentId: "missing-agent" },
+    };
+    const apiRaw = rawToolConfiguration(apiTool, [agent]);
+    const aiRaw = rawToolConfiguration(aiTool, [agent]);
+    expect(apiRaw).toContain("method: POST");
+    expect(apiRaw).toContain("endpoint: https://api.example.com");
+    expect(aiRaw).toContain("agentName: (missing)");
+  });
+
+  it("does not mutate tools when deriving raw views", () => {
+    const tool: ToolRecord = {
+      id: "func-1",
+      name: "Math",
+      type: "Function",
+      description: "desc",
+      config: { definition: "result = a + b" },
+    };
+    const before = structuredClone(tool);
+    const raw = rawToolConfiguration(tool, [agent]);
+    const preview = pseudocodePreviewHtml((tool.config as { definition: string }).definition);
+    expect(raw).toContain("result = a + b");
+    expect(preview).toContain("result");
+    expect(tool).toEqual(before);
+  });
+});

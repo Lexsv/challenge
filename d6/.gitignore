@@ -1,0 +1,18 @@
+node_modules/
+dist/
+/.pnpm-store/
+.vite/
+.vite-temp/
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.DS_Store
+work/
+
+# Local container files
+/Dockerfile
+/.dockerignore
+/expert-lab-d3.tar
+/ai-advent-d4.tar
