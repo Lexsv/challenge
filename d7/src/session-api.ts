@@ -34,7 +34,7 @@ export function emptySession(item: SessionMetadata): ManagerConversationState {
 
 export async function loadHistory(id: string): Promise<HistoryEvent[]> {
   const events = await request(`/${encodeURIComponent(id)}/events`);
-  if (!Array.isArray(events) || events.some((event) => event.sessionId !== id || !Number.isInteger(event.sequence) || !['message', 'run', 'tool-call', 'tool-result', 'metering'].includes(event.type))) {
+  if (!Array.isArray(events) || events.some((event) => event.sessionId !== id || !Number.isInteger(event.sequence) || !['message', 'run', 'tool-call', 'tool-result', 'metering', 'context'].includes(event.type))) {
     throw new Error('Invalid history response.');
   }
   return events;

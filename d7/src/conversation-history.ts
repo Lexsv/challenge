@@ -1,3 +1,4 @@
+import type { ContextEvent } from "./context-compaction";
 import type { ModelRequestMeter } from "./token-meter";
 import type { AgentRun, TextMessage, ToolExecution } from './agent-tool-contracts';
 import type { ManagerConversationState } from './manager-agent';
@@ -9,15 +10,19 @@ export type HistoryEvent = {
 } & ({ type: 'message'; payload: TextMessage }
   | { type: 'run'; payload: AgentRun }
   | { type: 'tool-call' | 'tool-result'; payload: ToolExecution }
-  | { type: 'metering'; payload: ModelRequestMeter });
+  | { type: 'metering'; payload: ModelRequestMeter }
+  | { type: 'context'; payload: ContextEvent });
 
 export function restoreHistory(initial: ManagerConversationState, events: HistoryEvent[]): ManagerConversationState {
   const state = structuredClone(initial);
   state.messages = []; state.runs = []; state.toolExecutions = [];
   delete state.requestMeters;
+  state.contextEvents = []; state.runLastEvent = {};
   for (const event of structuredClone(events).sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0))) {
     if (event.sessionId !== state.conversation.id) throw new Error('History belongs to another session.');
-    if (event.type === 'message') state.messages.push(event.payload);
+    state.runLastEvent[event.type === 'run' ? event.payload.id : event.payload.runId] = event.id;
+    if (event.type === 'context') state.contextEvents.push(event.payload);
+    else if (event.type === 'message') state.messages.push(event.payload);
     else if (event.type === 'run') {
       const index = state.runs.findIndex((run) => run.id === event.payload.id);
       if (index < 0) state.runs.push(event.payload); else state.runs[index] = event.payload;

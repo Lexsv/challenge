@@ -1,6 +1,8 @@
+import { ChatComposer } from "./chat-composer";
+import { ChatRunLog } from "./chat-run-log";
+import { contextPhaseLabel } from "./context-compaction";
 import { createAndSelectSession } from "./session-creation";
 import { EmptySessionChat, SessionCreateButton } from "./session-empty-state";
-import { RequestMeterCard } from "./request-meter-card";
 import type { ModelRequestMeter } from "./token-meter";
 import { isWeek2Provider, unsupportedWeek2ProviderMessage, week2ProviderOptions } from "./week2-provider";
 import { SessionDeletion } from "./session-deletion";
@@ -12,13 +14,8 @@ import { listSessions, createSession as persistSession, renameSession, emptySess
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   Alert,
-  Accordion,
-  AccordionDetails,
-  AccordionSummary,
   Box,
   Button,
-  Chip,
-  CircularProgress,
   IconButton,
   Menu,
   MenuItem,
@@ -33,33 +30,19 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
-import ExpandMore from "@mui/icons-material/ExpandMore";
 import SettingsOutlined from "@mui/icons-material/SettingsOutlined";
-import SendRounded from "@mui/icons-material/SendRounded";
 import type { ProviderRegistry } from "./provider-registry";
 import { ManagerAgent, createManagerConversation } from "./manager-agent";
 import { createManagerLlmAdapter } from "./manager-llm-adapter";
 import type { ToolRegistry } from "./tool-runtime";
 import type { ManagerConversationState } from "./manager-agent";
 import type { OpenCodeConnection, OpenCodeKeys } from "./builtin-connection-settings";
-import { AnswerMarkdown } from "./answer-markdown";
 import type { ToolExecutionType } from "./tool-execution-type";
 import { toolExecutionTypeMeta } from "./tool-execution-type";
 
 type Week2Provider = "openai" | OpenCodeConnection;
 
-const timeFormatter = new Intl.DateTimeFormat(undefined, {
-  hour: "2-digit",
-  minute: "2-digit",
-  second: "2-digit",
-  hour12: false,
-});
-
-function formatTimelineTime(timestamp: number): string {
-  return timeFormatter.format(timestamp);
-}
-
-type TimelineEvent =
+export type TimelineEvent =
   | { kind: "metering"; id: string; createdAt: number; runId: string; meter: ModelRequestMeter }
   | {
       kind: "message";
@@ -180,7 +163,20 @@ export function buildWeek2Timeline(
     return 0;
   };
   const meters: TimelineEvent[] = (state.requestMeters ?? []).map((meter) => ({ kind: 'metering', id: meter.id, createdAt: meter.startedAt, runId: meter.runId, meter }));
-  return [...messages, ...tools, ...runs, ...meters].sort(
+  const contexts: TimelineEvent[] = (state.contextEvents ?? []).map((event) => {
+    const run = state.runs.find((item) => item.id === event.runId);
+    const pending = ['compacting', 'retrying'].includes(event.phase);
+    const latest = state.contextEvents?.filter((item) => item.runId === event.runId).at(-1);
+    const status = event.phase === 'failed' ? 'failed'
+      : pending && run?.status === 'incomplete' ? 'incomplete'
+      : pending && run?.status === 'running' && latest?.id === event.id ? 'running' : 'completed';
+    return {
+      kind: 'manager', id: event.id, createdAt: event.createdAt, runId: event.runId, category: 'SYSTEM', status,
+      description: contextPhaseLabel[event.phase] + (event.afterTokens !== undefined
+        ? ` · ${event.beforeTokens} → ${event.afterTokens} estimated input tokens` : ''),
+    };
+  });
+  return [...messages, ...tools, ...runs, ...meters, ...contexts].sort(
     (a, b) =>
       a.createdAt - b.createdAt ||
       (runOrder.get(a.runId) ?? 0) - (runOrder.get(b.runId) ?? 0) ||
@@ -580,230 +576,20 @@ export function SessionChat({
             }}
             aria-label="Week 2 conversation history"
           >
-            {timeline.map((event) => (
-              <Box
-                key={event.id}
-                sx={{
-                  display: "flex",
-                  alignItems: "flex-start",
-                  gap: 1,
-                  width: "100%",
-                  minWidth: 0,
-                }}
-              >
-              {event.kind === "metering" ? <RequestMeterCard meter={event.meter} /> : event.kind === "message" ? (
-                <Box
-                  key={event.id}
-                  sx={{
-                    alignSelf: "flex-start",
-                    width: "fit-content",
-                    maxWidth: { xs: "100%", sm: "70%" },
-                    minWidth: 0,
-                    flex: "0 1 auto",
-                    px: 1,
-                    py: 0.6,
-                    borderRadius: "8px",
-                    bgcolor: "background.default",
-                    color: "text.primary",
-                    border: "1px solid",
-                    borderColor: "divider",
-                  }}
-                >
-                  <Box sx={{ mb: 0.35 }}>
-                    <Chip
-                      size="small"
-                      color={event.role === "user" ? "primary" : event.role === "assistant" ? "secondary" : "warning"}
-                      label={event.role === "user" ? "USER" : event.role === "assistant" ? "AGENT" : "SYSTEM"}
-                    />
-                  </Box>
-                  {event.role === "assistant" ? (
-                    <Box sx={{ "& p": { m: 0 }, "& pre": { overflowX: "auto" } }}>
-                      <AnswerMarkdown text={event.text} />
-                    </Box>
-                  ) : (
-                    <Typography variant="body2" sx={{ whiteSpace: "pre-wrap" }}>
-                      {event.text}
-                    </Typography>
-                  )}
-                </Box>
-              ) : event.kind === "tool" ? (
-                <Accordion
-                  key={event.id}
-                  disableGutters
-                  sx={{
-                    alignSelf: "flex-start",
-                    width: "fit-content",
-                    maxWidth: technicalEventMaxWidth,
-                    minWidth: 0,
-                    flex: "0 1 auto",
-                    border: "1px solid",
-                    borderColor: "divider",
-                    borderRadius: "8px",
-                    overflow: "hidden",
-                    bgcolor: "background.default",
-                    boxShadow: "none",
-                    "&.MuiAccordion-root": { borderRadius: "8px" },
-                    "&:before": { display: "none" },
-                  }}
-                >
-                  <AccordionSummary expandIcon={<ExpandMore />} sx={{ minHeight: 34, py: 0 }}>
-                    <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0, width: "100%" }}>
-                      <Chip
-                        size="small"
-                        label={timelineToolCategoryLabel(event.executionType)}
-                        sx={
-                          event.executionType
-                            ? {
-                                bgcolor: toolExecutionTypeMeta[event.executionType].background,
-                                color: toolExecutionTypeMeta[event.executionType].color,
-                              }
-                            : undefined
-                        }
-                      />
-                      <Typography variant="body2" sx={{ overflowWrap: "anywhere" }}>
-                        {event.toolName}
-                      </Typography>
-                      <Chip
-                        size="small"
-                        color={event.status === "completed" ? "success" : event.status === "failed" ? "error" : "default"}
-                        label={event.status}
-                      />
-                    </Stack>
-                  </AccordionSummary>
-                  <AccordionDetails sx={{ pt: 0.5, minWidth: 0 }}>
-                    <Stack spacing={0.75} sx={{ minWidth: 0, maxWidth: "100%" }}>
-                      <Typography
-                        variant="caption"
-                        color="text.secondary"
-                        sx={{ overflowWrap: "anywhere" }}
-                      >
-                        Tool ID: {event.toolId}
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary">
-                        Duration: {event.durationMs} ms
-                      </Typography>
-                      <Typography variant="subtitle2">Arguments</Typography>
-                      <Box component="pre" sx={{ m: 0, p: 1, maxWidth: "100%", borderRadius: "8px", bgcolor: "background.paper", whiteSpace: "pre-wrap", overflowWrap: "anywhere", overflowX: "auto", fontSize: "0.76rem" }}>
-                        {JSON.stringify(event.arguments, null, 2)}
-                      </Box>
-                      <Typography variant="subtitle2">Result</Typography>
-                      <Box component="pre" sx={{ m: 0, p: 1, maxWidth: "100%", borderRadius: "8px", bgcolor: "background.paper", whiteSpace: "pre-wrap", overflowWrap: "anywhere", overflowX: "auto", fontSize: "0.76rem" }}>
-                        {event.error
-                          ? JSON.stringify({ error: event.error }, null, 2)
-                          : JSON.stringify(event.output, null, 2)}
-                      </Box>
-                    </Stack>
-                  </AccordionDetails>
-                </Accordion>
-              ) : (
-                <Paper
-                  variant="outlined"
-                  sx={{
-                    alignSelf: "flex-start",
-                    width: "fit-content",
-                    maxWidth: technicalEventMaxWidth,
-                    minWidth: 0,
-                    flex: "0 1 auto",
-                    px: 1,
-                    py: 0.6,
-                    borderRadius: "8px",
-                    bgcolor: "background.default",
-                    borderColor: "divider",
-                  }}
-                >
-                  <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
-                    <Chip
-                      size="small"
-                      color={event.category === "SYSTEM" ? "warning" : "secondary"}
-                      label={event.category}
-                    />
-                    <Typography variant="body2" sx={{ overflowWrap: "anywhere" }}>
-                      {event.description}
-                    </Typography>
-                    <Chip
-                      size="small"
-                      color={event.status === "completed" ? "success" : event.status === "failed" ? "error" : "default"}
-                      label={event.status}
-                    />
-                  </Stack>
-                </Paper>
-              )}
-              <Typography
-                variant="caption"
-                color="text.secondary"
-                sx={{
-                  ml: "auto",
-                  pt: 0.5,
-                  flexShrink: 0,
-                  whiteSpace: "nowrap",
-                  textAlign: "right",
-                }}
-              >
-                {formatTimelineTime(event.createdAt)}
-              </Typography>
-              </Box>
-            ))}
+            <ChatRunLog events={timeline} />
             {running && (
               <Typography variant="caption" color="text.secondary">
                 Manager is processing…
               </Typography>
             )}
           </Box>
-          <Stack
-            direction="row"
-            spacing={1}
-            alignItems="flex-end"
-            sx={{
-              position: "sticky",
-              bottom: 0,
-              bgcolor: "background.paper",
-              pt: 0.5,
-            }}
-          >
-            <TextField
-              fullWidth
-              placeholder="Message"
-              value={input}
-              onChange={(event) => setInput(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey) {
-                  event.preventDefault();
-                  void send();
-                }
-              }}
-              multiline
-              minRows={1}
-              maxRows={6}
-              disabled={running || !historyLoaded || saveFailed}
-              sx={{
-                "& .MuiOutlinedInput-root": {
-                  borderRadius: "8px",
-                },
-                "& textarea": {
-                  overflowY: "auto",
-                },
-              }}
-            />
-            <Button
-              variant="contained"
-              onClick={() => void send()}
-              disabled={running || !historyLoaded || saveFailed || !input.trim()}
-              aria-label="Send message"
-              aria-busy={running}
-              sx={{
-                width: 48,
-                height: 48,
-                minWidth: 48,
-                minHeight: 48,
-                p: 0,
-                flexShrink: 0,
-                alignSelf: "flex-end",
-                borderRadius: "8px",
-              }}
-            >
-              {running ? <CircularProgress size={20} color="inherit" aria-label="Sending message" /> : <SendRounded fontSize="small" />}
-            </Button>
-          </Stack>
+          <ChatComposer
+            draft={input}
+            onDraftChange={setInput}
+            onSend={() => void send()}
+            disabled={running || !historyLoaded || saveFailed}
+            running={running}
+          />
         </Stack>
       </Paper>
     </Stack>

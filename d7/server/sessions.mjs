@@ -10,6 +10,7 @@ function validateEvent(event, sessionId) {
   if (!event || typeof event.id !== 'string' || !/^[a-zA-Z0-9-]{1,100}$/.test(event.id) || event.sessionId !== sessionId) return null;
   const p = event.payload;
   if (!p || typeof p !== 'object' || typeof p.id !== 'string' || typeof p.runId !== 'string' && event.type !== 'run') return null;
+  if (event.type === 'context') return validateContext(p);
   if (event.type === 'metering') return validateMeter(p, sessionId);
   const fields = {
     message: ['id', 'conversationId', 'runId', 'createdAt', 'role', 'type', 'text'],
@@ -23,6 +24,16 @@ function validateEvent(event, sessionId) {
   if (event.type !== 'message' && (!Number.isFinite(p.startedAt) || !['pending', 'running', 'completed', 'failed', 'incomplete'].includes(p.status))) return null;
   if (event.type.startsWith('tool-') && (typeof p.toolId !== 'string' || typeof p.toolCallId !== 'string' || !Object.hasOwn(p, 'arguments'))) return null;
   if (event.type === 'tool-result' && (!Number.isFinite(p.endedAt) || !['completed', 'failed'].includes(p.status))) return null;
+  return Object.fromEntries(fields.filter((key) => Object.hasOwn(p, key)).map((key) => [key, p[key]]));
+}
+
+function validateContext(p) {
+  const fields = ['id', 'runId', 'createdAt', 'phase', 'summary', 'coveredEventId', 'coveredRunIds', 'beforeTokens', 'afterTokens'];
+  if (Object.keys(p).some((key) => !fields.includes(key)) || !Number.isFinite(p.createdAt) || !['overflow', 'compacting', 'completed', 'retrying', 'failed'].includes(p.phase)) return null;
+  for (const key of ['beforeTokens', 'afterTokens']) if (p[key] !== undefined && (!Number.isSafeInteger(p[key]) || p[key] < 0)) return null;
+  if (p.phase === 'completed') {
+    if (typeof p.summary !== 'string' || !p.summary.trim() || p.summary.length > 200000 || typeof p.coveredEventId !== 'string' || !Array.isArray(p.coveredRunIds) || !p.coveredRunIds.length || p.coveredRunIds.some((v) => typeof v !== 'string')) return null;
+  } else if (['summary', 'coveredEventId', 'coveredRunIds'].some((key) => p[key] !== undefined)) return null;
   return Object.fromEntries(fields.filter((key) => Object.hasOwn(p, key)).map((key) => [key, p[key]]));
 }
 
@@ -57,23 +68,23 @@ export function createSessionServer(databasePath = fileURLToPath(new URL('../dat
       id TEXT PRIMARY KEY,
       sessionId TEXT NOT NULL REFERENCES sessions(id),
       sequence INTEGER NOT NULL,
-      type TEXT NOT NULL CHECK(type IN ('message', 'run', 'tool-call', 'tool-result', 'metering')),
+      type TEXT NOT NULL CHECK(type IN ('message', 'run', 'tool-call', 'tool-result', 'metering', 'context')),
       payload TEXT NOT NULL CHECK(json_valid(payload)),
       UNIQUE(sessionId, sequence)
     );`);
   // SQLite cannot alter a CHECK constraint. Rebuild only the event table, atomically preserving every row.
   const historySchema = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'history_events'").get().sql;
-  if (!historySchema.includes("'metering'")) {
+  if (!historySchema.includes("'context'")) {
     db.exec('BEGIN IMMEDIATE');
     try {
-      db.exec(`CREATE TABLE history_events_metering (
+      db.exec(`CREATE TABLE history_events_extended (
         id TEXT PRIMARY KEY, sessionId TEXT NOT NULL REFERENCES sessions(id), sequence INTEGER NOT NULL,
-        type TEXT NOT NULL CHECK(type IN ('message', 'run', 'tool-call', 'tool-result', 'metering')),
+        type TEXT NOT NULL CHECK(type IN ('message', 'run', 'tool-call', 'tool-result', 'metering', 'context')),
         payload TEXT NOT NULL CHECK(json_valid(payload)), UNIQUE(sessionId, sequence)
       );
-      INSERT INTO history_events_metering SELECT id, sessionId, sequence, type, payload FROM history_events;
+      INSERT INTO history_events_extended SELECT id, sessionId, sequence, type, payload FROM history_events;
       DROP TABLE history_events;
-      ALTER TABLE history_events_metering RENAME TO history_events;`);
+      ALTER TABLE history_events_extended RENAME TO history_events;`);
       db.exec('COMMIT');
     } catch (error) { db.exec('ROLLBACK'); db.close(); throw error; }
   }
@@ -138,6 +149,17 @@ export function createSessionServer(databasePath = fileURLToPath(new URL('../dat
               reply(409, { error: 'Event ID conflict.' }); return;
             }
             reply(200, { ...prior, payload }); return;
+          }
+          if (event.type === 'context') {
+            if (!findEntity.get(sessionId, 'run', payload.runId)) { reply(400, { error: 'Unknown run.' }); return; }
+            if (payload.phase === 'completed') {
+              const boundary = existingEvent.get(payload.coveredEventId);
+              const rows = history.all(sessionId);
+              if (!boundary || boundary.sessionId !== sessionId || payload.coveredRunIds.some((id) => {
+                const latest = rows.filter((row) => row.type === 'run' && JSON.parse(row.payload).id === id).at(-1);
+                return !latest || latest.sequence > boundary.sequence || JSON.parse(latest.payload).status !== 'completed' || id === payload.runId;
+              })) { reply(400, { error: 'Invalid context history boundary.' }); return; }
+            }
           }
           if (event.type === 'metering') {
             if (!findEntity.get(sessionId, 'run', payload.runId)) { reply(400, { error: 'Unknown run.' }); return; }

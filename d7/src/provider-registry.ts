@@ -37,6 +37,7 @@ export type ProviderModelCapabilities = {
   reasoningEfforts?: readonly string[];
   defaultReasoning?: string;
   maxOutputTokens: number;
+  contextWindow?: number;
   supportedParameters: Readonly<Record<string, boolean>>;
 };
 export type ProviderAdapter = {
@@ -46,6 +47,7 @@ export type ProviderAdapter = {
   catalog: () => readonly string[];
   discover?: () => Promise<readonly DiscoveredModel[]>;
   capabilities: (model: string) => ProviderModelCapabilities | undefined;
+  limits?: (model: string) => { contextWindow?: number; maxOutputTokens?: number; maxInputTokens?: number } | undefined;
   validate: (settings: Settings) => string | undefined;
   validateHistorical?: (settings: Settings) => string | undefined;
   initialParameters?: (model: string, maxTokens: number) => ApiParameter[];
@@ -141,6 +143,7 @@ export function createProviderRegistry(
     registry.register({
       id,
       allowUndiscoveredSelection: true,
+      limits: (model) => discovered.get(model),
       catalog: () => mode === "console" ? Array.from(new Set([...catalog.map((model) => model.id), ...discovered.keys()])).filter((model) => consoleModelSelectable(model, discovered.get(model))) : Array.from(new Set([...catalog.map((model) => model.id).filter((model) => goModelIds.has(model)), ...discovered.keys()])),
       discover: async () => {
         const version = endpointVersion;

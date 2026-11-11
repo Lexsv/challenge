@@ -1,3 +1,4 @@
+import { providerError } from './provider-error.mjs';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -121,8 +122,8 @@ export function createCredentialRoutes(store = new MacKeychainStore(), fetcher =
       const payload = operation === 'verify'
         ? { model: provider === 'opencode-go' ? 'glm-5.3-flash' : 'deepseek-v4.1-flash', messages: [{ role: 'user', content: 'OK' }], max_tokens: 1 }
         : provider === 'openai'
-          ? { model: value.model, store: false, input: value.input, tools: value.tools, tool_choice: 'auto' }
-          : { model: value.model, messages: value.messages, tools: value.tools, tool_choice: 'auto' };
+          ? { model: value.model, store: false, input: value.input, tools: value.tools, tool_choice: value.tool_choice ?? 'auto', ...(Number.isSafeInteger(value.max_output_tokens) && value.max_output_tokens > 0 ? { max_output_tokens: value.max_output_tokens } : {}) }
+          : { model: value.model, messages: value.messages, tools: value.tools, tool_choice: value.tool_choice ?? 'auto', ...(Number.isSafeInteger(value.max_completion_tokens) && value.max_completion_tokens > 0 ? { max_completion_tokens: value.max_completion_tokens } : {}) };
       const response = await fetcher(target, {
         method: operation === 'verify' && provider === 'openai' ? 'GET' : 'POST', redirect: 'error', signal: AbortSignal.timeout(operation === 'verify' ? 30000 : 120000),
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
@@ -146,7 +147,7 @@ export function createCredentialRoutes(store = new MacKeychainStore(), fetcher =
         const result = { saved: true, verification: 'verified' };
         record(result); reply(200, result); return true;
       }
-      if (!response.ok) { reply(502, { error: `Provider request failed (${response.status}).` }); return true; }
+      if (!response.ok) { const data = await response.json().catch(() => null); reply(502, { error: `Provider request failed (${response.status}).`, providerError: providerError(response.status, data) }); return true; }
       const serialized = JSON.stringify(await response.json());
       reply(200, JSON.parse(serialized.split(JSON.stringify(key).slice(1, -1)).join('[redacted]'))); return true;
     } catch (error) {

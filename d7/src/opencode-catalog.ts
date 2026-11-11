@@ -133,6 +133,7 @@ export type DiscoveredModel = {
   price?: Partial<Price>;
   structuredOutput?: boolean;
   maxOutputTokens?: number;
+  contextWindow?: number;
   parameterSupport?: Record<string, boolean>;
 };
 const validPrice = (v: unknown): v is number =>
@@ -153,6 +154,7 @@ export function parseModels(value: unknown): DiscoveredModel[] {
     const output = obj.cost?.text?.output;
     const price: Partial<Price> = {};
     const maxOutputTokens = obj.limit?.output;
+    const contextWindow = obj.limit?.context;
     const parameterSupport: Record<string, boolean> = {};
     for (const name of [
       "temperature",
@@ -174,6 +176,7 @@ export function parseModels(value: unknown): DiscoveredModel[] {
         ...(typeof obj.disabled === "boolean" ? { disabled: obj.disabled } : {}),
         ...(typeof obj.available === "boolean" ? { available: obj.available } : {}),
         ...(Object.keys(price).length ? { price } : {}),
+        ...(Number.isSafeInteger(contextWindow) && contextWindow > 0 ? { contextWindow } : {}),
         ...(Number.isInteger(maxOutputTokens) && maxOutputTokens > 0
           ? { maxOutputTokens }
           : {}),
