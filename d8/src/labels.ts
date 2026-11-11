@@ -1,0 +1,22 @@
+const labels: Record<string, string> = {
+  not_evaluated: "Not evaluated",
+  pending: "Pending",
+  running: "Running",
+  succeeded: "Succeeded",
+  failed: "Failed",
+  "timed-out": "Timed out",
+  incomplete: "Incomplete",
+  completed: "Completed",
+  skipped: "Skipped",
+  stale: "Stale",
+  correct: "Correct",
+  incorrect: "Incorrect",
+  unable_to_assess: "Unable to assess",
+  none: "None",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra high",
+  max: "Maximum",
+};
+export const statusLabel = (value: string) => labels[value] || value;
