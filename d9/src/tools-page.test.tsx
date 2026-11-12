@@ -25,6 +25,13 @@ const agent = {
 };
 
 describe("tools page lifecycle", () => {
+  it('validates two- and three-input formulas before saving', () => {
+    const draft = {id:'id', type:'Function' as const, name:'Calculator', description:'Compute', config:{definition:'Inputs:\n a: number\n b: number\nFormula:\n result = a + b\nOutput:\n result: number'}};
+    expect(validateToolDraft(draft, [])).toBeUndefined();
+    const three = {...draft,config:{definition:draft.config.definition.replace(' b: number',' b: number\n c: number').replace('a + b','a + b + c')}};
+    expect(validateToolDraft(three, [])).toBeUndefined();
+    expect(validateToolDraft({...draft,config:{definition:draft.config.definition.replace('a + b','a ** b')}}, [])).toContain('Unsupported formula syntax');
+  });
   it("shows built-in metadata and a separate custom empty state", () => {
     const html = renderToStaticMarkup(<ToolsPage agents={[]} toolRegistry={toolRegistry} />);
     expect(html).toContain("Built-in Tools");
@@ -49,7 +56,7 @@ describe("tools page lifecycle", () => {
     expect(html).not.toContain("Run Tool");
   });
 
-  it("shows created custom tool cards and the custom-section add button", () => {
+  it("shows created custom tools in a table with the custom-section add button", () => {
     const tools: ToolRecord[] = [
       {
         id: "tool-1",
@@ -66,9 +73,10 @@ describe("tools page lifecycle", () => {
     expect(html).toContain("Function");
     expect(html).toContain("Edit tool Discount Calculator");
     expect(html).toContain("Delete tool Discount Calculator");
-    expect(html).toContain("View Details");
+    expect(html).toContain('aria-label="Custom tools"');
+    expect(html).not.toContain('>Tool ID<');
+    expect(html).toContain('MuiTableCell-alignRight');
     expect(html.match(/>Add custom tool</g)).toHaveLength(1);
-    expect(html).toContain("max-height:240px");
     expect(html).not.toContain("aspect-ratio:1 / 1");
   });
 
@@ -92,7 +100,6 @@ describe("tools page lifecycle", () => {
     );
     expect(html).toContain('aria-label="Edit tool Endpoint Reader"');
     expect(html).toContain('aria-label="Delete tool Endpoint Reader"');
-    expect(html).toContain("View Details");
     expect(html).toContain("tabindex=\"0\"");
   });
 
@@ -239,7 +246,7 @@ describe("tools page lifecycle", () => {
   });
 });
 
-it('renders a compact, scrollable four-column built-in table before Custom Tools', () => {
+it('renders a compact, scrollable three-column built-in table before Custom Tools', () => {
   const html = renderToStaticMarkup(<ToolsPage agents={[]} toolRegistry={toolRegistry} />);
   expect(html).toContain('aria-label="Built-in tools"');
   expect(html).toContain('MuiTableCell-sizeSmall');
@@ -248,7 +255,7 @@ it('renders a compact, scrollable four-column built-in table before Custom Tools
   expect(html).toContain('tabindex="0"');
   expect(html).toContain('>Name<');
   expect(html).toContain('>Type<');
-  expect(html).toContain('>Tool ID<');
+  expect(html).not.toContain('>Tool ID<');
   expect(html).toContain('>Description<');
   expect(html.indexOf('aria-label="Built-in tools"')).toBeLessThan(html.indexOf('id="custom-tools-heading"'));
   expect(html.match(/aria-expanded="false"/g)).toHaveLength(toolRegistry.listBuiltIn().length);
@@ -269,7 +276,7 @@ it('connects each name button to collapsed details and renders full schema or au
     const open = renderToStaticMarkup(<table><tbody><BuiltInToolRow tool={tool} expanded onToggle={() => {}} /></tbody></table>);
     expect(open).toContain('aria-expanded="true"');
     expect(open).toContain('MuiCollapse-entered');
-    expect(open).toContain('colSpan="4"');
+    expect(open).toContain('colSpan="3"');
     expect(open).toContain(`aria-labelledby="built-in-${tool.id}-name"`);
     expect(open).toContain(tool.description);
     if (tool.inputSchema) expect(open).toContain('Input schema');

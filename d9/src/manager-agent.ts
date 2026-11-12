@@ -139,7 +139,7 @@ export class ManagerAgent {
     const current: ManagerLlmMessage[] = [{ role: 'user', content: userMessage.text }];
     let llmMessages = [...history, ...current];
     const executableTools = this.tools
-      .listBuiltIn()
+      .listExecutable()
       .filter((tool) => tool.executable);
 
     const onMeter = async (meter: RequestMeter) => {

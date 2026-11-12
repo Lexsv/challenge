@@ -56,3 +56,10 @@ it('restores send feedback and unlocks after a failure', async () => {
   expect(running).toBe(false);
   expect(lock.current).toBe(false);
 });
+
+it('blocks an unavailable model before dispatch without requiring structured output', async () => {
+  let error = '';
+  const accepted = await submitSession({lock:{current:false},draft:'hello',ready:true,model:'old-model',hasCredential:true,modelProblem:'Model unavailable.',onBlocked:message=>{error=message;},onAccepted:()=>{throw new Error('unexpected');},onSettled:()=>{},run:async()=>{throw new Error('unexpected');}});
+  expect(accepted).toBe(false);
+  expect(error).toBe('Model unavailable.');
+});

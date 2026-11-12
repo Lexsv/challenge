@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ProviderRegistry } from "./provider-registry";
 import {
   buildProviderToolNameMap,
+  buildManagerRequestBody,
   createManagerLlmAdapter,
   parseOpenAIChatCompletions,
   parseOpenAIResponses,
@@ -29,6 +30,12 @@ const messages: ManagerLlmMessage[] = [
 ];
 
 describe("manager llm provider mapping", () => {
+  it('includes general function selection guidance in the estimated request body', () => {
+    const tools: ToolCatalogItem[] = [{id:'custom-1',name:'Combine',description:'Combine values',executable:true,kind:'user-defined',executionType:'function',inputSchema:{type:'object',properties:{a:{type:'number'}},required:['a']}}];
+    const body = buildManagerRequestBody({providerId:'openai',model:'model',messages:[{role:'user',content:'A question'}],tools,outputTokens:100});
+    expect(JSON.stringify(body)).toContain('Do not invent missing arguments or call unrelated functions.');
+    expect(JSON.stringify(body)).toContain('Combine values');
+  });
   it("builds valid provider function names for invalid tool ids", () => {
     const tools: ToolCatalogItem[] = [
       {

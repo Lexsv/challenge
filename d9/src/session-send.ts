@@ -9,6 +9,7 @@ export async function submitSession(options: {
   model: string;
   provider?: string;
   hasCredential: boolean;
+  modelProblem?: string;
   onBlocked: (message: string) => void;
   onAccepted: () => void;
   run: (question: string) => Promise<void>;
@@ -18,6 +19,7 @@ export async function submitSession(options: {
   if (options.lock.current || !options.ready || !question) return false;
   const problem = options.provider !== undefined && !isWeek2Provider(options.provider) ? unsupportedWeek2ProviderMessage
     : !options.model ? 'Select a model for the Manager Agent.'
+    : options.modelProblem ? options.modelProblem
     : !options.hasCredential ? 'No credentials found for this provider. Configure it in Providers.' : '';
   if (problem) { options.onBlocked(problem); return false; }
   options.lock.current = true;

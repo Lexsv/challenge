@@ -1,4 +1,15 @@
-import { type Expert, type Settings } from "./models";
+import { type Attempt, type Expert, type Settings } from "./models";
+import type { ProviderRegistry } from './provider-registry';
+import { executeWithSavedProvider } from './saved-provider-execution';
+
+export function generationReadiness(registry: ProviderRegistry, config: Settings, hasCredential: boolean): string | undefined {
+  if (!hasCredential) return 'Connect and verify the selected provider or enter a temporary API key.';
+  if (!config.provider || !registry.get(config.provider)) return 'Select a supported provider.';
+  if (!config.model.trim()) return 'Select a default model for agent generation.';
+  const provider = registry.get(config.provider)!;
+  if (provider.capabilities(config.model)?.structuredOutput !== true) return 'The selected default model does not support Structured Output.';
+  return provider.validate(config);
+}
 export type GeneratedExpertDefinition = Pick<
   Expert,
   "name" | "description" | "rolePrompt"
@@ -79,7 +90,8 @@ export async function generateWithProvider(
   credential: (provider: string) => string,
   input: string,
   single: boolean,
-) {
+  useSavedKey = false,
+): Promise<Omit<Attempt, 'id'>> {
   const id = config.provider;
   if (!id) throw new Error("Generation provider is required.");
   const provider = registry.get(id);
@@ -88,6 +100,9 @@ export async function generateWithProvider(
   if (error) throw new Error(error);
   if (provider.capabilities(config.model)?.structuredOutput !== true)
     throw new Error("Structured output support is unknown or unsupported.");
+  if (useSavedKey && ['openai', 'opencode-console', 'opencode-go'].includes(id)) {
+    return executeWithSavedProvider(id,config,architectInstructions(single),input,expertSchema);
+  }
   const key = credential(id);
   if (!key.trim())
     throw new Error("API key missing for the selected provider.");

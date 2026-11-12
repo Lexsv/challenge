@@ -27,11 +27,11 @@ export function createRun(
     throw new ConfigurationError(
       "Provider identity is required for new configurations.",
     );
-  if (!evaluatorSettings && defaultProvider !== "openai")
+  if (reference.trim() && !evaluatorSettings && defaultProvider !== "openai")
     throw new ConfigurationError(
       "Evaluator configuration is required for this provider; no provider-scoped defaults are configured.",
     );
-  if (!evaluatorSettings && !defaultModel.trim())
+  if (reference.trim() && !evaluatorSettings && !defaultModel.trim())
     throw new ConfigurationError("Select a model for the evaluator.");
   return createProviderRun(
     question,

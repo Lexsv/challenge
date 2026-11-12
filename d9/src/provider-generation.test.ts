@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { ProviderRegistry } from "./provider-registry";
-import { generateWithProvider, validateExperts } from "./generation";
+import { generateWithProvider, generationReadiness, validateExperts } from "./generation";
 import { adjacentExpert } from "./interaction-safety";
 import type { Adapter } from "./openai";
 
@@ -19,6 +19,27 @@ function setup(id: string, execute: Adapter, structuredOutput = true) {
   };
 }
 describe("provider-aware generation", () => {
+  it('explains missing credentials, default model, and structured output separately', () => {
+    const registry = new ProviderRegistry([setup('openai', vi.fn(), false)]);
+    expect(generationReadiness(registry,{provider:'openai',model:'',maxTokens:100},false)).toMatch(/Connect and verify/);
+    expect(generationReadiness(registry,{provider:'openai',model:'',maxTokens:100},true)).toMatch(/default model/);
+    expect(generationReadiness(registry,{provider:'openai',model:'m',maxTokens:100},true)).toMatch(/Structured Output/);
+  });
+  it.each(['openai','opencode-console','opencode-go'])('uses the saved-credential proxy for %s without reading a temporary key', async id => {
+    const registry = new ProviderRegistry([setup(id, vi.fn())]);
+    const expected = JSON.stringify({experts:[{name:'Example',roleLabel:'Reviewer',description:'Checks',rolePrompt:'Review'}]});
+    const payload = id === 'openai' ? {output:[{type:'message',content:[{type:'output_text',text:expected}]}]} : {choices:[{message:{content:expected}}]};
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify(payload),{status:200}));
+    vi.stubGlobal('fetch',fetcher);
+    try {
+      const getKey = vi.fn();
+      const result = await generateWithProvider(registry,{provider:id,model:'same-model',maxTokens:100},getKey,'one reviewer',false,true);
+      expect(result).toMatchObject({status:'succeeded',text:expected});
+      expect(getKey).not.toHaveBeenCalled();
+      expect(fetcher.mock.calls[0][0]).toBe(`/api/credentials/${id}/request`);
+      expect(JSON.stringify(JSON.parse(fetcher.mock.calls[0][1].body))).toContain('json_schema');
+    } finally {vi.unstubAllGlobals();}
+  });
   it("routes OpenAI and OpenCode to separate adapters and credentials with their settings", async () => {
     const openai = vi.fn().mockResolvedValue(ok),
       console = vi.fn().mockResolvedValue(ok),

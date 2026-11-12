@@ -44,6 +44,8 @@ import type { ProviderRegistry } from "./provider-registry";
 import { ManagerAgent, createManagerConversation } from "./manager-agent";
 import { createManagerLlmAdapter } from "./manager-llm-adapter";
 import type { ToolRegistry } from "./tool-runtime";
+import { loadFunctions } from './custom-functions-api';
+import { executableFunction } from './custom-function-runtime';
 import type { ManagerConversationState } from "./manager-agent";
 import type { OpenCodeConnection, OpenCodeKeys } from "./builtin-connection-settings";
 import type { ToolExecutionType } from "./tool-execution-type";
@@ -490,6 +492,7 @@ export function SessionChat({
     return () => { current = false; };
   }, [active, provider, selectedModel, registry]);
   const providerModels = registry.modelOptionsFor(provider);
+  const modelProblem = selectedModel && !providerModels.includes(selectedModel) ? 'The selected model is unavailable for this provider. Select an available model.' : '';
   const selectedKey = provider === "openai" ? openAIKey : openCodeKeys[provider];
   const providerLabel =
     provider === "openai"
@@ -499,7 +502,7 @@ export function SessionChat({
         : "OpenCode Go";
   const credentialStates = useSyncExternalStore(credentials.subscribe, credentials.getSnapshot, credentials.getSnapshot);
   const savedCredential = credentialStates[provider];
-  const useSavedKey = !selectedKey.trim() && !!savedCredential?.saved;
+  const useSavedKey = !selectedKey.trim() && !!savedCredential?.saved && savedCredential.verification === 'verified';
   const hasCredential = !!selectedKey.trim() || useSavedKey;
   const timeline = useMemo(
     () =>
@@ -537,7 +540,7 @@ export function SessionChat({
 
   const send = () => submitSession({
     lock: sendLock, draft: input, ready: !running && historyLoaded && !saveFailed && !limitSaving && !contextSaving,
-    model: selectedModel, provider, hasCredential,
+    model: selectedModel, provider, hasCredential, modelProblem,
     onBlocked: (description) => setUiEvents((events) => [...events, {
       kind: 'manager', id: crypto.randomUUID(), createdAt: Date.now(), runId: 'ui',
       category: 'SYSTEM', status: 'failed', description,
@@ -558,6 +561,8 @@ export function SessionChat({
           fullHistory.current = true;
         }
         setAccountingState(undefined); setDialogueCounts(undefined);
+        const savedFunctions = await loadFunctions();
+        toolRegistry.replaceCustomTools(savedFunctions.map(executableFunction));
         const adapter = createManagerLlmAdapter({
           providerId: provider,
           model: selectedModel,
@@ -666,6 +671,7 @@ export function SessionChat({
           )}
           {historyLoaded && <Typography variant="caption" color="text.secondary">{providerLabel} · {selectedModel || 'Select a model'}</Typography>}
           {selection.notice && <Alert severity="warning">{selection.notice}</Alert>}
+          {modelProblem && <Alert severity="warning">{modelProblem}</Alert>}
           {!isWeek2Provider(provider) && <Alert severity="warning">{unsupportedWeek2ProviderMessage}</Alert>}
           {!hasCredential && (
             <Typography variant="caption" color="text.secondary">

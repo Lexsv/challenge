@@ -1,6 +1,8 @@
 import { centeredTable } from "./table-alignment";
 import { experimentCost, formatCost, requestCost } from "./request-cost";
 import { retryCredentialReason } from "./interaction-safety";
+import { configurationProblem } from './engine';
+import type { ProviderRegistry } from './provider-registry';
 import { useState } from "react";
 import {
   Accordion,
@@ -289,17 +291,18 @@ export function RunView({
   retry,
   retryEvaluation,
   credential,
+  registry,
 }: {
   run: Run;
   disabled: boolean;
   refresh: () => void;
   retry: (index: number) => void;
   retryEvaluation: () => void;
-  credential?: (provider: string) => string;
+  credential?: ((provider: string) => string) & { saved?: (provider: string) => boolean };
+  registry?: ProviderRegistry;
 }) {
-  const evaluatorRetryReason = credential
-    ? retryCredentialReason(run.snapshot.evaluator.provider, credential)
-    : undefined;
+  const currentPolicy = run.snapshot.validationPolicy !== 'historical-openai-v0';
+  const evaluatorRetryReason = (registry && currentPolicy ? configurationProblem(registry, run.snapshot.evaluator, 'Evaluator', true) : undefined) || (credential ? retryCredentialReason(run.snapshot.evaluator.provider, credential) : undefined);
   const [selectedResultId, setSelectedResultId] = useState<string | null>(null);
   const [answerResultId, setAnswerResultId] = useState<string | null>(null);
   const answerResult = run.results.find(
@@ -653,9 +656,7 @@ export function RunView({
               )}
               disabled={disabled}
               retryReason={
-                credential
-                  ? retryCredentialReason(selected.expert.provider, credential)
-                  : undefined
+                (registry && currentPolicy ? configurationProblem(registry, selected.expert, 'Expert', false) : undefined) || (credential ? retryCredentialReason(selected.expert.provider, credential) : undefined)
               }
               refresh={refresh}
               retry={() => retry(selectedIndex)}

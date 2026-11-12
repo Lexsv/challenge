@@ -296,11 +296,16 @@ export function managerContextBudget(input: ManagerRequestConfig) {
 
 export function buildManagerRequestBody(input: { providerId: ProviderId; model: string; messages: readonly ManagerLlmMessage[]; tools: readonly ToolCatalogItem[]; outputTokens: number }) {
   const map = buildProviderToolNameMap(input.tools);
+  const hasFunctions = input.tools.some(tool => tool.executable && tool.kind === 'user-defined' && tool.executionType === 'function');
+  const messages: readonly ManagerLlmMessage[] = hasFunctions ? [
+    {role:'system', content:'When an available function matches the user’s requested operation and all required arguments are known, call that function to compute the result, even for simple calculations. Choose based on its description and input schema. Do not invent missing arguments or call unrelated functions.'},
+    ...input.messages,
+  ] : input.messages;
   return input.providerId === 'openai' ? {
-    model: input.model, store: false, input: toOpenAIResponsesInput(input.messages, map),
+    model: input.model, store: false, input: toOpenAIResponsesInput(messages, map),
     tools: toolSchemas(input.tools, map), tool_choice: input.tools.length ? 'auto' : 'none',
   } : {
-    model: input.model, messages: toOpenAIChatMessages(input.messages, map),
+    model: input.model, messages: toOpenAIChatMessages(messages, map),
     tools: toolSchemas(input.tools, map).map(({ type, ...definition }) => ({ type, function: definition })),
     tool_choice: input.tools.length ? 'auto' : 'none',
   };

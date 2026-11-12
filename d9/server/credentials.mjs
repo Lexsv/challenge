@@ -116,14 +116,17 @@ export function createCredentialRoutes(store = new MacKeychainStore(), fetcher =
       const key = candidate ? value.key.trim() : await store.read(provider);
       if (generation(provider) !== revision) { reply(409, { error: 'Credential operation superseded.' }); return true; }
       if (operation === 'request' && (typeof value.model !== 'string' || !value.model.trim() || value.model.length > 200)) { reply(400, { error: 'Model required.' }); return true; }
+      const reserved = new Set(['model','store','instructions','input','messages','text','response_format','tools','tool_choice','max_output_tokens','max_completion_tokens','reasoning']);
+      const extra = value.parameters && typeof value.parameters === 'object' && !Array.isArray(value.parameters) ? value.parameters : {};
+      if (Object.keys(extra).some(name => reserved.has(name))) { reply(400, {error:'A parameter conflicts with managed request fields.'}); return true; }
       // OpenAI's authenticated models route is lightweight. Console's public catalog cannot prove authentication;
       // use a single-token request to a paid model already present in the local catalog.
       const target = operation === 'verify' && provider === 'openai' ? 'https://api.openai.com/v1/models' : endpoints[provider];
       const payload = operation === 'verify'
         ? { model: provider === 'opencode-go' ? 'glm-5.3-flash' : 'deepseek-v4.1-flash', messages: [{ role: 'user', content: 'OK' }], max_tokens: 1 }
         : provider === 'openai'
-          ? { model: value.model, store: false, input: value.input, tools: value.tools, tool_choice: value.tool_choice ?? 'auto', ...(Number.isSafeInteger(value.max_output_tokens) && value.max_output_tokens > 0 ? { max_output_tokens: value.max_output_tokens } : {}) }
-          : { model: value.model, messages: value.messages, tools: value.tools, tool_choice: value.tool_choice ?? 'auto', ...(Number.isSafeInteger(value.max_completion_tokens) && value.max_completion_tokens > 0 ? { max_completion_tokens: value.max_completion_tokens } : {}) };
+          ? { ...extra, model: value.model, store: false, input: value.input, ...(value.reasoning && typeof value.reasoning === 'object' ? {reasoning:value.reasoning} : {}), ...(typeof value.instructions === 'string' ? {instructions:value.instructions} : {}), ...(value.text && typeof value.text === 'object' ? {text:value.text} : {}), ...(value.tools ? {tools:value.tools, tool_choice:value.tool_choice ?? 'auto'} : {}), ...(Number.isSafeInteger(value.max_output_tokens) && value.max_output_tokens > 0 ? { max_output_tokens: value.max_output_tokens } : {}) }
+          : { ...extra, model: value.model, messages: value.messages, ...(value.response_format && typeof value.response_format === 'object' ? {response_format:value.response_format} : {}), ...(value.tools ? {tools:value.tools, tool_choice:value.tool_choice ?? 'auto'} : {}), ...(Number.isSafeInteger(value.max_completion_tokens) && value.max_completion_tokens > 0 ? { max_completion_tokens: value.max_completion_tokens } : {}) };
       const response = await fetcher(target, {
         method: operation === 'verify' && provider === 'openai' ? 'GET' : 'POST', redirect: 'error', signal: AbortSignal.timeout(operation === 'verify' ? 30000 : 120000),
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },

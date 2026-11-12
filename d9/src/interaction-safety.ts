@@ -24,11 +24,11 @@ export function selectExpertProvider(expert: Expert, provider: string): Expert {
 
 export function retryCredentialReason(
   provider: string | undefined,
-  credential: (id: string) => string,
+  credential: ((id: string) => string) & { saved?: (id: string) => boolean },
 ): string | undefined {
   if (!provider?.trim())
     return "The captured provider is unavailable. This result cannot be retried.";
-  if (!credential(provider).trim())
-    return `Add the API key for provider ${provider} in Settings before retrying.`;
+  if (!credential(provider).trim() && !credential.saved?.(provider))
+    return `Connect or verify provider ${provider} in Providers before retrying.`;
   return undefined;
 }

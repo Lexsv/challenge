@@ -4,6 +4,24 @@ import { ProviderRegistry } from "./provider-registry";
 import type { Expert } from "./models";
 
 describe("provider-neutral core", () => {
+  it('uses a verified saved credential for each captured provider on runs and retries', async () => {
+    const adapter = vi.fn();
+    const provider = (id:string) => ({id,catalog:()=>['model'],capabilities:()=>({structuredOutput:false,maxOutputTokens:1000,supportedParameters:{}}),validate:()=>undefined,execute:adapter});
+    const registry = new ProviderRegistry([provider('openai'),provider('opencode-console')]);
+    const expert = (id:string, providerId:string): Expert => ({id,name:id,description:'',rolePrompt:'role',provider:providerId,model:'model',maxTokens:100});
+    const run = createRun('question','',[expert('one','openai'),expert('two','opencode-console')],'model','openai',registry,{provider:'openai',model:'model',maxTokens:100},'current-v1');
+    const fetcher = vi.fn().mockResolvedValueOnce(new Response('{}',{status:503})).mockResolvedValueOnce(new Response(JSON.stringify({choices:[{message:{content:'answer'}}]}),{status:200})).mockResolvedValueOnce(new Response(JSON.stringify({output:[{type:'message',content:[{type:'output_text',text:'answer'}]}]}),{status:200}));
+    vi.stubGlobal('fetch',fetcher);
+    try {
+      const credential = Object.assign(()=>'',{saved:()=>true});
+      const engine = new Engine(()=>{},registry);
+      await engine.execute(run,credential);
+      await engine.execute(run,credential,0);
+      expect(run.results.map(result=>result.attempts.at(-1)?.status)).toEqual(['succeeded','succeeded']);
+      expect(fetcher.mock.calls.map(call=>call[0])).toEqual(['/api/credentials/openai/request','/api/credentials/opencode-console/request','/api/credentials/openai/request']);
+      expect(adapter).not.toHaveBeenCalled();
+    } finally {vi.unstubAllGlobals();}
+  });
   it("executes and retries a custom-only provider with its own credentials", async () => {
     const execute = vi
       .fn()

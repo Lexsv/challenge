@@ -10,12 +10,13 @@ import { saveTask, type BatchTask } from "./batch-tasks";
 
 const clipped = (lines: number) => ({ display: "-webkit-box", WebkitBoxOrient: "vertical" as const, WebkitLineClamp: lines, overflow: "hidden", whiteSpace: "pre-wrap" as const, overflowWrap: "anywhere" as const });
 
-export function BatchTaskList({ tasks, onChange, active, onRunTask, disabledReason, selection }: {
+export function BatchTaskList({ tasks, onChange, active, onRunTask, disabledReason, taskDisabledReason, selection }: {
   tasks: BatchTask[];
   onChange: (tasks: BatchTask[]) => void;
   active: boolean;
   onRunTask: (task: BatchTask) => void;
   disabledReason?: string;
+  taskDisabledReason?: (task: BatchTask) => string;
   selection?: { excludedIds: readonly string[]; onToggle: (id: string) => void };
 }) {
   const [draft, setDraft] = useState<{ id?: string; question: string; reference: string } | null>(null);
@@ -28,8 +29,9 @@ export function BatchTaskList({ tasks, onChange, active, onRunTask, disabledReas
     <Stack spacing={0.75}>
       {tasks.map((task, index) => {
         const selected = selection && !selection.excludedIds.includes(task.id);
+        const runProblem = taskDisabledReason?.(task) || disabledReason;
         return (
-          <Paper key={task.id} variant="outlined" sx={{ p: 0.75, bgcolor: selected ? "secondary.main" : "background.paper" }}>
+          <Paper key={task.id} variant="outlined" sx={{ p: 0.75, bgcolor: "background.paper", borderColor: selected ? 'primary.main' : 'divider' }}>
             <Stack direction="row" alignItems="flex-start" gap={0.75}>
               {selection && <Checkbox size="small" checked={!!selected} disabled={active} onChange={() => selection.onToggle(task.id)} inputProps={{ "aria-label": `Select task ${index + 1}` }} />}
               <DescriptionOutlined color="primary" fontSize="small" sx={{ mt: 0.75 }} />
@@ -40,7 +42,7 @@ export function BatchTaskList({ tasks, onChange, active, onRunTask, disabledReas
             </Stack>
             <Stack direction="row" justifyContent="flex-end">
               <Tooltip title={`Edit task ${index + 1}`}><span><IconButton size="small" disabled={active} aria-label={`Edit task ${index + 1}`} onClick={() => { setError(""); setDraft({ id: task.id, question: task.question, reference: task.reference }); }}><SettingsOutlined fontSize="small" /></IconButton></span></Tooltip>
-              <Tooltip title={disabledReason || `Run task ${index + 1}`}><span><IconButton size="small" color="primary" disabled={active || !!disabledReason} aria-label={`Run task ${index + 1}`} onClick={() => onRunTask(task)}><PlayArrow fontSize="small" /></IconButton></span></Tooltip>
+              <Tooltip title={runProblem || `Run task ${index + 1}`}><span><IconButton size="small" color="primary" disabled={active || !!runProblem} aria-label={`Run task ${index + 1}`} onClick={() => onRunTask(task)}><PlayArrow fontSize="small" /></IconButton></span></Tooltip>
               <Tooltip title={`Delete task ${index + 1}`}><span><IconButton size="small" disabled={active} aria-label={`Delete task ${index + 1}`} onClick={() => onChange(tasks.filter((entry) => entry.id !== task.id))}><DeleteOutline fontSize="small" /></IconButton></span></Tooltip>
             </Stack>
           </Paper>

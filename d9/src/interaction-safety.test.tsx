@@ -35,6 +35,9 @@ describe("expert editor and retry safety", () => {
     const keys = (id: string) => (id === "opencode-go" ? "dummy" : "");
     expect(retryCredentialReason("opencode-go", keys)).toBeUndefined();
     expect(retryCredentialReason("openai", keys)).toContain("openai");
+    const saved = Object.assign((_: string) => '', {saved:(id:string)=>id === 'openai'});
+    expect(retryCredentialReason('openai',saved)).toBeUndefined();
+    expect(retryCredentialReason('opencode-go',saved)).toContain('opencode-go');
     expect(retryCredentialReason(undefined, keys)).toContain(
       "captured provider",
     );

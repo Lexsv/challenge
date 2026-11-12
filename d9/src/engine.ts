@@ -9,6 +9,7 @@ import {
   type Attempt,
 } from "./models";
 import { validateExpertConfiguration, type ProviderRegistry } from "./provider-registry";
+import { executeWithSavedProvider } from './saved-provider-execution';
 import {
   evaluationSchema,
   validateEvaluation,
@@ -94,7 +95,7 @@ export function createRun(
     const problem = configurationProblem(registry, expert, "Expert", false);
     if (problem) throw new ConfigurationError(problem);
   }
-  const evaluatorProblem = configurationProblem(
+  const evaluatorProblem = reference.trim() && configurationProblem(
     registry,
     evaluator,
     "Evaluator",
@@ -130,7 +131,7 @@ export function createRun(
     busy: false,
   };
 }
-export type CredentialSource = (provider: string) => string;
+export type CredentialSource = ((provider: string) => string) & { saved?: (provider: string) => boolean };
 export class Engine {
   active = false;
   constructor(
@@ -207,7 +208,7 @@ export class Engine {
             : "Structured output support is unknown or unsupported.",
         };
       const currentKey = key(provider);
-      if (!currentKey.trim())
+      if (!currentKey.trim() && !key.saved?.(provider))
         return {
           id: crypto.randomUUID(),
           status: "failed",
@@ -215,7 +216,9 @@ export class Engine {
           ms: 0,
           error: "API key missing. Open connection settings before retrying.",
         };
-      const outcome = await selectedAdapter(currentKey, { settings, instructions, input, schema });
+      const outcome = currentKey.trim()
+        ? await selectedAdapter(currentKey, { settings, instructions, input, schema })
+        : await executeWithSavedProvider(provider, settings, instructions, input, schema);
       const attempt: Attempt = { id: crypto.randomUUID(), ...outcome };
       const cost = requestCost(attempt, provider);
       if (cost) attempt.cost = cost;

@@ -1,5 +1,7 @@
 import { vintagePalette as p } from "./vintage-palette";
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
+import { loadFunctions, saveFunction, deleteFunction } from './custom-functions-api';
+import { parseFunction } from './custom-function-runtime';
 import {
   Alert,
   Box,
@@ -38,6 +40,7 @@ import ChevronRight from "@mui/icons-material/ChevronRight";
 import type { Expert } from "./models";
 import type { ToolCatalogItem, ToolRegistry } from "./tool-runtime";
 import { toolExecutionTypeMeta } from "./tool-execution-type";
+const FunctionIcon = toolExecutionTypeMeta.function.icon;
 
 const toolTypes = ["Function", "API Tool", "AI Agent Tool"] as const;
 type ToolType = (typeof toolTypes)[number];
@@ -88,6 +91,7 @@ type ToolDraft = {
 };
 
 type RawPreview = "raw" | "preview";
+const toolFromSaved = (item: {id:string;name:string;description:string;pseudocode:string}): ToolRecord => ({id:item.id,type:'Function',name:item.name,description:item.description,config:{definition:item.pseudocode}});
 
 const typeIcons = {
   Function: CalculateOutlined,
@@ -197,6 +201,10 @@ function CodeBlock({ source, highlighted = false }: { source: string; highlighte
 export function validateToolDraft(draft: ToolDraft, agents: Expert[]): string | undefined {
   if (!draft.name.trim()) return "Tool name is required.";
   if (!draft.description.trim()) return "Description is required.";
+  if (draft.type === 'Function') {
+    try { parseFunction((draft.config as FunctionConfig).definition); }
+    catch (error) { return error instanceof Error ? error.message : 'Invalid pseudocode.'; }
+  }
   if (draft.type === "API Tool") {
     const config = draft.config as ApiConfig;
     if (!config.endpoint.trim()) return "Endpoint URL is required.";
@@ -235,12 +243,18 @@ function ToolDialog({
   agents,
   onSave,
   onClose,
+  saving,
+  saveDisabled,
+  saveError,
 }: {
   draft: ToolDraft;
   mode: "create" | "edit";
   agents: Expert[];
   onSave: (draft: ToolDraft) => void;
   onClose: () => void;
+  saving?: boolean;
+  saveDisabled?: boolean;
+  saveError?: string;
 }) {
   const [localDraft, setLocalDraft] = useState<ToolDraft>(() => structuredClone(draft));
   const [error, setError] = useState("");
@@ -562,16 +576,17 @@ function ToolDialog({
             </Box>
           </Paper>
         </Box>
-        {error && (
+        {(error || saveError) && (
           <Alert severity="error" sx={{ mt: 2 }}>
-            {error}
+            {error || saveError}
           </Alert>
         )}
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose}>Cancel</Button>
+        <Button onClick={onClose} disabled={saving}>Cancel</Button>
         <Button
           variant="contained"
+          disabled={saving || saveDisabled}
           onClick={() => {
             const issue = validateToolDraft(localDraft, agents);
             if (issue) {
@@ -742,11 +757,10 @@ export function BuiltInToolRow({ tool, expanded = false, onToggle }: {
       </TableCell>
       <TableCell>{meta && ExecutionIcon ? <Chip size="small" icon={<ExecutionIcon fontSize="small" />} label={meta.label}
         sx={{ bgcolor: meta.background, color: meta.color, '& .MuiChip-icon': { color: meta.color } }} /> : '—'}</TableCell>
-      <TableCell sx={{ fontFamily: 'monospace', fontSize: '0.8rem', overflowWrap: 'anywhere' }}>{tool.id}</TableCell>
       <TableCell><Typography variant="body2" noWrap>{tool.description}</Typography></TableCell>
     </TableRow>
     <TableRow aria-hidden={!expanded}>
-      <TableCell colSpan={4} sx={{ py: 0, borderBottom: expanded ? undefined : 0 }}>
+      <TableCell colSpan={3} sx={{ py: 0, borderBottom: expanded ? undefined : 0 }}>
         <Collapse in={expanded} timeout="auto">
           <Stack id={detailsId} role="region" aria-labelledby={nameId} spacing={1} sx={{ py: 1.5, minWidth: 0 }}>
             <Typography variant="body2" sx={{ overflowWrap: 'anywhere' }}>{tool.description}</Typography>
@@ -772,6 +786,20 @@ export function ToolsPage({
   initialTools?: ToolRecord[];
 }) {
   const [tools, setTools] = useState<ToolRecord[]>(() => structuredClone(initialTools));
+  const [loaded, setLoaded] = useState(false);
+  const [loadingAttempt, setLoadingAttempt] = useState(0);
+  const [storageError, setStorageError] = useState('');
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    let active=true; setLoaded(false); setStorageError('');
+    void loadFunctions().then(items=>{if(active){setTools(items.map(toolFromSaved));setLoaded(true);}})
+      .catch(()=>{if(active)setStorageError('Could not load custom Functions. Please retry.');});
+    return ()=>{active=false;};
+  },[loadingAttempt]);
+  const reconcile = async () => {
+    try {setTools((await loadFunctions()).map(toolFromSaved));setLoaded(true);}
+    catch {setLoaded(false);}
+  };
   const builtInTools = toolRegistry.listBuiltIn();
   const [expandedBuiltIns, setExpandedBuiltIns] = useState<Set<string>>(() => new Set());
   const [typePickerOpen, setTypePickerOpen] = useState(false);
@@ -821,8 +849,7 @@ export function ToolsPage({
             <TableHead><TableRow>
               <TableCell scope="col" sx={{ width: '26%' }}>Name</TableCell>
               <TableCell scope="col" sx={{ width: '17%' }}>Type</TableCell>
-              <TableCell scope="col" sx={{ width: '26%' }}>Tool ID</TableCell>
-              <TableCell scope="col" sx={{ width: '31%' }}>Description</TableCell>
+              <TableCell scope="col">Description</TableCell>
             </TableRow></TableHead>
             <TableBody>{builtInTools.map((tool) => <BuiltInToolRow key={tool.id} tool={tool} expanded={expandedBuiltIns.has(tool.id)}
               onToggle={() => setExpandedBuiltIns((current) => {
@@ -836,8 +863,9 @@ export function ToolsPage({
       <Stack component="section" spacing={1.5} aria-labelledby="custom-tools-heading">
         <Stack direction="row" gap={1} justifyContent="space-between" alignItems="center" flexWrap="wrap">
           <Typography variant="h5" component="h3" id="custom-tools-heading">Custom Tools</Typography>
-          {tools.length > 0 && <Button variant="contained" startIcon={<Add />} onClick={() => setComingSoonOpen(true)}>Add custom tool</Button>}
+          {tools.length > 0 && <Button variant="contained" disabled={!loaded || saving} startIcon={<Add />} onClick={() => setTypePickerOpen(true)}>Add custom tool</Button>}
         </Stack>
+      {storageError && !editor && <Alert severity="error" action={!loaded ? <Button onClick={()=>setLoadingAttempt(n=>n+1)}>Retry</Button> : undefined}>{storageError}</Alert>}
       {tools.length === 0 ? (
         <Paper variant="outlined" sx={{ px: 2, py: { xs: 7, md: 10 } }}>
           <Stack alignItems="center" spacing={1.5} textAlign="center">
@@ -848,118 +876,23 @@ export function ToolsPage({
             <Typography color="text.secondary">
               Create your first custom tool to extend your agents&apos; capabilities.
             </Typography>
-            <Button variant="contained" startIcon={<Add />} onClick={() => setComingSoonOpen(true)}>
+            <Button variant="contained" disabled={!loaded || saving} startIcon={<Add />} onClick={() => setTypePickerOpen(true)}>
               Add custom tool
             </Button>
           </Stack>
         </Paper>
       ) : (
-        <Box
-          sx={{
-            display: "grid",
-            gridTemplateColumns: {
-              xs: "1fr",
-              sm: "repeat(2, minmax(0, 1fr))",
-              lg: "repeat(3, minmax(0, 1fr))",
-            },
-            gap: 2,
-          }}
-        >
-          {tools.map((tool) => {
-            const Icon = typeIcons[tool.type];
-            return (
-              <Paper
-                key={tool.id}
-                variant="outlined"
-                role="button"
-                tabIndex={0}
-                onClick={() => setDetailsToolId(tool.id)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" || event.key === " ") {
-                    event.preventDefault();
-                    setDetailsToolId(tool.id);
-                  }
-                }}
-                sx={{
-                  p: 2,
-                  borderRadius: 2,
-                  minHeight: 210,
-                  maxHeight: 240,
-                  bgcolor: "background.paper",
-                  display: "flex",
-                  cursor: "pointer",
-                  outline: "none",
-                  "&:focus-visible": {
-                    boxShadow: (theme) => `0 0 0 2px ${theme.palette.primary.main}`,
-                  },
-                }}
-              >
-                <Stack spacing={1.2} sx={{ minWidth: 0, flex: 1 }}>
-                  <Stack direction="row" justifyContent="space-between" alignItems="flex-start">
-                    <Box sx={{ display: "flex", p: 1, borderRadius: 1.5, bgcolor: "secondary.main", color: "primary.dark" }}>
-                      <Icon />
-                    </Box>
-                    <Stack direction="row" spacing={0.5}>
-                      <Tooltip title="Edit tool">
-                        <IconButton
-                          size="small"
-                          aria-label={`Edit tool ${tool.name}`}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            setEditor({ mode: "edit", draft: editDraft(tool) });
-                          }}
-                        >
-                          <SettingsOutlined fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
-                      <Tooltip title="Delete tool">
-                        <IconButton
-                          size="small"
-                          color="error"
-                          aria-label={`Delete tool ${tool.name}`}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            setDeleteToolId(tool.id);
-                          }}
-                        >
-                          <DeleteOutline fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
-                    </Stack>
-                  </Stack>
-                  <Typography variant="h6" sx={{ overflowWrap: "anywhere" }}>
-                    {tool.name}
-                  </Typography>
-                  <Chip size="small" label={tool.type} sx={{ alignSelf: "flex-start", bgcolor: "secondary.main" }} />
-                  <Typography
-                    color="text.secondary"
-                    sx={{
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      display: "-webkit-box",
-                      WebkitLineClamp: 5,
-                      WebkitBoxOrient: "vertical",
-                    }}
-                  >
-                    {tool.description}
-                  </Typography>
-                  <Box sx={{ mt: "auto", display: "flex", justifyContent: "flex-end" }}>
-                    <Button
-                      size="small"
-                      endIcon={<ChevronRight fontSize="small" />}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        setDetailsToolId(tool.id);
-                      }}
-                    >
-                      View Details
-                    </Button>
-                  </Box>
-                </Stack>
-              </Paper>
-            );
-          })}
-        </Box>
+        <TableContainer component={Paper} variant="outlined" role="region" aria-labelledby="custom-tools-heading" tabIndex={0} sx={{maxWidth: "100%", overflowX: "auto"}}>
+          <Table size="small" aria-label="Custom tools" sx={{minWidth:680,tableLayout:"fixed"}}>
+            <TableHead><TableRow><TableCell sx={{width:'26%'}}>Name</TableCell><TableCell sx={{width:'17%'}}>Type</TableCell><TableCell>Description</TableCell><TableCell align="right" sx={{width:100}}>Actions</TableCell></TableRow></TableHead>
+            <TableBody>{tools.map(tool=><TableRow key={tool.id} hover sx={{'&:focus-within': {bgcolor:'action.hover'}}}>
+              <TableCell component="th" scope="row" sx={{overflowWrap:"anywhere"}}>{tool.name}</TableCell>
+              <TableCell><Chip size="small" icon={<FunctionIcon fontSize="small" />} label={toolExecutionTypeMeta.function.label} sx={{bgcolor:toolExecutionTypeMeta.function.background,color:toolExecutionTypeMeta.function.color,'& .MuiChip-icon':{color:toolExecutionTypeMeta.function.color}}}/></TableCell><TableCell sx={{overflowWrap:"anywhere"}}>{tool.description}</TableCell>
+              <TableCell align="right"><Stack direction="row" justifyContent="flex-end"><Tooltip title="Edit tool"><IconButton size="small" disabled={!loaded || saving} aria-label={`Edit tool ${tool.name}`} onClick={()=>{setStorageError('');setEditor({mode:"edit",draft:editDraft(tool)});}}><SettingsOutlined fontSize="small"/></IconButton></Tooltip>
+                <Tooltip title="Delete tool"><IconButton size="small" disabled={!loaded || saving} color="error" aria-label={`Delete tool ${tool.name}`} onClick={()=>{setStorageError('');setDeleteToolId(tool.id);}}><DeleteOutline fontSize="small"/></IconButton></Tooltip></Stack></TableCell>
+            </TableRow>)}</TableBody>
+          </Table>
+        </TableContainer>
       )}
       </Stack>
       {typePickerOpen && (
@@ -967,7 +900,8 @@ export function ToolsPage({
           onClose={() => setTypePickerOpen(false)}
           onSelect={(type) => {
             setTypePickerOpen(false);
-            setEditor({ mode: "create", draft: createDraft(type) });
+            if(type==='Function') {setStorageError('');setEditor({ mode: "create", draft: createDraft(type) });}
+            else setComingSoonOpen(true);
           }}
         />
       )}
@@ -993,10 +927,19 @@ export function ToolsPage({
           mode={editor.mode}
           draft={editor.draft}
           agents={agents}
-          onClose={() => setEditor(null)}
-          onSave={(draft) => {
-            setTools((current) => saveToolRecord(current, draft, editor.mode));
-            setEditor(null);
+          saving={saving}
+          saveDisabled={!loaded}
+          saveError={storageError}
+          onClose={() => {if(!saving){setEditor(null);if(loaded)setStorageError('');}}}
+          onSave={async (draft) => {
+            if(saving || !loaded || draft.type!=='Function') return;
+            setSaving(true);setStorageError('');
+            try {
+              const saved=await saveFunction({id:draft.id,name:draft.name,description:draft.description,pseudocode:(draft.config as FunctionConfig).definition},editor.mode);
+              const record:ToolRecord={id:saved.id,type:'Function',name:saved.name,description:saved.description,config:{definition:saved.pseudocode}};
+              setTools(current=>saveToolRecord(current,record,editor.mode));setEditor(null);
+            } catch {await reconcile();setStorageError('Could not confirm the Function save. Check the saved list and retry.');}
+            finally {setSaving(false);}
           }}
         />
       )}
@@ -1011,15 +954,19 @@ export function ToolsPage({
         <DialogTitle id="delete-tool-title">Delete tool?</DialogTitle>
         <DialogContent>
           <Typography>Remove {deleteTool?.name} from tools?</Typography>
+          {storageError && <Alert severity="error" sx={{mt:1}}>{storageError}</Alert>}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setDeleteToolId(null)}>Cancel</Button>
+          <Button disabled={saving} onClick={() => setDeleteToolId(null)}>Cancel</Button>
           <Button
             color="error"
-            onClick={() => {
-              if (!deleteTool) return;
-              setTools((current) => deleteToolRecord(current, deleteTool.id));
-              setDeleteToolId(null);
+            disabled={saving}
+            onClick={async () => {
+              if (!deleteTool || saving) return;
+              setSaving(true);setStorageError('');
+              try {await deleteFunction(deleteTool.id);setTools(current=>deleteToolRecord(current,deleteTool.id));setDeleteToolId(null);}
+              catch {await reconcile();setStorageError('Could not confirm the Function deletion. Check the saved list and retry.');}
+              finally {setSaving(false);}
             }}
           >
             Delete tool

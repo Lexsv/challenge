@@ -86,6 +86,9 @@ export function createSessionServer(databasePath = fileURLToPath(new URL('../dat
       sessionId TEXT PRIMARY KEY REFERENCES sessions(id),
       facts TEXT NOT NULL CHECK(json_valid(facts)),
       coveredMessageId TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS custom_functions (
+      id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL, pseudocode TEXT NOT NULL
     );`);
   // SQLite cannot alter a CHECK constraint. Rebuild only the event table, atomically preserving every row.
   const historySchema = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'history_events'").get().sql;
@@ -131,6 +134,11 @@ export function createSessionServer(databasePath = fileURLToPath(new URL('../dat
   const existingEvent = db.prepare('SELECT * FROM history_events WHERE id = ?');
   const findEntity = db.prepare("SELECT payload FROM history_events WHERE sessionId = ? AND type = ? AND json_extract(payload, '$.id') = ? ORDER BY sequence LIMIT 1");
   const addEvent = db.prepare('INSERT INTO history_events (id, sessionId, sequence, type, payload) VALUES (?, ?, (SELECT COALESCE(MAX(sequence), 0) + 1 FROM history_events WHERE sessionId = ?), ?, ?)');
+  const functions = db.prepare('SELECT id, name, description, pseudocode FROM custom_functions ORDER BY rowid');
+  const findFunction = db.prepare('SELECT id, name, description, pseudocode FROM custom_functions WHERE id = ?');
+  const insertFunction = db.prepare('INSERT INTO custom_functions (id, name, description, pseudocode) VALUES (?, ?, ?, ?)');
+  const updateFunction = db.prepare('UPDATE custom_functions SET name = ?, description = ?, pseudocode = ? WHERE id = ?');
+  const deleteFunction = db.prepare('DELETE FROM custom_functions WHERE id = ?');
   const server = createServer(async (req, res) => {
     const reply = (status, body) => {
       res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
@@ -147,6 +155,28 @@ export function createSessionServer(databasePath = fileURLToPath(new URL('../dat
     const match = path.match(/^\/api\/sessions\/([a-zA-Z0-9-]+)$/);
     try {
       if (await credentialRoutes(req, path, reply)) return;
+      const functionRoute = path.match(/^\/api\/functions(?:\/([a-zA-Z0-9-]{1,100}))?$/);
+      if (functionRoute) {
+        const functionId = functionRoute[1];
+        if (req.method === 'GET' && !functionId) { reply(200, functions.all()); return; }
+        if (req.method === 'DELETE' && functionId) {
+          if (!deleteFunction.run(functionId).changes) { reply(404, {error:'Function not found.'}); return; }
+          reply(200, {id:functionId}); return;
+        }
+        if ((req.method === 'POST' && !functionId) || (req.method === 'PUT' && functionId)) {
+          if (!req.headers['content-type']?.startsWith('application/json')) { reply(415, {error:'JSON required.'}); return; }
+          let body = '';
+          for await (const chunk of req) { body += chunk; if (Buffer.byteLength(body) > 1048576) { reply(413, {error:'Function too large.'}); return; } }
+          let value; try { value=JSON.parse(body); } catch { reply(400, {error:'Invalid JSON.'}); return; }
+          if (!value || Object.keys(value).sort().join() !== 'description,id,name,pseudocode' || typeof value.id !== 'string' || !/^[a-zA-Z0-9-]{1,100}$/.test(value.id) || (functionId && value.id !== functionId) || typeof value.name !== 'string' || !value.name.trim() || value.name.length > 200 || typeof value.description !== 'string' || !value.description.trim() || value.description.length > 10000 || typeof value.pseudocode !== 'string' || value.pseudocode.length > 500000) { reply(400, {error:'Invalid Function.'}); return; }
+          if (req.method === 'POST') {
+            if (findFunction.get(value.id)) { reply(409, {error:'Function already exists.'}); return; }
+            insertFunction.run(value.id,value.name,value.description,value.pseudocode);
+          } else if (!updateFunction.run(value.name,value.description,value.pseudocode,value.id).changes) { reply(404, {error:'Function not found.'}); return; }
+          reply(req.method === 'POST' ? 201 : 200, findFunction.get(value.id)); return;
+        }
+        reply(405, {error:'Method not allowed.'}); return;
+      }
       if (match && req.method === 'DELETE') {
         db.exec('BEGIN IMMEDIATE');
         try {

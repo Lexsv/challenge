@@ -75,6 +75,18 @@ it('publishes the same successful OpenAI Verify result to header and dialog afte
   });
 });
 
+it('forwards structured generation fields through saved provider requests', async () => {
+  await fixture(async ({call,values,upstream}) => {
+    values.set('openai','placeholder'); values.set('opencode-console','placeholder');
+    const format = {type:'json_schema',name:'lab_output',strict:true,schema:{type:'object'}};
+    expect((await call('openai','/request','POST',{model:'model',input:'test',instructions:'architect',text:{format},max_output_tokens:100})).status).toBe(200);
+    expect(JSON.parse(String(upstream.mock.calls.at(-1)?.[1]?.body))).toMatchObject({input:'test',instructions:'architect',text:{format},max_output_tokens:100});
+    const response_format = {type:'json_schema',json_schema:format};
+    expect((await call('opencode-console','/request','POST',{model:'model',messages:[],response_format})).status).toBe(200);
+    expect(JSON.parse(String(upstream.mock.calls.at(-1)?.[1]?.body))).toMatchObject({messages:[],response_format});
+  });
+});
+
 it('saves only after successful verification, rechecks on reload, and retains an old key after rejection or transient errors', async () => {
   await fixture(async ({ call, restart, values, store, upstream }) => {
     expect((await call('openai', '', 'POST', { key: 'placeholder-unverified' })).status).toBe(405);

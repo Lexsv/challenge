@@ -56,6 +56,12 @@ export type UserDefinedToolLike = {
 export class ToolRegistry {
   private readonly tools = new Map<string, ExecutableTool<unknown, unknown>>();
   private readonly libraries = new Map<string, ToolCatalogItem>();
+  private readonly customTools = new Map<string, ExecutableTool<unknown, unknown>>();
+
+  replaceCustomTools(tools: ExecutableTool<unknown, unknown>[]) {
+    this.customTools.clear();
+    for (const tool of tools) this.customTools.set(tool.id, tool);
+  }
 
   registerLibrary(tool: Pick<ToolCatalogItem, "id" | "name" | "description">) {
     this.libraries.set(tool.id, { ...tool, executable: false, kind: "built-in", executionType: "library" });
@@ -66,7 +72,7 @@ export class ToolRegistry {
   }
 
   get(id: string) {
-    return this.tools.get(id);
+    return this.tools.get(id) ?? this.customTools.get(id);
   }
 
   listBuiltIn(): ToolCatalogItem[] {
@@ -95,8 +101,15 @@ export class ToolRegistry {
     ];
   }
 
+  listExecutable(): ToolCatalogItem[] {
+    return [...this.listBuiltIn(), ...[...this.customTools.values()].map((tool): ToolCatalogItem => ({
+      id: tool.id, name: tool.name, description: tool.description, executable: true,
+      kind: 'user-defined', executionType: tool.executionType, inputSchema: tool.inputSchema,
+    }))];
+  }
+
   async executeById(id: string, args: unknown): Promise<ToolExecutionResult<unknown>> {
-    const tool = this.tools.get(id);
+    const tool = this.get(id);
     if (!tool) {
       return {
         ok: false,

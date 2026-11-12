@@ -8,7 +8,7 @@ import {
 } from "./interaction-safety";
 import { initialLabTab } from "./navigation";
 import { expertSettingsError } from "./expert-settings-validation";
-import React, { useRef, useState, useSyncExternalStore } from "react";
+import React, { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import {
   ThemeProvider,
   CssBaseline,
@@ -64,7 +64,7 @@ import {
 } from "./models";
 import { settings } from "./openai-model-compat";
 import { respond, type Adapter } from "./openai";
-import { generateWithProvider, validateExperts } from "./generation";
+import { generateWithProvider, generationReadiness, validateExperts } from "./generation";
 import { createRun, Engine } from "./legacy-engine";
 import { ConfigurationError, configurationProblem } from "./engine";
 import { ConnectionController } from "./connection";
@@ -250,6 +250,7 @@ export function App({
   getProviderKey?: (provider: string) => string;
 }) {
   const credentialStates = useSyncExternalStore(credentials.subscribe, credentials.getSnapshot, credentials.getSnapshot);
+  useEffect(() => { credentials.start(); }, []);
   const [connectionController] = useState(
     () => controller || new ConnectionController(undefined, true),
   );
@@ -279,12 +280,14 @@ export function App({
     ? (generationBase.provider ?? "")
     : "openai";
   const model = generationModelFor(providerId, openAIModel, generationBase);
-  const credential = (id: string) =>
+  const credential = Object.assign((id: string) =>
     id === "openai"
       ? connectionController.getKey()
       : id === "opencode-console" || id === "opencode-go"
         ? openCodeKeys[id]
-        : (getProviderKey?.(id) ?? "");
+        : (getProviderKey?.(id) ?? ""), {
+    saved: (id: string) => (id === 'openai' || id === 'opencode-console' || id === 'opencode-go') && credentialStates[id]?.saved === true && credentialStates[id]?.verification === 'verified',
+  });
   const generationSettings: Settings = generationBase
     ? { ...generationBase, model }
     : { ...settings(model), provider: providerId };
@@ -348,10 +351,9 @@ export function App({
       registry,
     );
   const active = !!engine.current.active || batchRunning;
-  const connectionValid =
-    !!credential(providerId).trim() &&
-    !registry.get(providerId)?.validate(generationSettings) &&
-    registry.get(providerId)?.capabilities(model)?.structuredOutput === true;
+  const savedGenerationConnection = credential.saved(providerId);
+  const useSavedGenerationKey = !credential(providerId).trim() && savedGenerationConnection;
+  const generationProblem = generationReadiness(registry, generationSettings, !!credential(providerId).trim() || savedGenerationConnection);
   const activeExperts = experts.filter(
     (expert) => !inactiveIds.includes(expert.id),
   );
@@ -363,22 +365,26 @@ export function App({
   );
   const latestBatch = runs.filter((run) => latestRunIds.includes(run.id));
   const expertProblem = selectedExperts
-    .map((expert) =>
-      configurationProblem(
-        registry,
-        resolveExpert(expert, model, providerId),
-        "Expert",
-        false,
-      ),
-    )
+    .map((expert) => {
+      const resolved = resolveExpert(expert, model, providerId);
+      return configurationProblem(registry, resolved, "Expert", false) ||
+        (!credential(resolved.provider!).trim() && !credential.saved(resolved.provider!) ? `Connect or verify provider ${resolved.provider} in Providers.` : undefined);
+    })
     .find(Boolean);
   const sharedDisabledReason = active
     ? "An experiment or retry is active."
     : !selectedExperts.length
       ? "Select at least one active agent to run an experiment."
-      : !connectionValid
-        ? "Configure an API key and supported model."
-        : expertProblem || "";
+      : expertProblem || "";
+  const taskReadiness = (candidateTasks: readonly BatchTask[]) => {
+    if (sharedDisabledReason) return sharedDisabledReason;
+    if (!candidateTasks.some(task => !!task.reference.trim())) return '';
+    if (!evaluatorBase && providerId !== 'openai') return 'Configure an evaluator for the selected provider before running a task with an expected answer.';
+    const evaluator = evaluatorBase ?? { ...settings(model), provider: providerId };
+    return configurationProblem(registry, evaluator, 'Evaluator', true) ||
+      (!evaluator.provider || (!credential(evaluator.provider).trim() && !credential.saved(evaluator.provider)) ? `Connect or verify provider ${evaluator.provider || '(not selected)'} in Providers.` : '');
+  };
+  const batchDisabledReason = taskReadiness(runMode === 'all' ? tasks : selectedTasks);
   const savedEditing = experts.find((agent) => agent.id === editing?.id);
   const editingDirty = hasUnsavedAgentChanges(
     savedEditing,
@@ -424,7 +430,7 @@ export function App({
     setAgentToDeleteId(null);
   }
   async function generate() {
-    if (generationLock.current || !connectionValid) return;
+    if (generationLock.current || generationProblem) return;
     generationLock.current = true;
     setGenerating(true);
     setGenerationError("");
@@ -436,6 +442,7 @@ export function App({
         credential,
         addText,
         false,
+        useSavedGenerationKey,
       );
     } catch {
       setGenerationError(
@@ -470,7 +477,7 @@ export function App({
   }
   async function launchBatch(selectedTasks: readonly BatchTask[]) {
     if (
-      sharedDisabledReason ||
+      taskReadiness(selectedTasks) ||
       !selectedTasks.length ||
       batchLock.current ||
       engine.current!.active
@@ -680,6 +687,7 @@ export function App({
                         active={active}
                         onRunTask={(task) => void launchBatch([task])}
                         disabledReason={sharedDisabledReason}
+                        taskDisabledReason={(task) => taskReadiness([task])}
                         selection={{
                           excludedIds: excludedTaskIds,
                           onToggle: (id) =>
@@ -714,7 +722,7 @@ export function App({
                         startIcon={<PlayArrow />}
                         sx={{ mt: 1.5, py: 1.15 }}
                         disabled={
-                          !!sharedDisabledReason ||
+                          !!batchDisabledReason ||
                           !(runMode === "all" ? tasks : selectedTasks).length
                         }
                         onClick={() =>
@@ -730,9 +738,9 @@ export function App({
                           Running tasks in order…
                         </Typography>
                       )}
-                      {sharedDisabledReason && !active && (
+                      {batchDisabledReason && !active && (
                         <Typography variant="body2" color="text.secondary" mt={1}>
-                          {sharedDisabledReason}
+                          {batchDisabledReason}
                         </Typography>
                       )}
                       {runError && (
@@ -759,9 +767,8 @@ export function App({
                             variant="outlined"
                             sx={{
                               px: 1,
-                              bgcolor: excludedExpertIds.includes(expert.id)
-                                ? "background.paper"
-                                : "secondary.main",
+                              bgcolor: "background.paper",
+                              borderColor: excludedExpertIds.includes(expert.id) ? 'divider' : 'primary.main',
                             }}
                           >
                             <FormControlLabel
@@ -843,6 +850,7 @@ export function App({
                             run={run}
                             disabled={active}
                             credential={credential}
+                            registry={registry}
                             refresh={() => redraw((n) => n + 1)}
                             retry={(index) =>
                               void engine.current!.execute(run, credential, index)
@@ -929,17 +937,7 @@ export function App({
                       <ListItem
                         key={expert.id}
                         disablePadding
-                        sx={{
-                          alignItems: "flex-start",
-                          border: 1,
-                          borderColor:
-                            editing?.id === expert.id
-                              ? "primary.main"
-                              : "divider",
-                          borderRadius: 1.5,
-                          mb: 0.75,
-                          bgcolor: "background.paper",
-                        }}
+                        sx={{ alignItems: "flex-start" }}
                       >
                         <ListItemButton
                           selected={editing?.id === expert.id}
@@ -955,27 +953,8 @@ export function App({
                           sx={{
                             minWidth: 0,
                             px: 1,
-                            borderRadius: 1.5,
-                            bgcolor:
-                              editing?.id === expert.id
-                                ? "secondary.main"
-                                : "transparent",
-                            "&:hover": {
-                              bgcolor:
-                                editing?.id === expert.id
-                                  ? "secondary.main"
-                                  : undefined,
-                            },
-                            "&.Mui-selected, &.Mui-selected:hover, &.Mui-selected.Mui-focusVisible":
-                              {
-                                bgcolor: "secondary.main",
-                              },
-                            "&.Mui-focusVisible": {
-                              outline: "2px solid",
-                              outlineColor: "primary.dark",
-                              outlineOffset: -2,
-                              borderRadius: 1.5,
-                            },
+                            borderRadius: 2,
+                            my: 0.5,
                           }}
                         >
                           <ListItemIcon sx={{ minWidth: 30 }}>
@@ -986,45 +965,10 @@ export function App({
                           </ListItemIcon>
                           <ListItemText
                             primary={expert.name}
-                            secondary={
-                              inactiveIds.includes(expert.id)
-                                ? [expert.roleLabel, "Inactive"]
-                                    .filter(Boolean)
-                                    .join(" · ")
-                                : expert.roleLabel
-                            }
+                            secondary={expert.roleLabel}
                             sx={{ overflowWrap: "anywhere" }}
                           />
                         </ListItemButton>
-                        <Stack
-                          direction="row"
-                          sx={{ flexShrink: 0, pt: 1, pr: 0.5 }}
-                        >
-                          <Tooltip title="Duplicate agent">
-                            <IconButton
-                              size="small"
-                              aria-label="Duplicate agent"
-                              onClick={() =>
-                                requestAgentAction({
-                                  id: expert.id,
-                                  kind: "duplicate",
-                                })
-                              }
-                            >
-                              <ContentCopyOutlined fontSize="small" />
-                            </IconButton>
-                          </Tooltip>
-                          <Tooltip title="Delete agent">
-                            <IconButton
-                              size="small"
-                              color="error"
-                              aria-label="Delete agent"
-                              onClick={() => setAgentToDeleteId(expert.id)}
-                            >
-                              <DeleteOutline fontSize="small" />
-                            </IconButton>
-                          </Tooltip>
-                        </Stack>
                       </ListItem>
                     ))}
                   </List>
@@ -1057,13 +1001,14 @@ export function App({
                   </Stack>
                   {editing && (
                     <Paper variant="outlined" sx={{ minWidth: 0 }}>
+                      <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ px: 1, borderBottom: 1, borderColor: "divider", minWidth: 0 }}>
                       <Tabs
                         value={agentTab}
                         onChange={(_, next: "general" | "params") =>
                           setAgentTab(next)
                         }
                         aria-label="Agent details"
-                        sx={{ px: 1, borderBottom: 1, borderColor: "divider" }}
+                        sx={{ minWidth: 0 }}
                       >
                         <Tab
                           id="agent-general-tab"
@@ -1078,6 +1023,19 @@ export function App({
                           label="Params"
                         />
                       </Tabs>
+                        <Stack direction="row" sx={{ flexShrink: 0 }}>
+                          <Tooltip title="Duplicate agent">
+                            <IconButton size="small" aria-label="Duplicate agent" onClick={() => requestAgentAction({ id: editing.id, kind: "duplicate" })}>
+                              <ContentCopyOutlined fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                          <Tooltip title="Delete agent">
+                            <IconButton size="small" color="error" aria-label="Delete agent" onClick={() => setAgentToDeleteId(editing.id)}>
+                              <DeleteOutline fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                        </Stack>
+                      </Stack>
                       <Box sx={{ p: { xs: 2, md: 3 } }} key={editorRevision}>
                         <Box
                           role="tabpanel"
@@ -1590,9 +1548,9 @@ export function App({
                 {generationError}
               </Alert>
             )}
-            {!connectionValid ? (
+            {generationProblem ? (
               <Alert severity="info" sx={{ mt: 2 }}>
-                Configure an API key and catalog default model first.
+                {generationProblem}
               </Alert>
             ) : null}
           </DialogContent>
@@ -1602,7 +1560,7 @@ export function App({
             </Button>
             <Button
               variant="contained"
-              disabled={!!generating || !addText.trim() || !connectionValid}
+              disabled={!!generating || !addText.trim() || !!generationProblem}
               onClick={() => void generate()}
             >
               {generating ? "Generating…" : "Create Agents"}
