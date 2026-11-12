@@ -1,4 +1,4 @@
-import {expect,it} from 'vitest';
+import {expect,it,vi} from 'vitest';
 import {mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -6,8 +6,8 @@ import {createSessionServer} from '../server/sessions.mjs';
 import {ManagerAgent} from './manager-agent';
 import {createBuiltInToolRegistry} from './tool-runtime';
 import {emptySession} from './session-api';
-import {restoreHistory,type HistoryEvent} from './conversation-history';
-import {eventRunId,mergeHistoryPages,prependedScrollTop} from './history-pagination';
+import {HistoryWriter,restoreHistory,type HistoryEvent} from './conversation-history';
+import {eventRunId,mergeHistoryPages,prependedScrollTop,retrySavedHistory} from './history-pagination';
 import {buildWeek2Timeline} from './week2-agent-tool-lab';
 import {groupChatEvents,logsFailed,ChatRunLog} from './chat-run-log';
 import {renderToStaticMarkup} from 'react-dom/server';
@@ -20,6 +20,36 @@ it('anchors prepended content at the same viewport offset and idempotently merge
  expect(prependedScrollTop({height:2000,top:35},1980)).toBe(15);
  const event={id:'one',sessionId:'s',sequence:1,type:'run',payload:{id:'r'}} as HistoryEvent;
  expect(mergeHistoryPages([event],[event])).toEqual([event]);
+});
+
+it('synchronizes the full visible history and clears pagination after retrying a failed tool-result save',async()=>{
+ const initial=emptySession({id:'session',title:'Test',createdAt:1});
+ const state=structuredClone(initial),tools=createBuiltInToolRegistry();
+ const saved:HistoryEvent[]=[];let failResult=true;
+ const writer=new HistoryWriter(async event=>{
+  if(event.type==='tool-result'&&failResult){failResult=false;throw Error('save failed');}
+  if(!saved.some(item=>item.id===event.id))saved.push({...structuredClone(event),sequence:saved.length+1});
+ });
+ const seed=new ManagerAgent({complete:async()=>({text:'Saved answer'})},tools);
+ for(let i=1;i<=25;i++)await seed.run({state,userText:`Turn ${i}`,onEvent:event=>writer.append(event)});
+ const pageEvents=saved.filter(event=>new Set(state.runs.slice(-20).map(run=>run.id)).has(eventRunId(event)));
+ const oldCursor={before:pageEvents[0].sequence!,snapshot:saved.length};
+ const execute=vi.spyOn(tools,'executeById');
+ const manager=new ManagerAgent({complete:async()=>({toolCalls:[{id:'call',toolId:'builtin.tax_calculator',arguments:{amount:100,taxRate:15}}]})},tools);
+ await expect(manager.run({state,userText:'Calculate',onEvent:event=>writer.append(event)})).rejects.toThrow('save failed');
+ expect(execute).toHaveBeenCalledTimes(1);expect(oldCursor.before).toBeGreaterThan(0);
+ const restored=await retrySavedHistory(initial,writer,async()=>structuredClone(saved));
+ expect(restored.pageCursor).toBeUndefined();
+ expect(restored.pageEvents).toEqual(saved);
+ expect(restored.visibleRuns).toEqual(new Set(restored.conversation.runs.map(run=>run.id)));
+ const timeline=buildWeek2Timeline(restored.conversation,tools).filter(event=>restored.visibleRuns.has(event.runId));
+ const messages=timeline.filter(event=>event.kind==='message');
+ expect(messages.filter(event=>event.kind==='message'&&event.text==='Turn 1')).toHaveLength(1);
+ expect(messages.filter(event=>event.kind==='message'&&event.text==='Calculate')).toHaveLength(1);
+ expect(new Set(messages.map(event=>event.id)).size).toBe(messages.length);
+ expect(restored.conversation.runs).toHaveLength(26);
+ expect(restored.conversation.toolExecutions[0].status).toBe('completed');
+ expect(execute).toHaveBeenCalledTimes(1);
 });
 
 it('loads newest whole turns only, pages backwards without splits/duplicates, restores failures and retains full Manager context',async()=>{

@@ -163,9 +163,11 @@ export class ManagerAgent {
       contextEvents: [],
     }, run.id)).filter(turn => turn.length > 0);
     let selectedTurns: ManagerLlmMessage[][] = [];
+    // Once overflow removes a turn, do not reselect it or older turns during this run.
+    let firstEligibleTurn = 0;
     const prepare = async () => {
       const adapter = this.llm.context;
-      if (!adapter) { selectedTurns = turns.slice(); history = selectedTurns.flat(); llmMessages = [...history, ...current]; return; }
+      if (!adapter) { selectedTurns = turns.slice(firstEligibleTurn); history = selectedTurns.flat(); llmMessages = [...history, ...current]; return; }
       const required = await adapter.assess(current, executableTools);
       const hard = hardLimit(required);
       if ((hard !== undefined || required.target) && required.tokens === undefined) throw new Error('Cannot estimate the answer input for the model budget.');
@@ -173,7 +175,7 @@ export class ManagerAgent {
       const target = required.target && required.target > 0 ? Math.min(required.target, hard ?? Infinity) : hard;
       selectedTurns = [];
       if (target === undefined || (required.tokens !== undefined && required.tokens <= target)) {
-        for (let index = turns.length - 1; index >= 0; index--) {
+        for (let index = turns.length - 1; index >= firstEligibleTurn; index--) {
           const candidate = [turns[index], ...selectedTurns];
           const assessed = await adapter.assess([...candidate.flat(), ...current], executableTools);
           if (target !== undefined && (assessed.tokens === undefined || assessed.tokens > target)) break;
@@ -186,7 +188,7 @@ export class ManagerAgent {
       let response: ManagerLlmResponse;
       try {
         if (this.llm.context) await prepare();
-        else { selectedTurns = turns.slice(); history = selectedTurns.flat(); llmMessages = [...history, ...current]; }
+        else { selectedTurns = turns.slice(firstEligibleTurn); history = selectedTurns.flat(); llmMessages = [...history, ...current]; }
         const request = async () => {
           let comparison: Partial<RequestMeter> = { requestKind: 'answer', compacted: false };
           if (this.llm.context) {
@@ -208,7 +210,9 @@ export class ManagerAgent {
           await contextEvent('overflow');
           if (!selectedTurns.length) throw new Error('Context overflow: no older history can be removed for a retry.');
           const previous = await this.llm.context?.assess(llmMessages, executableTools);
-          selectedTurns.shift(); history = selectedTurns.flat(); llmMessages = [...history, ...current];
+          const dropped = selectedTurns.shift()!;
+          firstEligibleTurn = turns.indexOf(dropped) + 1;
+          history = selectedTurns.flat(); llmMessages = [...history, ...current];
           const reduced = await this.llm.context?.assess(llmMessages, executableTools);
           if (!previous || !reduced || previous.tokens === undefined || reduced.tokens === undefined || reduced.tokens >= previous.tokens) throw new Error('Context overflow: removing the oldest turn did not reduce the request.');
           await contextEvent('retrying', {beforeTokens: previous.tokens, afterTokens: reduced.tokens});

@@ -1,7 +1,7 @@
 import {expect,it,vi} from 'vitest';
 import {ManagerAgent,createManagerConversation,type ManagerLlmAdapter} from './manager-agent';
 import {ManagerProviderError} from './manager-llm-adapter';
-import {ToolRegistry} from './tool-runtime';
+import {ToolRegistry,createBuiltInToolRegistry} from './tool-runtime';
 
 it('selects newest whole turns, keeps 950 instead of adding an older turn to reach 1100, and retains failed turns',async()=>{
  const state=createManagerConversation(),tools=new ToolRegistry();
@@ -24,6 +24,30 @@ it('retries overflow once with a shorter payload and no summary',async()=>{
  const adapter:ManagerLlmAdapter={context:{assess:async messages=>({tokens:100+messages.length*10,limit:10000,target:1000}),summarize},complete:async({messages})=>{payloads.push(messages.map(m=>m.content));if(payloads.length===1)throw new ManagerProviderError({kind:'context-overflow',status:400});return{text:'Done'}}};
  const result=await new ManagerAgent(adapter,tools).run({state,userText:'Current'});
  expect(result.error).toBeUndefined();expect(payloads).toHaveLength(2);expect(payloads[0]).toContain('First turn');expect(payloads[1]).not.toContain('First turn');expect(payloads[1]).toContain('Second turn');expect(payloads[1].at(-1)).toBe('Current');expect(summarize).not.toHaveBeenCalled();
+});
+
+it('keeps an overflow-dropped turn excluded after executing a tool',async()=>{
+ const state=createManagerConversation(),tools=createBuiltInToolRegistry();
+ const seed=new ManagerAgent({complete:async()=>({text:'Prior reply'})},tools);
+ await seed.run({state,userText:'Oldest turn'});await seed.run({state,userText:'Newest turn'});
+ const execute=vi.spyOn(tools,'executeById');const summarize=vi.fn(async()=>{throw Error('must not summarize')});
+ const payloads:Parameters<ManagerLlmAdapter['complete']>[0]['messages'][]=[];
+ const adapter:ManagerLlmAdapter={context:{assess:async messages=>({tokens:100+messages.length*10,limit:10000,target:1000}),summarize},complete:async({messages})=>{
+  payloads.push(structuredClone(messages));
+  if(payloads.length===1)throw new ManagerProviderError({kind:'context-overflow',status:400});
+  if(payloads.length===2)return {toolCalls:[{id:'tax-call',toolId:'builtin.tax_calculator',arguments:{amount:100,taxRate:15}}]};
+  return {text:'Done'};
+ }};
+ const result=await new ManagerAgent(adapter,tools).run({state,userText:'Current'});
+ expect(result.error).toBeUndefined();expect(payloads).toHaveLength(3);
+ expect(payloads[0].map(m=>m.content)).toEqual(['Oldest turn','Prior reply','Newest turn','Prior reply','Current']);
+ for(const payload of payloads.slice(1)){
+  expect(payload.map(m=>m.content)).not.toContain('Oldest turn');
+  expect(payload.map(m=>m.content)).toContain('Newest turn');expect(payload.map(m=>m.content)).toContain('Current');
+ }
+ expect(payloads[2].slice(-2)).toMatchObject([{role:'assistant',toolCalls:[{id:'tax-call'}]},{role:'tool',toolCallId:'tax-call'}]);
+ expect(execute).toHaveBeenCalledExactlyOnceWith('builtin.tax_calculator',{amount:100,taxRate:15});
+ expect(summarize).not.toHaveBeenCalled();expect(state.messages.some(m=>m.text==='Oldest turn')).toBe(true);
 });
 
 it('sends a short dialogue in full and blocks required input above the model budget',async()=>{

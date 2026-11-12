@@ -1,4 +1,4 @@
-import { eventRunId, mergeHistoryPages, prependedScrollTop } from './history-pagination';
+import { eventRunId, mergeHistoryPages, prependedScrollTop, retrySavedHistory } from './history-pagination';
 import { sessionLimitOnClose } from "./session-limit";
 import { SessionStatsPanel, SessionStatsContent, SessionStatsFrame, sessionChatColumns } from "./session-stats-panel";
 import { restoreSessionModelPair, type SessionModelPair } from "./session-model-selection";
@@ -384,6 +384,7 @@ export function SessionChat({
   const [olderLoading, setOlderLoading] = useState(false);
   const [olderError, setOlderError] = useState('');
   const olderLock = useRef(false);
+  const pageGeneration = useRef(0);
   const prependAnchor = useRef<{height:number;top:number} | null>(null);
   const [accountingState, setAccountingState] = useState<ManagerConversationState>();
   const [dialogueCounts, setDialogueCounts] = useState<import('./session-api').HistoryPage['dialogueTokens']>();
@@ -418,9 +419,14 @@ export function SessionChat({
   }, [active, historyLoaded, historyAttempt, initialConversation]);
   const retrySave = async () => {
     setRetryingSave(true);
+    pageGeneration.current++;
     try {
-      await writer.flush();
-      setConversation(restoreHistory(initialConversation, await loadHistory(initialConversation.conversation.id)));
+      const restored = await retrySavedHistory(initialConversation, writer, () => loadHistory(initialConversation.conversation.id));
+      pageEvents.current = restored.pageEvents;
+      setVisibleRuns(restored.visibleRuns);
+      setPageCursor(restored.pageCursor);
+      setConversation(restored.conversation);
+      setOlderError('');
       fullHistory.current = true; setAccountingState(undefined); setDialogueCounts(undefined);
       setSaveFailed(false); setHistoryError("");
     }
@@ -431,10 +437,12 @@ export function SessionChat({
   const stickToBottomRef = useRef(true);
   const positioningRef = useRef(false);
   const loadOlder = async () => {
-    if (!active || !historyLoaded || running || olderLock.current || pageCursor?.before == null) return;
+    if (!active || !historyLoaded || running || saveFailed || retryingSave || olderLock.current || pageCursor?.before == null) return;
+    const generation = pageGeneration.current;
     olderLock.current = true; setOlderLoading(true); setOlderError('');
     try {
       const page = await loadHistoryPage(initialConversation.conversation.id, pageCursor.before, pageCursor.snapshot);
+      if (generation !== pageGeneration.current) return;
       const container = scrollRef.current;
       if(container)prependAnchor.current = {height:container.scrollHeight,top:container.scrollTop};
       stickToBottomRef.current = false;
@@ -442,7 +450,7 @@ export function SessionChat({
       setVisibleRuns(current=>new Set([...(current??[]),...page.events.map(eventRunId)]));
       if(!fullHistory.current)setConversation(restoreHistory(initialConversation,pageEvents.current));
       setPageCursor({before:page.nextBefore,snapshot:page.snapshot});
-    } catch {setOlderError('Could not load older messages. Please retry.');}
+    } catch {if (generation === pageGeneration.current) setOlderError('Could not load older messages. Please retry.');}
     finally {olderLock.current = false; setOlderLoading(false);}
   };
 
@@ -706,7 +714,7 @@ export function SessionChat({
             }}
             aria-label="Week 2 conversation history"
           >
-            {pageCursor?.before != null && <Button size="small" disabled={olderLoading || running} onClick={()=>void loadOlder()}>{olderLoading?'Loading older messages…':'Load older messages'}</Button>}
+            {pageCursor?.before != null && <Button size="small" disabled={olderLoading || running || saveFailed || retryingSave} onClick={()=>void loadOlder()}>{olderLoading?'Loading older messages…':'Load older messages'}</Button>}
             {olderError && <Alert severity="error">{olderError}</Alert>}
             <ChatRunLog events={timeline} />
             {running && (
