@@ -1,6 +1,7 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { CredentialIndicator } from './credential-indicator';
+import { CredentialFeedback, CredentialIndicator } from './credential-indicator';
+import { ProviderStatus } from './provider-status';
 import { expect, it, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -47,6 +48,32 @@ async function fixture(run: (ctx: {
   try { await start(); await run({ api, call, restart: async () => { await stop(); await start(); }, values, store, upstream }); }
   finally { if (server?.listening) await stop(); await rm(folder, { recursive: true, force: true }); }
 }
+
+it('publishes the same successful OpenAI Verify result to header and dialog after a retryable 503', async () => {
+  await fixture(async ({ call, store, upstream }) => {
+    const controller = new CredentialController(async (provider, action = '', init) => {
+      const response = await call(provider, action, init?.method ?? 'GET', init?.body ? JSON.parse(String(init.body)) : undefined);
+      return response.json();
+    });
+    upstream.mockResolvedValueOnce(new Response('placeholder-private-upstream-body', { status: 503 }));
+    const failed = await controller.verify('openai', 'placeholder-review-only');
+    expect(failed).toEqual({ saved: false, verification: 'retryable', reason: 'http-503' });
+    expect(store.save).not.toHaveBeenCalled();
+    expect(renderToStaticMarkup(createElement(CredentialFeedback, { status: failed! }))).toContain('temporarily unavailable');
+    expect(upstream.mock.calls[0][0]).toBe('https://api.openai.com/v1/models');
+    expect(upstream.mock.calls[0][1]?.method).toBe('GET');
+    const result = await controller.verify('openai', 'placeholder-review-only');
+    expect(result).toEqual({ saved: true, verification: 'verified' });
+    expect(store.save).toHaveBeenCalledTimes(1);
+    const status = controller.getSnapshot().openai!;
+    const header = renderToStaticMarkup(createElement(ProviderStatus, { verification: 'unverified', savedStatus: status }));
+    const dialog = renderToStaticMarkup(createElement(CredentialIndicator, { status, showProvider: false }));
+    expect(header).toContain('OpenAI · Verified');
+    expect(dialog).toContain('>Verified<');
+    expect(header + dialog).not.toContain('placeholder-review-only');
+    expect(header + dialog).not.toContain('placeholder-private-upstream-body');
+  });
+});
 
 it('saves only after successful verification, rechecks on reload, and retains an old key after rejection or transient errors', async () => {
   await fixture(async ({ call, restart, values, store, upstream }) => {
@@ -133,7 +160,7 @@ it('Forget all preserves a calculation session and full chat/Timeline after back
     expect(values.size).toBe(0);
     await restart();
     expect(await (await call('openai', '/verify', 'POST', {})).json()).toEqual({ saved: false, verification: 'unchecked' });
-    expect(await (await api('sessions')).json()).toContainEqual(session);
+    expect(await (await api('sessions')).json()).toContainEqual(expect.objectContaining({...session, updatedAt: expect.any(Number)}));
     const after = await (await api(`sessions/${session.id}/events`)).json();
     expect(after).toEqual(before);
     const restored = restoreHistory(emptySession(session), after);

@@ -1,13 +1,22 @@
 import { useId, type ReactNode } from "react";
 import { Box } from "@mui/material";
+import { toolExecutionTypeMeta } from "./tool-execution-type";
+
+// Tool inks are shared with the Built-in Tools table.
+export const chatTypeColor = {
+  manager: "#6941A5",
+  library: toolExecutionTypeMeta.library.color,
+  http: toolExecutionTypeMeta.http.color,
+  function: toolExecutionTypeMeta.function.color,
+} as const;
 
 export const chatStatusColor = (status: string) =>
   status === "completed"
-    ? "success.main"
+    ? "#17602F"
     : status === "failed"
       ? "error.main"
       : status === "running"
-        ? "text.secondary"
+        ? "#48515A"
         : status === "error"
           ? "warning.main"
           : "text.primary";
@@ -17,9 +26,11 @@ export const chatStatusColor = (status: string) =>
 export function ChatDisclosure({
   label,
   children,
+  failed = false,
 }: {
   label: ReactNode;
   children: ReactNode;
+  failed?: boolean;
 }) {
   const id = useId();
   return (
@@ -30,6 +41,7 @@ export function ChatDisclosure({
         width: "100%",
         "& > summary": {
           cursor: "pointer",
+          ...(failed ? {color:"error.main"} : {}),
           listStyle: "none",
           display: "flex",
           alignItems: "center",

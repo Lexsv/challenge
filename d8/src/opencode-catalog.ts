@@ -1,3 +1,4 @@
+import { parseModelFeatures, type ModelFeatures } from "./model-capabilities";
 import { consoleTransportUrl } from "./opencode-console-transport";
 // Supplied Console price snapshot. Prices do not establish account or Go eligibility.
 export type ModelTier = "Free" | "Paid" | "Premium" | "Unknown";
@@ -126,6 +127,7 @@ export function resolvePrice(id: string, api?: Partial<Price>) {
 }
 
 export type DiscoveredModel = {
+  features?: ModelFeatures;
   id: string;
   name: string;
   disabled?: boolean;
@@ -155,6 +157,7 @@ export function parseModels(value: unknown): DiscoveredModel[] {
     const price: Partial<Price> = {};
     const maxOutputTokens = obj.limit?.output;
     const contextWindow = obj.limit?.context;
+    const features = parseModelFeatures(obj);
     const parameterSupport: Record<string, boolean> = {};
     for (const name of [
       "temperature",
@@ -172,6 +175,7 @@ export function parseModels(value: unknown): DiscoveredModel[] {
     return [
       {
         id: obj.id,
+        ...(features ? { features } : {}),
         name: typeof obj.name === "string" ? obj.name : obj.id,
         ...(typeof obj.disabled === "boolean" ? { disabled: obj.disabled } : {}),
         ...(typeof obj.available === "boolean" ? { available: obj.available } : {}),

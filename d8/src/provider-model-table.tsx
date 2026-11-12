@@ -1,3 +1,4 @@
+import { ModelCapabilitiesCell, CapabilitiesCardProvider } from "./model-capabilities-cell";
 import {
   Box,
   IconButton,
@@ -38,7 +39,7 @@ export function ProviderModelTable({
       </Typography>
     );
   return (
-    <TableContainer
+    <CapabilitiesCardProvider><TableContainer
       tabIndex={0}
       role="region"
       aria-label="Scrollable provider models"
@@ -58,6 +59,7 @@ export function ProviderModelTable({
             {view === "models" && (
               <>
                 <TableCell>Structured output</TableCell>
+                {provider === "opencode-console" && <TableCell sx={{width:120}}>Capabilities</TableCell>}
                 <TableCell sx={{ width: 92 }}>Options</TableCell>
               </>
             )}
@@ -99,6 +101,7 @@ export function ProviderModelTable({
                           : "Unsupported"
                         : "Unavailable"}
                     </TableCell>
+                    {provider === "opencode-console" && <TableCell><ModelCapabilitiesCell model={id} features={registry.get(provider)?.modelFeatures?.(id)} /></TableCell>}
                     <TableCell>
                       <Box sx={{ display: "grid", gridTemplateColumns: "28px 32px", alignItems: "center", justifyItems: "center" }}>
                         <Box sx={{ gridColumn: 1, gridRow: 1, display: "flex" }}>
@@ -154,6 +157,6 @@ export function ProviderModelTable({
           })}
         </TableBody>
       </Table>
-    </TableContainer>
+    </TableContainer></CapabilitiesCardProvider>
   );
 }

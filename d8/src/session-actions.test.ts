@@ -73,7 +73,7 @@ it('cancellation keeps a calculation; confirmed deletion removes only that sessi
     expect(db.prepare('SELECT count(*) AS count FROM sessions WHERE id = ?').get(first.id)?.count).toBe(0);
     db.close();
     await restart();
-    expect(await (await api()).json()).toEqual([second]);
+    expect(await (await api()).json()).toEqual([expect.objectContaining({...second, updatedAt: expect.any(Number)})]);
     expect(await (await api(`/${second.id}/events`)).json()).toEqual(otherBefore);
     const restored = restoreHistory(emptySession(second), otherBefore);
     expect(restored.messages.at(-1)?.text).toBe('Keep this other session');
@@ -90,7 +90,7 @@ it('rolls back history deletion if deleting session metadata fails', async () =>
     // Fault injection applies only to this isolated temporary test database.
     db.exec("CREATE TRIGGER block_session_delete BEFORE DELETE ON sessions BEGIN SELECT RAISE(ABORT, 'test failure'); END;");
     expect((await api(`/${session.id}`, 'DELETE')).status).toBe(500);
-    expect(await (await api()).json()).toEqual([session]);
+    expect(await (await api()).json()).toEqual([expect.objectContaining({...session, updatedAt: expect.any(Number)})]);
     expect(await (await api(`/${session.id}/events`)).json()).toEqual(before);
     db.close();
   });

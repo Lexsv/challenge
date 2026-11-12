@@ -1,4 +1,4 @@
-import { CredentialIndicator, credentialStatusFromText } from "./credential-indicator";
+import { CredentialFeedback, CredentialIndicator, credentialStatusFromText } from "./credential-indicator";
 import type { SavedCredentialStatus } from "./saved-credentials";
 import { useState } from "react";
 import { Accordion, AccordionDetails, AccordionSummary, Alert, Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, IconButton, InputAdornment, MenuItem, Stack, TextField, Typography } from "@mui/material";
@@ -26,6 +26,7 @@ export function ProviderConfigurationDialog({ draft, onChange, onClose, onSave, 
   catch { endpointError = "Use a valid HTTPS base URL with the path /inference."; }
   if (endpointError) validEndpoint = false;
   const error = validateParameters(draft.parameters);
+  const displayedStatus = isVerifying ? { saved: hasSavedKey, verification: 'checking' as const } : credentialStatus ?? credentialStatusFromText(status, hasSavedKey);
 
   return <Dialog open onClose={onClose} fullWidth maxWidth="md" scroll="paper" slotProps={{ paper: { sx: { borderRadius: "16px" } } }}>
     <DialogTitle sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontWeight: 700, gap: 2 }}>
@@ -40,8 +41,9 @@ export function ProviderConfigurationDialog({ draft, onChange, onClose, onSave, 
         <Button variant="contained" size="small" onClick={onVerify} disabled={!onVerify || (!draft.key.trim() && !hasSavedKey) || (draft.id !== "opencode-console" && !draft.model) || isVerifying} sx={{ flexShrink: 0 }}>Verify</Button>
       </Stack>
       <Stack direction={{ xs: "column", sm: "row" }} gap={1} justifyContent="space-between" alignItems={{ sm: "center" }}>
-        <Box sx={{ minWidth: 0 }}><CredentialIndicator provider={draft.name} showProvider={false} status={isVerifying ? { saved: hasSavedKey, verification: 'checking' } : credentialStatus ?? credentialStatusFromText(status, hasSavedKey)} /></Box>
+        <Box sx={{ minWidth: 0 }}><CredentialIndicator provider={draft.name} showProvider={false} status={displayedStatus} /></Box>
       </Stack>
+      <CredentialFeedback status={displayedStatus} />
       {error && <Alert severity="error">Check the parameter templates in Advanced settings.</Alert>}
       <Accordion disableGutters elevation={0} sx={{ borderTop: 1, borderColor: "divider", "&:before": { display: "none" } }}>
         <AccordionSummary expandIcon={<ExpandMore />} aria-controls="provider-advanced-content" id="provider-advanced-heading" sx={{ px: 0 }}><SettingsOutlined sx={{ mr: 1.5 }} /><Typography fontWeight={700}>Advanced settings</Typography></AccordionSummary>

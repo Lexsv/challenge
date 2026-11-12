@@ -8,7 +8,7 @@ import {
   Typography,
 } from "@mui/material";
 import ExpandMore from "@mui/icons-material/ExpandMore";
-import { ChatDisclosure, chatStatusColor } from "./chat-disclosure";
+import { ChatDisclosure, chatStatusColor, chatTypeColor } from "./chat-disclosure";
 import type { ModelRequestMeter } from "./token-meter";
 import { toolExecutionTypeMeta } from "./tool-execution-type";
 import { formatCost } from "./request-cost";
@@ -79,7 +79,7 @@ export function RequestMeterCard({
             alignItems="baseline"
           >
             <Typography variant="body2" component="span" color="text.primary">
-              <Box component="span" sx={{ color: meta.color }}>
+              <Box component="span" sx={{ color: chatTypeColor.library }}>
                 Library
               </Box>{" "}
               · js-tiktoken

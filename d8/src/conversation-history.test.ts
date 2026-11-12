@@ -37,7 +37,7 @@ describe('SQLite conversation history', () => {
       old.close();
       await start();
       expect(await events('legacy')).toEqual([]);
-      expect(await (await fetch(base)).json()).toContainEqual({ id: 'legacy', title: 'Older session', createdAt: 1 });
+      expect(await (await fetch(base)).json()).toContainEqual(expect.objectContaining({ id: 'legacy', title: 'Older session', createdAt: 1, requestTokenLimit: 0, updatedAt: expect.any(Number) }));
       const first = await (await fetch(base, { method: 'POST' })).json();
       const second = await (await fetch(base, { method: 'POST' })).json();
       expect(await events(first.id)).toEqual([]);

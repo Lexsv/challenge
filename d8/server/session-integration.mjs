@@ -30,11 +30,20 @@ test('two sessions and rename survive backend restart and fresh list load', asyn
     const crossOrigin = await fetch(url, { method: 'POST', headers: { Origin: 'https://example.com' } });
     assert.equal(crossOrigin.status, 403);
     assert.equal((await fetch(`${url}/missing`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: 'Missing' }) })).status, 404);
+    for (const [session, limit] of [[renamed, 1000], [second, 0]]) {
+      const saved = await (await fetch(`${url}/${session.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ requestTokenLimit: limit }) })).json();
+      assert.equal(saved.requestTokenLimit, limit);
+      session.requestTokenLimit = limit;
+    }
+    for (const value of [-1, 1.5, '1000', null]) {
+      assert.equal((await fetch(`${url}/${first.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({requestTokenLimit:value}) })).status,400);
+    }
     await stop();
     url = await start();
     const restored = await (await fetch(url)).json();
-    assert.deepEqual(restored, [renamed, second]);
-    assert.deepEqual(Object.keys(restored[0]).sort(), ['createdAt', 'id', 'title']);
+    assert.deepEqual(restored.map(({updatedAt, ...item}) => item), [renamed, second]);
+    assert.ok(restored[0].updatedAt >= restored[0].createdAt);
+    assert.deepEqual(Object.keys(restored[0]).sort(), ['createdAt', 'id', 'requestTokenLimit', 'title', 'updatedAt']);
   } finally {
     if (server?.listening) await stop();
     await rm(folder, { recursive: true, force: true });

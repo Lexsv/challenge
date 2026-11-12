@@ -1,7 +1,7 @@
 import type { HistoryEvent } from "./conversation-history";
 import type { ManagerConversationState } from './manager-agent';
 
-export type SessionMetadata = { id: string; title: string; createdAt: number };
+export type SessionMetadata = { id: string; title: string; createdAt: number; updatedAt?: number; requestTokenLimit?: number };
 
 async function request(path: string, init?: RequestInit): Promise<unknown> {
   const response = await fetch(`/api/sessions${path}`, init);
@@ -29,7 +29,7 @@ export async function renameSession(id: string, title: string): Promise<SessionM
   }));
 }
 export function emptySession(item: SessionMetadata): ManagerConversationState {
-  return { conversation: { id: item.id, title: item.title, startedAt: item.createdAt, messageIds: [], runIds: [] }, messages: [], runs: [], toolExecutions: [] };
+  return { conversation: { id: item.id, title: item.title, startedAt: item.createdAt, requestTokenLimit: item.requestTokenLimit ?? 0, messageIds: [], runIds: [] }, messages: [], runs: [], toolExecutions: [] };
 }
 
 export async function loadHistory(id: string): Promise<HistoryEvent[]> {
@@ -47,4 +47,24 @@ export async function saveHistoryEvent(event: HistoryEvent): Promise<unknown> {
 
 export async function deleteSession(id: string): Promise<void> {
   await request(`/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+export async function saveSessionRequestTokenLimit(id: string, requestTokenLimit: number): Promise<SessionMetadata> {
+  return metadata(await request(`/${encodeURIComponent(id)}`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ requestTokenLimit }),
+  }));
+}
+
+export type HistoryPage = {
+  events: HistoryEvent[]; nextBefore: number | null; snapshot: number;
+  accountingEvents?: HistoryEvent[];
+  dialogueTokens?: Partial<Record<'o200k_base' | 'cl100k_base', number>>;
+};
+export async function loadHistoryPage(id: string, before?: number, snapshot?: number): Promise<HistoryPage> {
+  const query = new URLSearchParams({limit:'20'});
+  if(before !== undefined)query.set('before',String(before));
+  if(snapshot !== undefined)query.set('snapshot',String(snapshot));
+  const page = await request(`/${encodeURIComponent(id)}/events?${query}`) as HistoryPage;
+  if (!page || !Array.isArray(page.events) || page.events.some(e=>e.sessionId!==id || !Number.isInteger(e.sequence)) || !Number.isInteger(page.snapshot) || (page.nextBefore!==null && !Number.isInteger(page.nextBefore)) || page.accountingEvents?.some(e=>e.sessionId!==id)) throw new Error('Invalid history page response.');
+  return page;
 }

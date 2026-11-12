@@ -92,7 +92,7 @@ describe("week 2 agent tool lab", () => {
     );
     expect(html).toContain('aria-label="Session list"');
     expect(html.indexOf('aria-label="Sessions"')).toBeLessThan(html.indexOf('aria-label="Empty chat"'));
-    expect(html).toContain("240px minmax(0, 1fr)");
+    expect(html).toContain("220px minmax(0, 1fr)");
     expect(html).toContain('aria-label="New session"');
     expect(html).toContain('aria-label="Empty chat"');
     expect(html).not.toContain('aria-label="Send message"');
@@ -116,6 +116,9 @@ describe("week 2 agent tool lab", () => {
     expect(html).toContain("Agent Tool Lab");
     expect(html).toContain("Start a conversation with OpenAI · gpt-5.6-terra");
     expect(html).toContain("Open chat settings");
+    expect(html.indexOf('aria-label="Session stats"')).toBeGreaterThan(html.indexOf('aria-label="Open chat settings"'));
+    expect(html).not.toContain('aria-haspopup="dialog"');
+    expect(html).toContain('minmax(0, 1fr) 430px');
     expect(html).toContain("managed in Providers");
     expect(html).not.toContain("Saved key: present");
     expect(html).not.toContain("Requests use the local backend");

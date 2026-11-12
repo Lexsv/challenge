@@ -1,7 +1,10 @@
 import { expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ChatRunLog, groupChatEvents } from "./chat-run-log";
-import { chatStatusColor } from "./chat-disclosure";
+import { chatStatusColor, chatTypeColor } from "./chat-disclosure";
+import { toolExecutionTypeMeta } from "./tool-execution-type";
+import { getContrastRatio } from "@mui/material/styles";
+import { theme } from "./theme";
 import { RequestMeterCard } from "./request-meter-card";
 import type { TimelineEvent } from "./week2-agent-tool-lab";
 import { createManagerConversation } from "./manager-agent";
@@ -114,11 +117,21 @@ it("uses initially closed independent disclosures, text labels and retained metr
   expect(html).not.toContain(">User<");
   expect(html).toContain("border:1px solid");
   expect(html).toContain("text-align:left");
-  expect(chatStatusColor("completed")).toBe("success.main");
-  expect(chatStatusColor("running")).toBe("text.secondary");
+  expect(chatStatusColor("completed")).toBe("#17602F");
+  expect(chatStatusColor("running")).toBe("#48515A");
   const timeline = renderToStaticMarkup(<RequestMeterCard meter={meter} />);
   expect(timeline).toContain("MuiChip");
   expect(timeline).toContain("MuiAccordion");
+});
+
+it("keeps chat type inks distinct and readable without changing failure/error hues", () => {
+  expect(new Set(Object.values(chatTypeColor)).size).toBe(4);
+  for (const type of ["library", "http", "function"] as const) expect(chatTypeColor[type]).toBe(toolExecutionTypeMeta[type].color);
+  for (const ink of [...Object.values(chatTypeColor), chatStatusColor('completed'), chatStatusColor('running')])
+    for (const background of [theme.palette.background.default, theme.palette.background.paper])
+      expect(getContrastRatio(ink, background)).toBeGreaterThanOrEqual(4.5);
+  expect(chatStatusColor('failed')).toBe('error.main');
+  expect(chatStatusColor('error')).toBe('warning.main');
 });
 
 it("adds live steps to the same group and retains errors outside run logs", () => {
@@ -213,4 +226,30 @@ it("builds collapsed Logs from restored history including compaction steps and s
   expect(html).toContain("Logs");
   expect(html).not.toMatch(/<details[^>]*\sopen/);
   expect(restored.toolExecutions[0].output).toEqual({ total: 110 });
+});
+
+it('marks collapsed Logs failed for a tool or provider failure even when the run completes',()=>{
+ for(const failure of [
+  {...events.find(e=>e.kind==='tool')!,status:'failed'},
+  {kind:'metering',id:'failed-request',runId:'run',createdAt:3,meter:{...meter,status:'failed'}},
+ ] as TimelineEvent[]){
+  const html=renderToStaticMarkup(<ChatRunLog events={[...events,failure]}/>);
+  expect(html).toContain('Logs · Failed');
+  expect(html).not.toMatch(/<details[^>]* open/);
+  expect(html).toContain('summary');
+ }
+});
+
+it('constrains both message types on desktop while allowing narrow screens and wrapping long text',()=>{
+ const long='unbroken'.repeat(100);
+ const html=renderToStaticMarkup(<ChatRunLog events={[
+  {kind:'message',id:'u',runId:'r',role:'user',text:long,createdAt:1},
+  {kind:'message',id:'a',runId:'r',role:'assistant',text:long,createdAt:2},
+ ]}/>);
+ expect(html).toContain('width:-moz-fit-content');
+ expect(html).toContain('max-width:100%');
+ expect(html).toContain('@media (min-width:900px)');
+ expect(html).toContain('max-width:80%');
+ expect(html).toContain('overflow-wrap:anywhere');
+ expect(html).toContain('overflow-x:auto');
 });

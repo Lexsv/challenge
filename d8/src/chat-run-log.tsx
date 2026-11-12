@@ -1,6 +1,5 @@
-import { ChatDisclosure, chatStatusColor } from "./chat-disclosure";
+import { ChatDisclosure, chatStatusColor, chatTypeColor } from "./chat-disclosure";
 import { Box, Stack, Typography } from "@mui/material";
-import { alpha } from "@mui/material/styles";
 import type { TimelineEvent } from "./week2-agent-tool-lab";
 import { AnswerMarkdown } from "./answer-markdown";
 import { RequestMeterCard } from "./request-meter-card";
@@ -30,7 +29,9 @@ function ToolStep({
           <Typography variant="body2" component="span" color="text.primary">
             <Box
               component="span"
-              sx={{ color: meta?.color ?? "text.secondary" }}
+              sx={{ color: event.executionType && event.executionType in chatTypeColor
+                ? chatTypeColor[event.executionType as keyof typeof chatTypeColor]
+                : meta?.color ?? "text.secondary" }}
             >
               {meta?.label ?? "Tool"}
             </Box>{" "}
@@ -103,7 +104,7 @@ function Activity({ event }: { event: TimelineEvent }) {
         <Typography
           variant="body2"
           component="span"
-          color={event.category === "SYSTEM" ? "warning.main" : "primary.main"}
+          color={event.category === "SYSTEM" ? "warning.main" : chatTypeColor.manager}
         >
           {titleCase(event.category)}
         </Typography>
@@ -163,6 +164,10 @@ export function groupChatEvents(events: readonly TimelineEvent[]): ChatRow[] {
   });
 }
 
+export function logsFailed(events: readonly TimelineEvent[]) {
+  return events.some(event=>event.kind==='metering'?event.meter.status==='failed':event.kind!=='message'&&event.status==='failed');
+}
+
 export function ChatRunLog({ events }: { events: readonly TimelineEvent[] }) {
   return (
     <>
@@ -181,8 +186,9 @@ export function ChatRunLog({ events }: { events: readonly TimelineEvent[] }) {
             <Box
               sx={{
                 width: "fit-content",
-                maxWidth: "100%",
+                maxWidth: { xs: "100%", md: "80%" },
                 minWidth: 0,
+                overflowWrap: "anywhere",
                 ...(row.event.role === "user"
                   ? {
                       px: 1,
@@ -190,12 +196,7 @@ export function ChatRunLog({ events }: { events: readonly TimelineEvent[] }) {
                       border: "1px solid",
                       borderColor: "divider",
                       borderRadius: "8px",
-                      // Match MUI ListItemButton's selected-session background.
-                      bgcolor: (theme) =>
-                        alpha(
-                          theme.palette.primary.main,
-                          theme.palette.action.selectedOpacity,
-                        ),
+                      bgcolor: "action.selected",
                     }
                   : {}),
                 "& p": { m: 0 },
@@ -223,9 +224,10 @@ export function ChatRunLog({ events }: { events: readonly TimelineEvent[] }) {
             <Activity event={row.event} />
           ) : (
             <ChatDisclosure
+              failed={logsFailed(row.events)}
               label={
-                <Typography variant="body2" color="text.secondary">
-                  Logs
+                <Typography variant="body2" color={logsFailed(row.events)?"error.main":"text.secondary"}>
+                  Logs{logsFailed(row.events) ? " · Failed" : ""}
                 </Typography>
               }
             >

@@ -1,3 +1,4 @@
+import { createHistoryPager } from './history-pages.mjs';
 import { createCredentialRoutes } from "./credentials.mjs";
 import { DatabaseSync } from 'node:sqlite';
 import { createServer } from 'node:http';
@@ -28,9 +29,16 @@ function validateEvent(event, sessionId) {
 }
 
 function validateContext(p) {
-  const fields = ['id', 'runId', 'createdAt', 'phase', 'summary', 'coveredEventId', 'coveredRunIds', 'beforeTokens', 'afterTokens'];
-  if (Object.keys(p).some((key) => !fields.includes(key)) || !Number.isFinite(p.createdAt) || !['overflow', 'compacting', 'completed', 'retrying', 'failed'].includes(p.phase)) return null;
+  const fields = ['id', 'runId', 'createdAt', 'phase', 'summary', 'coveredEventId', 'coveredRunIds', 'beforeTokens', 'afterTokens', 'failureStage', 'reason', 'constraint', 'budget'];
+  if (Object.keys(p).some((key) => !fields.includes(key)) || !Number.isFinite(p.createdAt) || !['overflow', 'compacting', 'completed', 'retrying', 'failed', 'target-missed'].includes(p.phase)) return null;
   for (const key of ['beforeTokens', 'afterTokens']) if (p[key] !== undefined && (!Number.isSafeInteger(p[key]) || p[key] < 0)) return null;
+  if (p.failureStage !== undefined && !['summary', 'answer-budget'].includes(p.failureStage)) return null;
+  if (p.reason !== undefined && !['summary-unavailable', 'estimate-unavailable', 'not-reduced', 'over-limit'].includes(p.reason)) return null;
+  if (p.constraint !== undefined && !['session', 'model'].includes(p.constraint)) return null;
+  if (p.budget !== undefined) {
+    if (!p.budget || typeof p.budget !== 'object' || Object.keys(p.budget).some(k => !['limit', 'modelInputBudget', 'requestTokenLimit', 'requiredTokens', 'currentInputTokens', 'retainedTurnsTokens', 'instructionsTokens', 'toolDefinitionTokens', 'requestOverheadTokens'].includes(k))) return null;
+    if (Object.values(p.budget).some(v => !Number.isSafeInteger(v) || v < 0)) return null;
+  }
   if (p.phase === 'completed') {
     if (typeof p.summary !== 'string' || !p.summary.trim() || p.summary.length > 200000 || typeof p.coveredEventId !== 'string' || !Array.isArray(p.coveredRunIds) || !p.coveredRunIds.length || p.coveredRunIds.some((v) => typeof v !== 'string')) return null;
   } else if (['summary', 'coveredEventId', 'coveredRunIds'].some((key) => p[key] !== undefined)) return null;
@@ -38,12 +46,14 @@ function validateContext(p) {
 }
 
 function validateMeter(p, sessionId) {
-  const fields = ['id', 'sessionId', 'runId', 'toolExecutionOffset', 'provider', 'model', 'actualModel', 'library', 'startedAt', 'endedAt', 'status', 'encoding', 'estimatedInputTokens', 'actualInputTokens', 'actualOutputTokens', 'actualTotalTokens', 'cachedInputTokens', 'pricing', 'actualPricing', 'estimatedInputCost', 'estimatedRequestCost'];
+  const fields = ['id', 'sessionId', 'runId', 'toolExecutionOffset', 'provider', 'model', 'actualModel', 'requestKind', 'sentInputTokens', 'beforeInputTokens', 'afterInputTokens', 'compacted', 'library', 'startedAt', 'endedAt', 'status', 'encoding', 'estimatedInputTokens', 'actualInputTokens', 'actualOutputTokens', 'actualTotalTokens', 'cachedInputTokens', 'pricing', 'actualPricing', 'estimatedInputCost', 'estimatedRequestCost'];
   if (Object.keys(p).some((key) => !fields.includes(key)) || p.sessionId !== sessionId || p.library !== 'js-tiktoken' || !['openai', 'opencode-console', 'opencode-go'].includes(p.provider) || typeof p.model !== 'string' || p.model.length > 200 || !['running', 'completed', 'failed', 'incomplete'].includes(p.status)) return null;
   if (typeof p.runId !== 'string' || !Number.isFinite(p.startedAt) || (p.endedAt !== undefined && !Number.isFinite(p.endedAt))) return null;
+  if (p.requestKind !== undefined && !['answer', 'summary'].includes(p.requestKind)) return null;
+  if (p.compacted !== undefined && typeof p.compacted !== 'boolean') return null;
   if (p.actualModel !== undefined && (typeof p.actualModel !== 'string' || p.actualModel.length > 200)) return null;
   if (p.encoding !== undefined && !['o200k_base', 'cl100k_base'].includes(p.encoding)) return null;
-  for (const key of ['toolExecutionOffset', 'estimatedInputTokens', 'actualInputTokens', 'actualOutputTokens', 'actualTotalTokens', 'cachedInputTokens']) if (p[key] !== undefined && (!Number.isSafeInteger(p[key]) || p[key] < 0)) return null;
+  for (const key of ['sentInputTokens', 'beforeInputTokens', 'afterInputTokens', 'toolExecutionOffset', 'estimatedInputTokens', 'actualInputTokens', 'actualOutputTokens', 'actualTotalTokens', 'cachedInputTokens']) if (p[key] !== undefined && (!Number.isSafeInteger(p[key]) || p[key] < 0)) return null;
   for (const key of ['estimatedInputCost', 'estimatedRequestCost']) if (p[key] !== undefined && (!Number.isFinite(p[key]) || p[key] < 0)) return null;
   for (const name of ['pricing', 'actualPricing']) if (p[name] !== undefined) {
     const price = p[name];
@@ -88,13 +98,23 @@ export function createSessionServer(databasePath = fileURLToPath(new URL('../dat
       db.exec('COMMIT');
     } catch (error) { db.exec('ROLLBACK'); db.close(); throw error; }
   }
-  const list = db.prepare('SELECT id, title, createdAt FROM sessions ORDER BY createdAt, rowid');
-  const get = db.prepare('SELECT id, title, createdAt FROM sessions WHERE id = ?');
-  const insert = db.prepare('INSERT INTO sessions (id, title, createdAt) VALUES (?, ?, ?)');
+  if (!db.prepare('PRAGMA table_info(sessions)').all().some(column => column.name === 'requestTokenLimit')) {
+    db.exec('ALTER TABLE sessions ADD COLUMN requestTokenLimit INTEGER NOT NULL DEFAULT 0 CHECK(requestTokenLimit >= 0)');
+  }
+  if (!db.prepare('PRAGMA table_info(sessions)').all().some(column => column.name === 'updatedAt')) {
+    db.exec(`ALTER TABLE sessions ADD COLUMN updatedAt INTEGER NOT NULL DEFAULT 0;
+      UPDATE sessions SET updatedAt = MAX(createdAt, COALESCE((SELECT MAX(COALESCE(json_extract(payload,'$.endedAt'), json_extract(payload,'$.createdAt'), json_extract(payload,'$.startedAt'),0)) FROM history_events WHERE sessionId = sessions.id),0));`);
+  }
+  const touch = db.prepare('UPDATE sessions SET updatedAt = ? WHERE id = ?');
+  const saveLimit = db.prepare('UPDATE sessions SET requestTokenLimit = ? WHERE id = ?');
+  const list = db.prepare('SELECT id, title, createdAt, requestTokenLimit, updatedAt FROM sessions ORDER BY createdAt, rowid');
+  const get = db.prepare('SELECT id, title, createdAt, requestTokenLimit FROM sessions WHERE id = ?');
+  const insert = db.prepare('INSERT INTO sessions (id, title, createdAt, requestTokenLimit) VALUES (?, ?, ?, 0)');
   const deleteHistory = db.prepare('DELETE FROM history_events WHERE sessionId = ?');
   const deleteMetadata = db.prepare('DELETE FROM sessions WHERE id = ?');
   const update = db.prepare('UPDATE sessions SET title = ? WHERE id = ?');
   const history = db.prepare('SELECT id, sessionId, sequence, type, payload FROM history_events WHERE sessionId = ? ORDER BY sequence');
+  const pager = createHistoryPager(db);
   const existingEvent = db.prepare('SELECT * FROM history_events WHERE id = ?');
   const findEntity = db.prepare("SELECT payload FROM history_events WHERE sessionId = ? AND type = ? AND json_extract(payload, '$.id') = ? ORDER BY sequence LIMIT 1");
   const addEvent = db.prepare('INSERT INTO history_events (id, sessionId, sequence, type, payload) VALUES (?, ?, (SELECT COALESCE(MAX(sequence), 0) + 1 FROM history_events WHERE sessionId = ?), ?, ?)');
@@ -118,6 +138,7 @@ export function createSessionServer(databasePath = fileURLToPath(new URL('../dat
         db.exec('BEGIN IMMEDIATE');
         try {
           deleteHistory.run(match[1]);
+          pager.forget(match[1]);
           deleteMetadata.run(match[1]);
           db.exec('COMMIT');
         } catch (error) { db.exec('ROLLBACK'); throw error; }
@@ -128,6 +149,12 @@ export function createSessionServer(databasePath = fileURLToPath(new URL('../dat
         const sessionId = eventRoute[1];
         if (!get.get(sessionId)) { reply(404, { error: 'Session not found.' }); return; }
         if (req.method === 'GET') {
+          const search = new URL(req.url, 'http://localhost').searchParams;
+          if(search.has('limit')) {
+            try { reply(200, pager.page(sessionId, search)); }
+            catch { reply(400, {error:'Invalid history page request.'}); }
+            return;
+          }
           reply(200, history.all(sessionId).map((row) => ({ ...row, payload: JSON.parse(row.payload) }))); return;
         }
         if (req.method === 'POST') {
@@ -166,7 +193,7 @@ export function createSessionServer(databasePath = fileURLToPath(new URL('../dat
             const priorMeter = findEntity.get(sessionId, 'metering', payload.id);
             if (priorMeter) {
               const original = JSON.parse(priorMeter.payload);
-              if (['sessionId', 'runId', 'toolExecutionOffset', 'provider', 'model', 'library', 'startedAt', 'encoding', 'estimatedInputTokens', 'pricing', 'estimatedInputCost'].some((key) => JSON.stringify(original[key]) !== JSON.stringify(payload[key]))) {
+              if (['requestKind', 'sentInputTokens', 'beforeInputTokens', 'afterInputTokens', 'compacted', 'sessionId', 'runId', 'toolExecutionOffset', 'provider', 'model', 'library', 'startedAt', 'encoding', 'estimatedInputTokens', 'pricing', 'estimatedInputCost'].some((key) => JSON.stringify(original[key]) !== JSON.stringify(payload[key]))) {
                 reply(409, { error: 'Request meter identity or estimate changed.' }); return;
               }
             }
@@ -187,6 +214,7 @@ export function createSessionServer(databasePath = fileURLToPath(new URL('../dat
           db.exec('BEGIN IMMEDIATE');
           try {
             addEvent.run(event.id, sessionId, sessionId, event.type, serialized);
+            touch.run(Date.now(),sessionId);
             db.exec('COMMIT');
           } catch (error) { db.exec('ROLLBACK'); throw error; }
           reply(201, { ...existingEvent.get(event.id), payload }); return;
@@ -196,7 +224,7 @@ export function createSessionServer(databasePath = fileURLToPath(new URL('../dat
       if (path === '/api/sessions' && req.method === 'POST') {
         const session = { id: randomUUID(), title: 'New session', createdAt: Date.now() };
         insert.run(session.id, session.title, session.createdAt);
-        reply(201, session); return;
+        reply(201, get.get(session.id)); return;
       }
       if (match && req.method === 'PATCH') {
         if (!req.headers['content-type']?.startsWith('application/json')) { reply(415, { error: 'JSON required.' }); return; }
@@ -207,9 +235,16 @@ export function createSessionServer(databasePath = fileURLToPath(new URL('../dat
         }
         let value;
         try { value = JSON.parse(body); } catch { reply(400, { error: 'Invalid JSON.' }); return; }
+        if (value && Object.keys(value).length === 1 && Object.hasOwn(value, 'requestTokenLimit')) {
+          if (!Number.isSafeInteger(value.requestTokenLimit) || value.requestTokenLimit < 0) { reply(400, { error: 'Request token limit must be a non-negative whole number.' }); return; }
+          if (!saveLimit.run(value.requestTokenLimit, match[1]).changes) { reply(404, { error: 'Session not found.' }); return; }
+          touch.run(Date.now(),match[1]);
+          reply(200, get.get(match[1])); return;
+        }
         const title = typeof value?.title === 'string' ? value.title.trim() : '';
         if (!title || title.length > 200) { reply(400, { error: 'Title must contain 1–200 characters.' }); return; }
         if (!update.run(title, match[1]).changes) { reply(404, { error: 'Session not found.' }); return; }
+        touch.run(Date.now(),match[1]);
         reply(200, get.get(match[1])); return;
       }
       reply(404, { error: 'Not found.' });

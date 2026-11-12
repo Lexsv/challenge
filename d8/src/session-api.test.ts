@@ -3,7 +3,7 @@ import { emptySession, listSessions, createSession, renameSession } from './sess
 afterEach(() => vi.unstubAllGlobals());
 it('restores metadata with empty chat history', () => {
   const state = emptySession({ id: 'saved', title: 'Planning', createdAt: 123 });
-  expect(state.conversation).toEqual({ id: 'saved', title: 'Planning', startedAt: 123, messageIds: [], runIds: [] });
+  expect(state.conversation).toEqual({ id: 'saved', title: 'Planning', startedAt: 123, requestTokenLimit: 0, messageIds: [], runIds: [] });
   expect(state.messages).toEqual([]);
   expect(state.runs).toEqual([]);
   expect(state.toolExecutions).toEqual([]);
@@ -17,4 +17,12 @@ it('rejects unsuccessful operations instead of producing local metadata', async 
 it('rejects malformed list responses', async () => {
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => [{ title: 'Incomplete' }] }));
   await expect(listSessions()).rejects.toThrow('Invalid session response');
+});
+
+it('requests the newest page first, then uses the saved cursor and snapshot for older turns',async()=>{
+ const {loadHistoryPage}=await import('./session-api');
+ const fetcher=vi.fn().mockResolvedValue({ok:true,json:async()=>({events:[],snapshot:100,nextBefore:20})});
+ vi.stubGlobal('fetch',fetcher);
+ await loadHistoryPage('saved');await loadHistoryPage('saved',20,100);
+ expect(fetcher.mock.calls.map(call=>call[0])).toEqual(['/api/sessions/saved/events?limit=20','/api/sessions/saved/events?limit=20&before=20&snapshot=100']);
 });

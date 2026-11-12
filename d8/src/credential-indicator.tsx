@@ -1,4 +1,4 @@
-import { Box, Chip, CircularProgress, Tooltip } from '@mui/material';
+import { Alert, Box, Chip, CircularProgress, Tooltip } from '@mui/material';
 import type { SavedCredentialStatus } from './saved-credentials';
 
 export function credentialExplanation(status: SavedCredentialStatus): string {
@@ -42,7 +42,28 @@ export function CredentialIndicator({ status, provider, showProvider = !!provide
         <CircularProgress size={16} aria-label={`Checking ${provider ? `${provider} ` : ''}credentials`} />
       </> : <Chip size="small" label={`${showProvider && provider ? `${provider} · ` : ''}${label}`}
         color={status.verification === 'not-authorized' ? 'error' : status.verification === 'verified' ? 'success' : 'default'}
-        variant={status.verification === 'verified' || status.verification === 'not-authorized' ? 'filled' : 'outlined'} />}
+        variant={status.verification === 'verified' || status.verification === 'not-authorized' ? 'filled' : 'outlined'}
+        sx={status.verification === 'verified'
+          ? { bgcolor: '#2e7d32', color: '#fff' }
+          : status.verification !== 'not-authorized'
+            ? { bgcolor: 'transparent', color: '#1F2937', borderColor: 'rgba(0, 0, 0, 0.23)' }
+            : undefined} />}
     </Box>
   </Tooltip>;
+}
+
+/** Canned dialog feedback; never render arbitrary upstream error text. */
+export function CredentialFeedback({ status }: { status: SavedCredentialStatus }) {
+  if (status.verification !== 'retryable' && status.verification !== 'not-authorized') return null;
+  if (status.removalFailed) return <Alert severity="warning">Key removal could not be confirmed. Retry Forget key.</Alert>;
+  return <Alert severity={status.verification === 'not-authorized' ? 'error' : 'warning'}>
+    {status.verification === 'not-authorized'
+      ? 'The provider rejected this key. Check it and try Verify again.'
+      : status.reason === 'rate-limit'
+        ? 'Verification is temporarily rate limited. Retry Verify later.'
+        : status.reason === 'timeout'
+          ? 'Verification timed out. Retry Verify.'
+          : 'Verification is temporarily unavailable. Retry Verify.'}
+    {' '}{status.saved ? 'The saved key has not been replaced.' : 'No new key was saved.'}
+  </Alert>;
 }

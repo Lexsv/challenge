@@ -19,6 +19,7 @@ export interface TextMessage extends BaseMessage {
 }
 
 export interface Conversation {
+  requestTokenLimit?: number;
   id: string;
   title?: string;
   messageIds: string[];

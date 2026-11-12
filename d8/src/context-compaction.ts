@@ -9,19 +9,28 @@ export type ContextEvent = {
   id: string;
   runId: string;
   createdAt: number;
-  phase: "overflow" | "compacting" | "completed" | "retrying" | "failed";
+  phase: "overflow" | "compacting" | "completed" | "retrying" | "failed" | "target-missed";
   summary?: string;
   coveredEventId?: string;
   coveredRunIds?: string[];
   beforeTokens?: number;
   afterTokens?: number;
+  failureStage?: 'summary' | 'answer-budget';
+  reason?: 'summary-unavailable' | 'estimate-unavailable' | 'not-reduced' | 'over-limit';
+  constraint?: 'session' | 'model';
+  budget?: {
+    limit?: number; modelInputBudget?: number; requestTokenLimit?: number;
+    requiredTokens?: number; currentInputTokens?: number; retainedTurnsTokens?: number;
+    instructionsTokens?: number; toolDefinitionTokens?: number; requestOverheadTokens?: number;
+  };
 };
 export const contextPhaseLabel: Record<ContextEvent["phase"], string> = {
   overflow: "Context limit exceeded",
   compacting: "Compacting context",
   completed: "Context compacted",
-  retrying: "Retrying with compacted context",
+  retrying: "Retrying with less history",
   failed: "Context compaction failed",
+  "target-missed": "Compaction target not reached",
 };
 export function historicalContext(
   state: ManagerConversationState,
@@ -59,6 +68,7 @@ export async function summarizeBounded(
   adapter: NonNullable<ManagerLlmAdapter["context"]>,
   text: string,
   onMeter: (meter: RequestMeter) => Promise<void>,
+  maxTokens = 1024,
 ): Promise<string> {
   let calls = 0;
   const summarize = async (value: string) => {
@@ -66,7 +76,7 @@ export async function summarizeBounded(
       throw new Error(
         "Context compaction exceeded its bounded summary budget.",
       );
-    return adapter.summarize(value, onMeter);
+    return adapter.summarize(value, onMeter, maxTokens);
   };
   let pieces = [text];
   for (let round = 0; round < 5; round++) {
@@ -80,11 +90,11 @@ export async function summarizeBounded(
           [{ role: "user", content: chunk + part }],
           [],
         );
-        if (budget.tokens === undefined || budget.limit === undefined)
+        if (budget.tokens === undefined)
           throw new Error(
             "Context estimation or model limits are unavailable for compaction.",
           );
-        if (budget.tokens > Math.min(6000, budget.limit * 0.5)) {
+        if (budget.tokens > Math.min(6000, (budget.limit ?? 12000) * 0.5)) {
           if (!chunk)
             throw new Error(
               "The selected model is too small for a compaction chunk.",

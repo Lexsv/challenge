@@ -1,3 +1,4 @@
+import { vintagePalette as p } from "./vintage-palette";
 import { Fragment, useMemo, useState } from "react";
 import {
   Alert,
@@ -139,11 +140,11 @@ export function pseudocodePreviewHtml(source: string): string {
     token,
     (match, comment: string, keyword: string, number: string, operator: string) => {
       if (comment)
-        return `<span style="color:#5f6b7a;font-style:italic">${match}</span>`;
+        return `<span style="color:${p.muted};font-style:italic">${match}</span>`;
       if (keyword)
-        return `<span style="color:#6b3fd4;font-weight:600">${match}</span>`;
-      if (number) return `<span style="color:#0b6e99">${match}</span>`;
-      if (operator) return `<span style="color:#7a4e0b">${match}</span>`;
+        return `<span style="color:${p.pinkInk};font-weight:600">${match}</span>`;
+      if (number) return `<span style="color:${p.blueInk}">${match}</span>`;
+      if (operator) return `<span style="color:${p.warning}">${match}</span>`;
       return match;
     },
   );

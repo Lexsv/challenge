@@ -1,3 +1,4 @@
+import { vintagePalette as p } from "./vintage-palette";
 import LocalLibraryOutlined from "@mui/icons-material/LocalLibraryOutlined";
 import CodeOutlined from "@mui/icons-material/CodeOutlined";
 import PublicOutlined from "@mui/icons-material/PublicOutlined";
@@ -14,22 +15,27 @@ export const toolExecutionTypeMeta: Record<
     icon: typeof CodeOutlined;
   }
 > = {
-  library: { label: "Library", color: "#1B5EA8", background: "#E3EFFD", icon: LocalLibraryOutlined },
+  library: {
+    label: "Library",
+    color: p.amberInk,
+    background: p.yellowPale,
+    icon: LocalLibraryOutlined,
+  },
   function: {
     label: "Function",
-    color: "#6954CC",
-    background: "#E6E0FF",
+    color: p.pinkInk,
+    background: p.pink,
     icon: CodeOutlined,
   },
   http: {
     label: "HTTP API",
-    color: "#087F72",
-    background: "#DDF3F0",
+    color: p.tealInk,
+    background: p.bluePale,
     icon: PublicOutlined,
   },
   agent: {
     label: "Agent",
-    color: "#AD690B",
+    color: p.warning,
     background: "#FFF0D7",
     icon: SmartToyOutlined,
   },

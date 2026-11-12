@@ -1,3 +1,7 @@
+import { eventRunId, mergeHistoryPages, prependedScrollTop } from './history-pagination';
+import { sessionLimitOnClose } from "./session-limit";
+import { SessionStatsPanel, SessionStatsContent, SessionStatsFrame, sessionChatColumns } from "./session-stats-panel";
+import { restoreSessionModelPair, type SessionModelPair } from "./session-model-selection";
 import { ChatComposer } from "./chat-composer";
 import { ChatRunLog } from "./chat-run-log";
 import { contextPhaseLabel } from "./context-compaction";
@@ -10,8 +14,8 @@ import { SessionRow } from "./session-row";
 import { submitSession } from "./session-send";
 import { credentials } from "./saved-credentials";
 import { HistoryWriter, restoreHistory } from "./conversation-history";
-import { listSessions, createSession as persistSession, renameSession, emptySession, loadHistory, saveHistoryEvent, deleteSession } from "./session-api";
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { saveSessionRequestTokenLimit, listSessions, createSession as persistSession, renameSession, emptySession, loadHistory, loadHistoryPage, saveHistoryEvent, deleteSession } from "./session-api";
+import { useLayoutEffect, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   Alert,
   Box,
@@ -173,7 +177,7 @@ export function buildWeek2Timeline(
     return {
       kind: 'manager', id: event.id, createdAt: event.createdAt, runId: event.runId, category: 'SYSTEM', status,
       description: contextPhaseLabel[event.phase] + (event.afterTokens !== undefined
-        ? ` · ${event.beforeTokens} → ${event.afterTokens} estimated input tokens` : ''),
+        ? ` · ${event.beforeTokens} → ${event.afterTokens} estimated input tokens` : '') + (event.budget?.requestTokenLimit && event.afterTokens !== undefined && event.afterTokens > event.budget.requestTokenLimit ? ` · Compaction target ${event.budget.requestTokenLimit.toLocaleString('en-US')} not reached` : '') + (event.budget?.limit !== undefined ? ` · Limit ${event.budget.limit.toLocaleString('en-US')}` : '') + (event.budget?.requiredTokens !== undefined ? ` · Required ${event.budget.requiredTokens.toLocaleString('en-US')}` : ''),
     };
   });
   return [...messages, ...tools, ...runs, ...meters, ...contexts].sort(
@@ -208,7 +212,11 @@ export function Week2AgentToolLab(props: LabProps) {
   const saveLock = useRef(false);
   const [deletion] = useState(() => new SessionDeletion(deleteSession, (id) => {
     setSessions((current) => current.filter((session) => session.conversation.id !== id));
-    setSelectedId((current) => current === id ? null : current);
+    setSelectedId((current) => {
+      if(current!==id)return current;
+      void listSessions().then(items=>setSelectedId(selected=>selected ?? items.slice().sort((a,b)=>(b.updatedAt||b.createdAt)-(a.updatedAt||a.createdAt))[0]?.id??null)).catch(()=>setError('Could not load sessions. Please retry.'));
+      return null;
+    });
   }));
   const deleteState = useSyncExternalStore(deletion.subscribe, deletion.getSnapshot, deletion.getSnapshot);
   useEffect(() => {
@@ -219,12 +227,16 @@ export function Week2AgentToolLab(props: LabProps) {
       if (!active) return;
       setSessions(items.map(emptySession));
       setLoaded(true);
-      setSelectedId(items[0]?.id ?? null);
+      let last:string|null=null;
+      try {last=localStorage.getItem('expert-lab:d8:last-session');} catch { /* storage may be unavailable */ }
+      const selected=items.find(item=>item.id===last) ?? [...items].sort((a,b)=>(b.updatedAt || b.createdAt)-(a.updatedAt || a.createdAt))[0];
+      setSelectedId(selected?.id ?? null);
     }).catch(() => {
       if (active) setError("Could not load sessions. Check the local backend and retry.");
     }).finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [loadAttempt]);
+  useEffect(()=>{if(!loaded)return;try {if(selectedId)localStorage.setItem('expert-lab:d8:last-session',selectedId);else localStorage.removeItem('expert-lab:d8:last-session');} catch {/* storage may be unavailable */}},[selectedId,loaded]);
   const createDisabled = loading || !loaded || saving || deleteState.pending;
   const createSession = () => { void createAndSelectSession({
     lock: saveLock, ready: loaded && !loading && !deleteState.pending, create: persistSession,
@@ -253,7 +265,7 @@ export function Week2AgentToolLab(props: LabProps) {
     } finally { saveLock.current = false; setSaving(false); }
   };
   return (
-    <Box sx={{ display: "grid", gridTemplateColumns: { xs: "minmax(0, 1fr)", md: "240px minmax(0, 1fr)" }, gap: 2, alignItems: "start" }}>
+    <Box sx={{ display: "grid", gridTemplateColumns: { xs: "minmax(0, 1fr)", md: "220px minmax(0, 1fr)" }, gap: 2, alignItems: "start" }}>
       <Paper component="aside" variant="outlined" aria-label="Sessions" sx={{ p: 1, minWidth: 0 }}>
         <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ px: 1 }}>
           <Typography variant="subtitle2" color="text.secondary">Sessions</Typography>
@@ -272,8 +284,11 @@ export function Week2AgentToolLab(props: LabProps) {
       </Paper>
       <Box sx={{ minWidth: 0 }}>
         {!selectedId && (
-          <EmptySessionChat showEmptyState={loaded && !loading && sessions.length === 0}
-            onCreate={createSession} pending={saving} disabled={createDisabled} />
+          <Box sx={{ display: "grid", gridTemplateColumns: sessionChatColumns, gap: 2, alignItems: "start", minWidth: 0 }}>
+            <EmptySessionChat showEmptyState={loaded && !loading && sessions.length === 0}
+              onCreate={createSession} pending={saving} disabled={createDisabled} />
+            <SessionStatsFrame><SessionStatsContent /></SessionStatsFrame>
+          </Box>
         )}
         {/* Keep each keyed chat mounted: its draft, timeline and pending run belong to that session. */}
         {sessions.map((session) => (
@@ -336,30 +351,67 @@ export function SessionChat({
   active?: boolean;
   title: string;
 }) {
-  const [provider, setProvider] = useState<Week2Provider>("openai");
-  const [openCodeModels, setOpenCodeModels] = useState<Record<OpenCodeConnection, string>>({
-    "opencode-console": "",
-    "opencode-go": "",
-  });
+  const [selection, setSelection] = useState<SessionModelPair>({ provider: 'openai', model: openAIModel });
+  const { provider, model: selectedModel } = selection;
+  const [modelChoices, setModelChoices] = useState<Record<string, string>>({ openai: openAIModel });
+  const [requestTokenLimit, setRequestTokenLimit] = useState(initialConversation.conversation.requestTokenLimit ?? 0);
+  const [limitDraft, setLimitDraft] = useState(String(initialConversation.conversation.requestTokenLimit ?? 0));
+  const [limitSaving, setLimitSaving] = useState(false);
+  const [limitError, setLimitError] = useState("");
+  const limitLock = useRef(false);
+  const saveLimit = async () => {
+    const value = sessionLimitOnClose(limitDraft, requestTokenLimit);
+    if (limitLock.current) return;
+    setLimitDraft(String(value));
+    if (value === requestTokenLimit) return;
+    limitLock.current = true; setLimitSaving(true); setLimitError("");
+    try {
+      const saved = await saveSessionRequestTokenLimit(initialConversation.conversation.id, value);
+      setRequestTokenLimit(saved.requestTokenLimit ?? 0);
+    } catch { setLimitError("Could not save the compaction target. The saved value is unchanged."); }
+    finally { limitLock.current = false; setLimitSaving(false); }
+  };
   const [settingsAnchor, setSettingsAnchor] = useState<HTMLElement | null>(null);
   const [input, setInput] = useState("");
   const [running, setRunning] = useState(false);
   const [uiEvents, setUiEvents] = useState<TimelineEvent[]>([]);
   const [conversation, setConversation] = useState<ManagerConversationState | null>(() => structuredClone(initialConversation));
   const [historyLoaded, setHistoryLoaded] = useState(false);
+  const pageEvents = useRef<import('./conversation-history').HistoryEvent[]>([]);
+  const fullHistory = useRef(false);
+  const [visibleRuns, setVisibleRuns] = useState<Set<string> | null>(null);
+  const [pageCursor, setPageCursor] = useState<{before:number|null; snapshot:number}>();
+  const [olderLoading, setOlderLoading] = useState(false);
+  const [olderError, setOlderError] = useState('');
+  const olderLock = useRef(false);
+  const prependAnchor = useRef<{height:number;top:number} | null>(null);
+  const [accountingState, setAccountingState] = useState<ManagerConversationState>();
+  const [dialogueCounts, setDialogueCounts] = useState<import('./session-api').HistoryPage['dialogueTokens']>();
+
   const [historyError, setHistoryError] = useState("");
   const [historyAttempt, setHistoryAttempt] = useState(0);
   const [saveFailed, setSaveFailed] = useState(false);
   const [retryingSave, setRetryingSave] = useState(false);
   const sendLock = useRef(false);
+  const pendingQuestionId = useRef<string | null>(null);
   const [writer] = useState(() => new HistoryWriter(saveHistoryEvent));
   useEffect(() => {
     if (!active || historyLoaded) return;
     let current = true;
     setHistoryError("");
-    loadHistory(initialConversation.conversation.id).then((events) => {
+    loadHistoryPage(initialConversation.conversation.id).then((page) => {
       if (!current) return;
-      setConversation(restoreHistory(initialConversation, events));
+      pageEvents.current = page.events;
+      fullHistory.current = page.nextBefore === null;
+      setPageCursor({before:page.nextBefore,snapshot:page.snapshot});
+      setVisibleRuns(new Set(page.events.map(eventRunId)));
+      const restored = restoreHistory(initialConversation, page.events);
+      const accounting = restoreHistory(initialConversation, page.accountingEvents ?? page.events);
+      setAccountingState(accounting); setDialogueCounts(page.dialogueTokens);
+      const pair = restoreSessionModelPair(accounting, registry, openAIModel);
+      setSelection(pair);
+      setModelChoices(current => ({ ...current, [pair.provider]: pair.model }));
+      setConversation(restored);
       setHistoryLoaded(true);
     }).catch(() => { if (current) setHistoryError("Could not load conversation history. Retry before sending."); });
     return () => { current = false; };
@@ -369,6 +421,7 @@ export function SessionChat({
     try {
       await writer.flush();
       setConversation(restoreHistory(initialConversation, await loadHistory(initialConversation.conversation.id)));
+      fullHistory.current = true; setAccountingState(undefined); setDialogueCounts(undefined);
       setSaveFailed(false); setHistoryError("");
     }
     catch { setHistoryError("History save failed. Retry to save pending events; tools will not be replayed."); }
@@ -376,10 +429,32 @@ export function SessionChat({
   };
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const stickToBottomRef = useRef(true);
+  const positioningRef = useRef(false);
+  const loadOlder = async () => {
+    if (!active || !historyLoaded || running || olderLock.current || pageCursor?.before == null) return;
+    olderLock.current = true; setOlderLoading(true); setOlderError('');
+    try {
+      const page = await loadHistoryPage(initialConversation.conversation.id, pageCursor.before, pageCursor.snapshot);
+      const container = scrollRef.current;
+      if(container)prependAnchor.current = {height:container.scrollHeight,top:container.scrollTop};
+      stickToBottomRef.current = false;
+      pageEvents.current = mergeHistoryPages(pageEvents.current,page.events);
+      setVisibleRuns(current=>new Set([...(current??[]),...page.events.map(eventRunId)]));
+      if(!fullHistory.current)setConversation(restoreHistory(initialConversation,pageEvents.current));
+      setPageCursor({before:page.nextBefore,snapshot:page.snapshot});
+    } catch {setOlderError('Could not load older messages. Please retry.');}
+    finally {olderLock.current = false; setOlderLoading(false);}
+  };
 
+
+  const [, refreshModelMetadata] = useState(0);
+  useEffect(() => {
+    if (!active || provider !== 'opencode-console' || registry.get(provider)?.limits?.(selectedModel)?.contextWindow) return;
+    let current = true;
+    void registry.get(provider)?.discover?.().then(() => { if (current) refreshModelMetadata(n => n + 1); }).catch(() => { /* Unknown catalog limits remain unavailable. */ });
+    return () => { current = false; };
+  }, [active, provider, selectedModel, registry]);
   const providerModels = registry.modelOptionsFor(provider);
-  const selectedModel =
-    provider === "openai" ? openAIModel : openCodeModels[provider] || providerModels[0] || "";
   const selectedKey = provider === "openai" ? openAIKey : openCodeKeys[provider];
   const providerLabel =
     provider === "openai"
@@ -393,46 +468,81 @@ export function SessionChat({
   const hasCredential = !!selectedKey.trim() || useSavedKey;
   const timeline = useMemo(
     () =>
-      [...buildWeek2Timeline(conversation, toolRegistry), ...uiEvents].sort(
+      [...buildWeek2Timeline(conversation, toolRegistry).filter(event=>!visibleRuns || visibleRuns.has(event.runId)), ...uiEvents].sort(
         // Stable sorting retains causal conversation order and UI insertion order on ties.
         (a, b) => a.createdAt - b.createdAt,
       ),
-    [conversation, uiEvents, toolRegistry],
+    [conversation, uiEvents, toolRegistry, visibleRuns],
   );
 
-  useEffect(() => {
-    if (!stickToBottomRef.current) return;
+  useLayoutEffect(() => {
+    if (!active || !historyLoaded) return;
+    positioningRef.current = true;
+    stickToBottomRef.current = true;
+    const container = scrollRef.current;
+    if(container)container.scrollTop = container.scrollHeight;
+    // Ignore programmatic scroll events while the newest page settles. A second
+    // frame catches layout changes from rendering the restored conversation.
+    let second = 0;
+    const first = requestAnimationFrame(() => {
+      if (container) container.scrollTop = container.scrollHeight;
+      second = requestAnimationFrame(() => {positioningRef.current = false;});
+    });
+    return () => {cancelAnimationFrame(first);cancelAnimationFrame(second);positioningRef.current = false;};
+  }, [active,historyLoaded]);
+  useLayoutEffect(() => {
     const container = scrollRef.current;
     if (!container) return;
-    container.scrollTop = container.scrollHeight;
-  }, [timeline, running]);
+    if(!active){prependAnchor.current=null;return;}
+    if(prependAnchor.current){
+      container.scrollTop = prependedScrollTop(prependAnchor.current,container.scrollHeight);
+      prependAnchor.current = null;
+    } else if (active && stickToBottomRef.current)container.scrollTop = container.scrollHeight;
+  }, [timeline, running, active]);
 
   const send = () => submitSession({
-    lock: sendLock, draft: input, ready: !running && historyLoaded && !saveFailed,
+    lock: sendLock, draft: input, ready: !running && historyLoaded && !saveFailed && !limitSaving,
     model: selectedModel, provider, hasCredential,
     onBlocked: (description) => setUiEvents((events) => [...events, {
       kind: 'manager', id: crypto.randomUUID(), createdAt: Date.now(), runId: 'ui',
       category: 'SYSTEM', status: 'failed', description,
     }]),
-    onAccepted: () => { setRunning(true); setInput(""); },
+    onAccepted: () => {
+      setRunning(true); setInput(""); stickToBottomRef.current=true;
+      const id=crypto.randomUUID(); pendingQuestionId.current=id;
+      setUiEvents(events=>[...events,{kind:'message',id,runId:'ui',role:'user',text:input.trim(),createdAt:Date.now()}]);
+    },
     onSettled: () => setRunning(false),
     run: async (question) => {
-      const working = conversation ? structuredClone(conversation) : createManagerConversation(title);
+      let working = conversation ? structuredClone(conversation) : createManagerConversation(title);
       working.conversation.title = title;
+      let runStarted = false;
       try {
+        if(!fullHistory.current){
+          working = restoreHistory(initialConversation, await loadHistory(initialConversation.conversation.id));
+          fullHistory.current = true;
+        }
+        setAccountingState(undefined); setDialogueCounts(undefined);
         const adapter = createManagerLlmAdapter({
           providerId: provider,
           model: selectedModel,
           apiKey: selectedKey,
           useSavedKey,
           registry,
+          requestTokenLimit,
         });
         const manager = new ManagerAgent(adapter, toolRegistry, {
           maxIterations: 8,
         });
+        runStarted = true;
         const pendingResult = manager.run({
           state: working,
           onEvent: async (event) => {
+            if(event.type==='message' && event.payload.role==='user' && pendingQuestionId.current){
+              const id=pendingQuestionId.current; pendingQuestionId.current=null;
+              setUiEvents(events=>events.filter(event=>event.id!==id));
+            }
+            setVisibleRuns(current=>new Set([...(current??[]),eventRunId(event)]));
             setConversation(structuredClone(working));
             try { await writer.append(event); }
             catch {
@@ -463,8 +573,13 @@ export function SessionChat({
           ]);
         }
       } catch {
-        const activeRun = working.runs.at(-1);
-        if (activeRun) {
+        if(!runStarted){
+          setInput(current=>current || question);
+          const id=pendingQuestionId.current; pendingQuestionId.current=null;
+          setUiEvents(events=>events.filter(event=>event.id!==id));
+        }
+        const activeRun = runStarted ? working.runs.at(-1) : undefined;
+        if (activeRun?.status === "running") {
           activeRun.status = "incomplete";
           delete activeRun.endedAt;
           setConversation(structuredClone(working));
@@ -487,28 +602,34 @@ export function SessionChat({
   });
 
   return (
-    <Stack spacing={2}>
+    <Box sx={{ display: "grid", gridTemplateColumns: sessionChatColumns, gap: 2, alignItems: "start", minWidth: 0 }}>
+    <Stack spacing={2} sx={{ minWidth: 0 }}>
       {!historyLoaded && !historyError && <Typography role="status">Loading history…</Typography>}
       {historyError && <Alert severity="error" action={<Button disabled={retryingSave || running} onClick={() => { if (saveFailed) void retrySave(); else setHistoryAttempt((n) => n + 1); }}>Retry</Button>}>{historyError}</Alert>}
       <Paper variant="outlined" sx={{ p: 2 }}>
         <Stack spacing={1.5}>
-          <Stack direction="row" alignItems="center" justifyContent="space-between">
-            <Typography variant="h6" component="h3">
+          <Stack direction="row" alignItems="flex-start" justifyContent="space-between" gap={1} sx={{ minWidth: 0 }}>
+            <Typography variant="h6" component="h3" sx={{ minWidth: 0, flex: 1, overflowWrap: "anywhere" }}>
               {title}
             </Typography>
+            <Stack direction="row" spacing={0.5} alignItems="center" sx={{ flexShrink: 0 }}>
             <IconButton
               size="small"
               aria-label="Open chat settings"
-              onClick={(event) => setSettingsAnchor(event.currentTarget)}
+              onClick={(event) => { setLimitDraft(String(requestTokenLimit)); setSettingsAnchor(event.currentTarget); }}
             >
               <SettingsOutlined fontSize="small" />
             </IconButton>
+            </Stack>
           </Stack>
+          {limitError && <Alert severity="error">{limitError}</Alert>}
           {!timeline.length && (
             <Typography color="text.secondary">
               Start a conversation with {providerLabel} · {selectedModel || "Select a model"}
             </Typography>
           )}
+          {historyLoaded && <Typography variant="caption" color="text.secondary">{providerLabel} · {selectedModel || 'Select a model'}</Typography>}
+          {selection.notice && <Alert severity="warning">{selection.notice}</Alert>}
           {!isWeek2Provider(provider) && <Alert severity="warning">{unsupportedWeek2ProviderMessage}</Alert>}
           {!hasCredential && (
             <Typography variant="caption" color="text.secondary">
@@ -518,7 +639,7 @@ export function SessionChat({
           <Popover
             open={!!settingsAnchor}
             anchorEl={settingsAnchor}
-            onClose={() => setSettingsAnchor(null)}
+            onClose={() => { setSettingsAnchor(null); void saveLimit(); }}
             anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
             transformOrigin={{ vertical: "top", horizontal: "right" }}
           >
@@ -528,7 +649,11 @@ export function SessionChat({
                 label="Provider"
                 size="small"
                 value={isWeek2Provider(provider) ? provider : ""}
-                onChange={(event) => setProvider(event.target.value as Week2Provider)}
+                onChange={(event) => {
+                  const next = event.target.value as SessionModelPair['provider'];
+                  const options = registry.modelOptionsFor(next);
+                  setSelection({ provider: next, model: options.includes(modelChoices[next]) ? modelChoices[next] : options[0] ?? '' });
+                }}
               >
                 {!isWeek2Provider(provider) && <MenuItem value="" disabled>Select a supported provider</MenuItem>}
                 {week2ProviderOptions.map((option) => <MenuItem key={option.id} value={option.id}>{option.label}</MenuItem>)}
@@ -540,12 +665,8 @@ export function SessionChat({
                 value={selectedModel}
                 onChange={(event) => {
                   const value = event.target.value;
-                  if (provider === "openai") onOpenAIModelChange(value);
-                  else
-                    setOpenCodeModels((current) => ({
-                      ...current,
-                      [provider]: value,
-                    }));
+                  setSelection({ provider, model: value });
+                  setModelChoices(current => ({ ...current, [provider]: value }));
                 }}
               >
                 {!providerModels.length && <MenuItem value="">No models available</MenuItem>}
@@ -555,6 +676,12 @@ export function SessionChat({
                   </MenuItem>
                 ))}
               </TextField>
+              <TextField label="Compaction target" type="number" size="small" value={limitDraft}
+                disabled={limitSaving || running} onChange={e => setLimitDraft(e.target.value)}
+                helperText="Target estimated input tokens per request. Set to 0 to use the model’s available input budget."
+                slotProps={{ htmlInput: { min: 0, step: 1 } }} />
+              {limitError && <Alert severity="error">{limitError}</Alert>}
+
             </Stack>
           </Popover>
           <Box
@@ -563,6 +690,7 @@ export function SessionChat({
               minHeight: 380,
               maxHeight: 500,
               overflowY: "auto",
+              overflowAnchor: "none",
               pr: 0.5,
               display: "flex",
               flexDirection: "column",
@@ -570,12 +698,16 @@ export function SessionChat({
             }}
             onScroll={(event) => {
               const element = event.currentTarget;
+              if (positioningRef.current) return;
               const nearBottom =
                 element.scrollHeight - (element.scrollTop + element.clientHeight) < 80;
               stickToBottomRef.current = nearBottom;
+              if(element.scrollTop < 80)void loadOlder();
             }}
             aria-label="Week 2 conversation history"
           >
+            {pageCursor?.before != null && <Button size="small" disabled={olderLoading || running} onClick={()=>void loadOlder()}>{olderLoading?'Loading older messages…':'Load older messages'}</Button>}
+            {olderError && <Alert severity="error">{olderError}</Alert>}
             <ChatRunLog events={timeline} />
             {running && (
               <Typography variant="caption" color="text.secondary">
@@ -593,5 +725,9 @@ export function SessionChat({
         </Stack>
       </Paper>
     </Stack>
+    <SessionStatsPanel state={conversation ?? initialConversation} draft={input}
+      request={{ providerId: provider, model: selectedModel, registry, requestTokenLimit }} tools={toolRegistry}
+      active={active} loaded={historyLoaded} running={running} accountingState={accountingState} dialogueCounts={dialogueCounts} />
+    </Box>
   );
 }

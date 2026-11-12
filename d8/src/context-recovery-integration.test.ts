@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { createSessionServer } from "../server/sessions.mjs";
 import { ManagerAgent, type ManagerLlmAdapter } from "./manager-agent";
 import {
+  estimateManagerRequest,
   createManagerLlmAdapter,
   ManagerProviderError,
 } from "./manager-llm-adapter";
@@ -13,6 +14,11 @@ import { createBuiltInToolRegistry } from "./tool-runtime";
 import { emptySession } from "./session-api";
 import { restoreHistory, type HistoryEvent } from "./conversation-history";
 import { ProviderRegistry } from "./provider-registry";
+import { renderToStaticMarkup } from "react-dom/server";
+import { createElement } from "react";
+import { SessionStatsContent } from "./session-stats-panel";
+import { aggregateSessionStats, sessionContextReduction } from "./session-stats";
+import { historicalContext } from "./context-compaction";
 import { buildWeek2Timeline } from "./week2-agent-tool-lab";
 
 it("migrates existing metering history without loss, persists summaries and restores context after a backend restart", async () => {
@@ -109,28 +115,44 @@ it("migrates existing metering history without loss, persists summaries and rest
                 },
               ],
             }
-          : { text: "Completed explanation. ".repeat(150) },
+          : { text: "Completed explanation. ".repeat(calls < 5 ? 150 : 1) },
     };
     for (let i = 0; i < 5; i++)
       expect(
         (
           await new ManagerAgent(prior, registry).run({
             state,
-            userText: "Conversion question. ".repeat(80),
+            userText: i < 3 ? "Conversion question. ".repeat(80) : "Recent conversion question.",
             onEvent,
           })
         ).error,
       ).toBeUndefined();
     const originals = await request("/" + session.id + "/events");
+    const providers = new ProviderRegistry();
+    await request("/" + session.id, "PATCH", { requestTokenLimit: 1000 });
+    await request("/" + second.id, "PATCH", { requestTokenLimit: 0 });
+    const estimate = (messages: Parameters<typeof estimateManagerRequest>[0]["messages"], tools: Parameters<typeof estimateManagerRequest>[0]["tools"] = registry.listBuiltIn().filter(t => t.executable)) =>
+      estimateManagerRequest({ providerId: "openai", model: "gpt-4o-mini", registry: providers, requestTokenLimit: 1000, messages, tools });
+    let sentTokens: number | undefined;
+    let fullSentTokens: number | undefined;
     const adapter: ManagerLlmAdapter = {
       context: {
-        assess: async (messages) => ({
-          tokens: messages.reduce((n, m) => n + m.content.length, 0),
-          limit: 15000,
-        }),
+        assess: async (messages, tools) => {
+          const result = await estimate(messages, tools);
+          return { tokens: result.estimatedInputTokens, limit: result.inputBudget, target: result.requestTokenLimit };
+        },
         summarize: async () => "A CAD to JPY conversion was completed.",
       },
-      complete: async () => ({ text: "Ready to continue." }),
+      complete: async ({ messages, tools, onMeter }) => {
+        sentTokens = (await estimate(messages, tools)).estimatedInputTokens;
+        fullSentTokens = (await estimate([
+          ...historicalContext({ ...state, contextEvents: [] }, state.runs.at(-1)!.id),
+          messages.at(-1)!,
+        ], tools)).estimatedInputTokens;
+        expect(JSON.stringify(messages)).not.toContain("Saved conversation summary");
+        await onMeter?.({ id: crypto.randomUUID(), provider: 'openai', model: 'gpt-4o-mini', library: 'js-tiktoken', status: 'completed', startedAt: Date.now(), estimatedInputTokens: sentTokens });
+        return { text: "Ready to continue." };
+      },
     };
     const result = await new ManagerAgent(adapter, registry).run({
       state,
@@ -138,8 +160,11 @@ it("migrates existing metering history without loss, persists summaries and rest
       onEvent,
     });
     expect(result.error).toBeUndefined();
-    const summary = state.contextEvents!.find((e) => e.phase === "completed")!;
-    expect(summary.summary).toContain("11234.567");
+    expect(sentTokens).toBeLessThanOrEqual(1000);
+    expect(fullSentTokens).toBeGreaterThan(sentTokens!);
+    expect(state.contextEvents ?? []).toEqual([]);
+    const panel = (value: typeof state) => renderToStaticMarkup(createElement(SessionStatsContent, { stats: aggregateSessionStats(value), contextPending: true }));
+    expect(panel(state)).toContain(`≈${sentTokens}`);
     const saved = await request("/" + session.id + "/events");
     expect(saved.slice(0, originals.length)).toEqual(originals);
     await stop();
@@ -150,20 +175,19 @@ it("migrates existing metering history without loss, persists summaries and rest
     expect(
       (await request("")).some((s: { id: string }) => s.id === "legacy"),
     ).toBe(true);
+    const settings = await request("");
+    expect(settings.find((s: { id: string }) => s.id === session.id).requestTokenLimit).toBe(1000);
+    expect(settings.find((s: { id: string }) => s.id === second.id).requestTokenLimit).toBe(0);
     const restoredEvents = await request("/" + session.id + "/events");
     const restored = restoreHistory(emptySession(session), restoredEvents);
-    expect(restored.contextEvents).toEqual(state.contextEvents);
-    expect(
-      buildWeek2Timeline(restored, registry).some(
-        (e) =>
-          e.kind === "manager" && e.description.includes("Context compacted"),
-      ),
-    ).toBe(true);
+    expect(restored.contextEvents).toEqual(state.contextEvents ?? []);
+    expect(panel(restored)).toContain(`≈${sentTokens}`);expect(panel(restored)).not.toContain('Reduction');
+    expect(restored.toolExecutions.some(tool => JSON.stringify(tool.output).includes("11234.567"))).toBe(true);
     expect(await request("/" + second.id + "/events")).toEqual([]);
     const followup: ManagerLlmAdapter = {
       complete: async ({ messages }) => {
-        expect(messages[0].content).toContain("11234.567");
-        expect(messages[0].content).toContain("JPY");
+        expect(JSON.stringify(messages)).toContain("11234.567");
+        expect(JSON.stringify(messages)).toContain("JPY");
         return { text: "10% tax uses the saved JPY amount." };
       },
     };
@@ -198,7 +222,7 @@ it("migrates existing metering history without loss, persists summaries and rest
           id: "foreign-summary",
           sessionId: second.id,
           type: "context",
-          payload: { ...summary, runId: "foreign-run" },
+          payload: { id: "foreign-context", runId: "foreign-run", createdAt: 1, phase: "completed", summary: "Legacy summary", coveredEventId: originals.at(-1)!.id, coveredRunIds: [state.runs[0].id] },
         }),
       },
     );
@@ -250,6 +274,7 @@ it.each([false, true])(
         return response;
       };
       const registry = new ProviderRegistry();
+
       registry.register({
         id: "opencode-console",
         catalog: () => ["gpt-4o-mini"],
@@ -259,6 +284,7 @@ it.each([false, true])(
         execute: vi.fn(),
       });
       const adapter = createManagerLlmAdapter({
+        requestTokenLimit: 0,
         providerId: "opencode-console",
         model: "gpt-4o-mini",
         apiKey: saved ? "" : fake,
@@ -285,7 +311,6 @@ it.each([false, true])(
       if (saved) expect(responses[0]).not.toContain(fake);
       const outgoing = JSON.parse(upstream.mock.calls[0][1]!.body as string);
       expect(outgoing).toMatchObject({
-        max_completion_tokens: 4096,
         tool_choice: "none",
         tools: [],
       });
@@ -349,6 +374,7 @@ it.each([false, true])(
       let attempts = 0;
       upstream.mockImplementation(async (_url, init) => {
         const payload = JSON.parse(init!.body as string);
+        for (const field of ["max_output_tokens", "max_completion_tokens", "max_tokens"]) expect(payload).not.toHaveProperty(field);
         if (payload.tool_choice === "none")
           return new Response(
             JSON.stringify({
@@ -416,8 +442,6 @@ it.each([false, true])(
       expect(execute).toHaveBeenCalledTimes(1);
       expect(state.contextEvents!.map((event) => event.phase)).toEqual([
         "overflow",
-        "compacting",
-        "completed",
         "retrying",
       ]);
       expect(

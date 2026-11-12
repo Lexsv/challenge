@@ -1,3 +1,4 @@
+import { vintagePalette as p } from "./vintage-palette";
 import { Chip, CircularProgress, Tooltip } from "@mui/material";
 import { alpha } from "@mui/material/styles";
 import { statusLabel } from "./labels";
@@ -16,14 +17,14 @@ export function ResultBadge({
   const label = statusLabel(value);
   const tone =
     value === "correct" || value === "succeeded"
-      ? "#3f633c"
+      ? p.success
       : value === "incorrect" || value === "failed"
-        ? "#8b4540"
+        ? p.error
         : ["incomplete", "timed-out", "unable_to_assess"].includes(value)
-          ? "#785d24"
+          ? p.warning
           : value === "running"
-            ? "#4D36AE"
-            : "#55594c";
+            ? p.muted
+            : p.muted;
   const description = manual
     ? `Manual verdict: ${label}`
     : automated

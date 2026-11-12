@@ -67,26 +67,19 @@ it("compacts proactively after a switch to a smaller model, preserves recent tur
     },
   });
   expect(result.error).toBeUndefined();
-  expect(small.context.summarize).toHaveBeenCalled();
+  expect(small.context.summarize).not.toHaveBeenCalled();
   const outgoing = small.complete.mock.calls as unknown as [
     { messages: { content: string }[] },
   ][];
   expect(outgoing[0][0].messages.at(-1)?.content).toBe("Latest user message");
-  expect(outgoing[0][0].messages[0].content).toContain(
-    "Saved conversation summary",
-  );
+  expect(outgoing[0][0].messages.some(m=>m.content.includes("Saved conversation summary"))).toBe(false);
+  expect(outgoing[0][0].messages.length).toBeLessThan(state.messages.length);
   expect(state.messages).toHaveLength(original + 2);
-  const summary = state.contextEvents!.find((e) => e.phase === "completed")!;
-  expect(summary.coveredEventId).toBeTruthy();
-  expect(summary.afterTokens).toBeLessThan(summary.beforeTokens!);
   const restored = restoreHistory(
-    { ...createManagerConversation(), conversation: state.conversation },
-    events,
+    { ...createManagerConversation(), conversation: state.conversation }, events,
   );
-  expect(restored.contextEvents).toEqual(state.contextEvents);
-  expect(historicalContext(restored, "next")[0].content).toContain(
-    summary.summary,
-  );
+  expect(restored.messages).toHaveLength(original);
+  expect(restored.contextEvents).toEqual([]);
 });
 
 it("retries only the rejected request once, without repeating tools or duplicating the user message", async () => {
@@ -138,8 +131,6 @@ it("retries only the rejected request once, without repeating tools or duplicati
   ).toHaveLength(1);
   expect(state.contextEvents!.map((e) => e.phase)).toEqual([
     "overflow",
-    "compacting",
-    "completed",
     "retrying",
   ]);
   expect(result.run.status).toBe("completed");
@@ -165,18 +156,17 @@ it("preserves historical tool values and units losslessly", async () => {
     endedAt: 2,
   });
   const adapter = {
-    context: context(9000),
-    complete: vi.fn(async () => ({ text: "Done" })),
+    context: context(50000),
+    complete: vi.fn(async (_input: Parameters<ManagerLlmAdapter["complete"]>[0]) => ({ text: "Done" })),
   };
   const result = await new ManagerAgent(adapter, tools()).run({
     state,
     userText: "Tax the first result",
   });
   expect(result.error).toBeUndefined();
-  expect(state.contextEvents!.find((e) => e.summary)?.summary).toContain(
-    "11234.567",
-  );
-  expect(state.contextEvents!.find((e) => e.summary)?.summary).toContain("JPY");
+  const sent = JSON.stringify(adapter.complete.mock.calls[0][0].messages);
+  expect(sent).toContain("11234.567");
+  expect(sent).toContain("JPY");
 });
 
 it.each([400, 401, 403, 429, 502])(
@@ -222,7 +212,8 @@ it("ends after the one retry fails and summary failures never start recovery", a
       tools(),
     ).run({ state, userText: "Continue" });
     expect(result.run.status).toBe("failed");
-    expect(complete).toHaveBeenCalledTimes(summaryFailure ? 1 : 2);
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(c.summarize).not.toHaveBeenCalled();
     expect(
       state.contextEvents!.filter((e) => e.phase === "overflow"),
     ).toHaveLength(1);
@@ -236,7 +227,7 @@ it("fails clearly when protected content cannot fit, and treats unknown metadata
     { context: context(9000), complete },
     tools(),
   ).run({ state, userText: "Protected current message ".repeat(1000) });
-  expect(result.error).toContain("fitting");
+  expect(result.error).toContain("model input budget");
   expect(complete).not.toHaveBeenCalled();
   const unknown: ManagerLlmAdapter = {
     context: { assess: async () => ({}), summarize: vi.fn() },
@@ -371,24 +362,15 @@ it.each([false, true])(
       },
     });
     expect(result.error).toBeUndefined();
-    expect(bodies.length).toBeGreaterThan(1);
-    expect(bodies[0].tool_choice).toBe("none");
-    expect(bodies[0].tools).toEqual([]);
+    expect(bodies).toHaveLength(1);
     expect(bodies.at(-1)!.tool_choice).toBe("auto");
-    expect(bodies.at(-1)!.messages[0].content).toContain(
-      "Saved conversation summary",
-    );
-    expect(bodies.at(-1)!.max_completion_tokens).toBe(512);
+    expect(JSON.stringify(bodies[0])).not.toContain("Saved conversation summary");
+    for (const body of bodies) { expect(body).not.toHaveProperty("max_completion_tokens"); expect(body).not.toHaveProperty("max_output_tokens"); }
     expect(state.requestMeters).toHaveLength(bodies.length);
     expect(
       state.requestMeters!.every((meter) => meter.actualTotalTokens === 17),
     ).toBe(true);
-    expect(
-      events.filter(
-        (event) =>
-          event.type === "context" && event.payload.phase === "completed",
-      ),
-    ).toHaveLength(1);
+    expect(events.filter(event => event.type === "context")).toHaveLength(0);
     expect(
       fetcher.mock.calls.every(([url]) =>
         useSavedKey
@@ -439,4 +421,72 @@ it("sanitizes transport failures and never treats them as overflow", async () =>
   await expect(
     adapter.complete({ messages: [], tools: [] }),
   ).rejects.not.toBeInstanceOf(ManagerProviderError);
+});
+
+it.each([0, 2000])('keeps hard limits active with custom target %s and preserves full dialogue', async (target) => {
+  const { state } = await seeded();
+  const original = state.messages.length;
+  const planning = { ...context(9000), assess: vi.fn(async (messages: readonly { content: string }[]) => ({ tokens: messages.reduce((n,m)=>n+m.content.length,0), limit: 9000, target })) };
+  const complete = vi.fn(async () => ({ text: 'Continued.' }));
+  const result = await new ManagerAgent({ context: planning, complete }, tools()).run({state,userText:'Continue',onEvent: async () => {}});
+  expect(result.error).toBeUndefined(); expect(state.messages).toHaveLength(original + 2); expect(complete).toHaveBeenCalledOnce();
+  expect(planning.summarize).not.toHaveBeenCalled();
+});
+
+it('disables the custom target below the hard budget and restores full history despite an older summary', async () => {
+  const { state } = await seeded();
+  state.contextEvents = [{id:'saved-summary', runId:'prior',createdAt:1,phase:'completed',summary:'Short summary',coveredRunIds:state.runs.map(r=>r.id)}];
+  const planning = { ...context(100000), assess: vi.fn(async (messages: readonly { content: string }[]) => ({ tokens: messages.reduce((n,m)=>n+m.content.length,0), limit:100000,target:0 })) };
+  const complete = vi.fn(async () => ({text:'Continued.'}));
+  await new ManagerAgent({context:planning,complete},tools()).run({state,userText:'Continue'});
+  expect(planning.summarize).not.toHaveBeenCalled();
+  const call = complete.mock.calls as unknown as [{ messages: {content:string}[] }][];
+  expect(call[0][0].messages[0].content).toContain('A long past question');
+});
+
+it('sends required content above the soft target when it fits the model budget', async () => {
+  const planning = {...context(100000),assess:vi.fn(async () => ({tokens:3000,limit:100000,target:2000}))};
+  const complete = vi.fn(async () => ({text:'Kept required content.'}));
+  const result=await new ManagerAgent({context:planning,complete},tools()).run({state:createManagerConversation(),userText:'Required draft'});
+  expect(result.error).toBeUndefined();
+  expect(complete).toHaveBeenCalledOnce();
+});
+
+it('allows a compacted request above the soft target but within the model budget', async () => {
+ const {state}=await seeded();
+ const planning={...context(100000),assess:vi.fn(async (messages:readonly {content:string}[])=>({tokens:messages.reduce((n,m)=>n+m.content.length,0),limit:100000,target:2000}))};
+ const complete=vi.fn(async()=>({text:'Continued.'}));
+ const result=await new ManagerAgent({context:planning,complete},tools()).run({state,userText:'Continue',onEvent:async()=>{}});
+ expect(result.error).toBeUndefined();
+ expect(planning.summarize).not.toHaveBeenCalled();
+ expect(complete).toHaveBeenCalledOnce();
+});
+
+it('accepts a shorter overflow retry that fits the effective budget without an extra 20% rejection', async () => {
+ const {state}=await seeded();
+ let calls=0;
+ const adapter:ManagerLlmAdapter={
+  context:{assess:async messages=>({tokens:messages.length===1 && messages[0].role==='user' ? Math.ceil(messages[0].content.length/4) : messages.length * 500,limit:10000}),summarize:async()=> 'Compact prior discussion.'},
+  complete:async()=>{if(++calls===1)throw new ManagerProviderError({kind:'context-overflow',status:400});return {text:'Recovered.'};},
+ };
+ const result=await new ManagerAgent(adapter,tools()).run({state,userText:'Continue'});
+ expect(result.error).toBeUndefined();expect(calls).toBe(2);
+ expect(state.contextEvents!.map(e=>e.phase)).toEqual(['overflow','retrying']);
+});
+
+it('recommends a larger model when its hard input budget is the limiting constraint', async () => {
+ const {state}=await seeded();
+ const planning={...context(2000),assess:async(messages:readonly {role?:string;content:string}[])=>({tokens:messages.length===1 && messages[0].role==='user' ? Math.ceil(messages[0].content.length/4) : messages.reduce((n,m)=>n+m.content.length,0),limit:2000,modelInputBudget:2000,target:10000})};
+ const complete=vi.fn(async()=>({text:'Must not send.'}));
+ const result=await new ManagerAgent({context:planning,complete},tools()).run({state,userText:'Required input '.repeat(1000)});
+ expect(result.error).toContain('model input budget');
+ expect(result.error).not.toContain('Increase this session');expect(complete).not.toHaveBeenCalled();
+
+});
+
+it('never summarizes while selecting a bounded request', async()=>{
+ const {state}=await seeded();const planning={...context(10000),summarize:vi.fn(async()=>{throw Error('must not run')})};
+ const complete=vi.fn(async()=>({text:'Done'}));
+ const result=await new ManagerAgent({context:planning,complete},tools()).run({state,userText:'Continue'});
+ expect(result.error).toBeUndefined();expect(planning.summarize).not.toHaveBeenCalled();expect(complete).toHaveBeenCalledOnce();
 });

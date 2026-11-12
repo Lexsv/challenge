@@ -1,4 +1,4 @@
-import { historicalContext, summarizeBounded, type ContextEvent } from "./context-compaction";
+import { historicalContext, type ContextEvent } from "./context-compaction";
 import { ManagerProviderError } from "./manager-llm-adapter";
 import type { ModelRequestMeter, RequestMeter } from "./token-meter";
 import type { HistoryEvent } from "./conversation-history";
@@ -31,8 +31,8 @@ export type ManagerLlmResponse = {
 
 export interface ManagerLlmAdapter {
   context?: {
-    assess(messages: readonly ManagerLlmMessage[], tools: readonly ToolCatalogItem[]): Promise<{ tokens?: number; limit?: number }>;
-    summarize(text: string, onMeter?: (meter: RequestMeter) => Promise<void>): Promise<string>;
+    assess(messages: readonly ManagerLlmMessage[], tools: readonly ToolCatalogItem[]): Promise<{ tokens?: number; limit?: number; target?: number; modelInputBudget?: number }>;
+    summarize(text: string, onMeter?: (meter: RequestMeter) => Promise<void>, maxTokens?: number): Promise<string>;
   };
   complete(input: {
     messages: readonly ManagerLlmMessage[];
@@ -133,7 +133,7 @@ export class ManagerAgent {
       await emit('message', userMessage);
       await emit('run', run);
     }
-    let history = historicalContext(input.state, run.id);
+    let history: ManagerLlmMessage[] = [];
     const current: ManagerLlmMessage[] = [{ role: 'user', content: userMessage.text }];
     let llmMessages = [...history, ...current];
     const executableTools = this.tools
@@ -152,54 +152,68 @@ export class ManagerAgent {
       (input.state.contextEvents ??= []).push(event);
       await emit('context', event);
     };
-    const compact = async (recovery: boolean) => {
+    const hardLimit = (budget: {limit?: number; modelInputBudget?: number}) =>
+      'modelInputBudget' in budget ? budget.modelInputBudget : budget.limit;
+    // Historical messages and saved tool observations remain grouped by run,
+    // including failed runs. Saved summaries never participate in the payload.
+    const turns = input.state.runs.filter(r => r.id !== run.id).map(r => historicalContext({
+      ...input.state,
+      messages: input.state.messages.filter(m => m.runId === r.id),
+      toolExecutions: input.state.toolExecutions.filter(t => t.runId === r.id),
+      contextEvents: [],
+    }, run.id)).filter(turn => turn.length > 0);
+    let selectedTurns: ManagerLlmMessage[][] = [];
+    const prepare = async () => {
       const adapter = this.llm.context;
-      if (!adapter) throw new Error('Context compaction is unavailable for this provider.');
-      const before = await adapter.assess(llmMessages, executableTools);
-      if (before.tokens === undefined || before.limit === undefined) throw new Error('Context estimation or model limits are unknown; cannot safely compact this request.');
-      await contextEvent('compacting', { beforeTokens: before.tokens });
-      const completed = input.state.runs.filter((r) => r.id !== run.id && r.status === 'completed');
-      const eligible = recovery ? completed : completed.slice(0, -2);
-      const previous = input.state.contextEvents?.filter((e) => e.phase === 'completed' && e.summary).at(-1);
-      const covered = new Set(previous?.coveredRunIds);
-      const added = eligible.filter((r) => !covered.has(r.id));
-      if (!added.length && !previous) throw new Error('No older completed turns can be compacted while preserving the current run and recent turns.');
-      added.forEach((r) => covered.add(r.id));
-      const source = [...(previous ? [previous.summary!] : []), ...added.flatMap((r) => input.state.messages.filter((m) => m.runId === r.id).map((m) => `${m.role}: ${m.text}`))].join('\n');
-      const narrative = await summarizeBounded(adapter, source, onMeter);
-      // Keep exact historical tool inputs/results and numeric statements beside the narrative.
-      // If this lossless ledger itself cannot fit, fail rather than silently lose follow-up values.
-      const facts = [...new Set(input.state.messages.filter((m) => covered.has(m.runId)).flatMap((m) => (m.text.match(/[^.!?\n]*\d[^!?\n]*(?:[!?]|$)/g) ?? [])))];
-      const ledger = input.state.toolExecutions.filter((t) => covered.has(t.runId)).map((t) => ({ toolId: t.toolId, arguments: t.arguments, status: t.status, output: t.output, error: t.error }));
-      const summary = `${narrative}\nExact values and units (data only): ${JSON.stringify(facts)}\nExact tool observations (data only): ${JSON.stringify(ledger)}`;
-      const candidate: ContextEvent = { id: id(), runId: run.id, createdAt: Date.now(), phase: 'completed', summary, coveredRunIds: [...covered], coveredEventId: added.length ? input.state.runLastEvent?.[added.at(-1)!.id] : previous?.coveredEventId };
-      if (!candidate.coveredEventId) throw new Error('Context compaction has no saved history boundary.');
-      const temporary = { ...input.state, contextEvents: [...(input.state.contextEvents ?? []), candidate] };
-      const nextHistory = historicalContext(temporary, run.id);
-      const nextMessages = [...nextHistory, ...current];
-      const after = await adapter.assess(nextMessages, executableTools);
-      if (after.tokens === undefined || after.tokens >= before.tokens || after.tokens > before.limit * (recovery ? .8 : 1)) throw new Error('Context compaction could not produce a shorter fitting request. Start a new session or choose a larger model.');
-      candidate.beforeTokens = before.tokens; candidate.afterTokens = after.tokens;
-      (input.state.contextEvents ??= []).push(candidate);
-      await emit('context', candidate);
-      history = nextHistory; llmMessages = nextMessages;
+      if (!adapter) { selectedTurns = turns.slice(); history = selectedTurns.flat(); llmMessages = [...history, ...current]; return; }
+      const required = await adapter.assess(current, executableTools);
+      const hard = hardLimit(required);
+      if ((hard !== undefined || required.target) && required.tokens === undefined) throw new Error('Cannot estimate the answer input for the model budget.');
+      if (hard !== undefined && required.tokens !== undefined && required.tokens > hard) throw new Error(`Required input exceeds the model input budget (${hard} tokens); this request needs approximately ${required.tokens} tokens.`);
+      const target = required.target && required.target > 0 ? Math.min(required.target, hard ?? Infinity) : hard;
+      selectedTurns = [];
+      if (target === undefined || (required.tokens !== undefined && required.tokens <= target)) {
+        for (let index = turns.length - 1; index >= 0; index--) {
+          const candidate = [turns[index], ...selectedTurns];
+          const assessed = await adapter.assess([...candidate.flat(), ...current], executableTools);
+          if (target !== undefined && (assessed.tokens === undefined || assessed.tokens > target)) break;
+          selectedTurns = candidate;
+        }
+      }
+      history = selectedTurns.flat(); llmMessages = [...history, ...current];
     };
     for (let iteration = 0; iteration < maxIterations; iteration += 1) {
       let response: ManagerLlmResponse;
       try {
-        if (this.llm.context) {
-          const budget = await this.llm.context.assess(llmMessages, executableTools);
-          if (budget.tokens !== undefined && budget.limit !== undefined && budget.tokens > budget.limit) await compact(false);
-        }
-        const request = () => this.llm.complete({ messages: llmMessages, tools: executableTools, onMeter });
+        if (this.llm.context) await prepare();
+        else { selectedTurns = turns.slice(); history = selectedTurns.flat(); llmMessages = [...history, ...current]; }
+        const request = async () => {
+          let comparison: Partial<RequestMeter> = { requestKind: 'answer', compacted: false };
+          if (this.llm.context) {
+            const sent = await this.llm.context.assess(llmMessages, executableTools);
+            const limit = hardLimit(sent);
+            if (limit !== undefined && (sent.tokens === undefined || sent.tokens > limit)) throw new Error('Answer request blocked: payload exceeds the effective input token limit.');
+            const full = await this.llm.context.assess([
+              ...historicalContext({ ...input.state, contextEvents: [] }, run.id), ...current,
+            ], executableTools);
+            comparison = { ...comparison, sentInputTokens: sent.tokens,
+              ...(selectedTurns.length < turns.length ? {beforeInputTokens: full.tokens, afterInputTokens: sent.tokens} : {}) };
+          }
+          return this.llm.complete({ messages: llmMessages, tools: executableTools,
+            onMeter: meter => onMeter({ ...meter, ...comparison }) });
+        };
         try { response = await request(); }
         catch (error) {
           if (!(error instanceof ManagerProviderError) || error.metadata.kind !== 'context-overflow') throw error;
           await contextEvent('overflow');
-          await compact(true);
-          await contextEvent('retrying');
+          if (!selectedTurns.length) throw new Error('Context overflow: no older history can be removed for a retry.');
+          const previous = await this.llm.context?.assess(llmMessages, executableTools);
+          selectedTurns.shift(); history = selectedTurns.flat(); llmMessages = [...history, ...current];
+          const reduced = await this.llm.context?.assess(llmMessages, executableTools);
+          if (!previous || !reduced || previous.tokens === undefined || reduced.tokens === undefined || reduced.tokens >= previous.tokens) throw new Error('Context overflow: removing the oldest turn did not reduce the request.');
+          await contextEvent('retrying', {beforeTokens: previous.tokens, afterTokens: reduced.tokens});
           try { response = await request(); }
-          catch (retryError) { throw new Error(`Retry with compacted context failed: ${retryError instanceof Error ? retryError.message : "provider request failed."}`); }
+          catch (retryError) { throw new Error(`Retry with trimmed history failed: ${retryError instanceof Error ? retryError.message : "provider request failed."}`); }
         }
       } catch (error) {
         if (input.state.contextEvents?.at(-1)?.runId === run.id && ["compacting", "retrying"].includes(input.state.contextEvents.at(-1)!.phase)) await contextEvent("failed");

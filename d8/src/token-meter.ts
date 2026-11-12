@@ -8,6 +8,11 @@ export type TokenPricing = {
 };
 export type RequestMeter = {
   id: string; provider: string; model: string; actualModel?: string;
+  requestKind?: 'answer' | 'summary';
+  sentInputTokens?: number;
+  beforeInputTokens?: number;
+  afterInputTokens?: number;
+  compacted?: boolean;
   library: 'js-tiktoken'; startedAt: number; endedAt?: number;
   status: 'running' | 'completed' | 'failed' | 'incomplete';
   encoding?: 'o200k_base' | 'cl100k_base'; estimatedInputTokens?: number;
@@ -34,6 +39,23 @@ async function encoder(name: NonNullable<RequestMeter['encoding']>): Promise<Tik
     return new Tiktoken(ranks.default);
   })());
   return encoders.get(name)!;
+}
+
+// Context planning may use a clearly labelled fallback; billed usage is never inferred.
+// This is also the default encoding for the app's current OpenAI model family.
+export const DEFAULT_CONTEXT_ENCODING = 'o200k_base' as const;
+export async function estimateContextInput(model: string, body: unknown): Promise<{
+  estimatedInputTokens?: number; encoding?: RequestMeter['encoding']; estimateApproximate?: boolean;
+}> {
+  const specific = verifiedEncoding(model);
+  const candidates = [...new Set([specific, DEFAULT_CONTEXT_ENCODING].filter(Boolean))] as NonNullable<RequestMeter['encoding']>[];
+  for (const encoding of candidates) {
+    try {
+      return { estimatedInputTokens: (await encoder(encoding)).encode(JSON.stringify(body), [], []).length,
+        encoding, estimateApproximate: encoding !== specific };
+    } catch { /* Try the local default if model-specific ranks are unavailable. */ }
+  }
+  return {};
 }
 export function tokenPricing(provider: string, model: string, endpoint: string): TokenPricing | undefined {
   if (endpoint !== DEFAULT_ENDPOINTS[provider as keyof typeof DEFAULT_ENDPOINTS]) return undefined;

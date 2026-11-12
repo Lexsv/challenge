@@ -16,8 +16,8 @@ export function SessionRow({ id, title, selected, menuOpen, disabled, onSelect, 
   }>
     <ListItemButton selected={selected} aria-current={selected ? 'true' : undefined} onClick={onSelect}
       onContextMenu={(event) => { event.preventDefault(); if (!disabled) onActions({ x: event.clientX, y: event.clientY }); }}
-      sx={{ borderRadius: 2, my: 0.5, pr: 6 }}>
-      <ListItemText primary={title} primaryTypographyProps={{ variant: 'body2', sx: { overflowWrap: 'anywhere' } }} />
+      sx={{ borderRadius: 2, my: 0.5, pr: 6, minWidth: 0 }}>
+      <ListItemText sx={{ minWidth: 0 }} primary={title} primaryTypographyProps={{ variant: 'body2', noWrap: true, title }} />
     </ListItemButton>
   </ListItem>;
 }

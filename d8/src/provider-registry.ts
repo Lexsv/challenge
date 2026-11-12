@@ -1,3 +1,5 @@
+import {browserCatalogStorage, loadModelCatalog, saveModelCatalog, type CatalogStorage} from './model-catalog-storage';
+import type { ModelFeatures } from "./model-capabilities";
 import { type Settings } from "./models";
 import {
   validSettings,
@@ -47,6 +49,7 @@ export type ProviderAdapter = {
   catalog: () => readonly string[];
   discover?: () => Promise<readonly DiscoveredModel[]>;
   capabilities: (model: string) => ProviderModelCapabilities | undefined;
+  modelFeatures?: (model: string) => ModelFeatures | undefined;
   limits?: (model: string) => { contextWindow?: number; maxOutputTokens?: number; maxInputTokens?: number } | undefined;
   validate: (settings: Settings) => string | undefined;
   validateHistorical?: (settings: Settings) => string | undefined;
@@ -112,6 +115,7 @@ export class ProviderRegistry {
 export function createProviderRegistry(
   openAI: Adapter = respond,
   overrides: Record<string, Adapter> = {},
+  options: {catalogStorage?: () => CatalogStorage | undefined} = {},
 ) {
   const registry = new ProviderRegistry();
   registry.register({
@@ -138,17 +142,27 @@ export function createProviderRegistry(
   });
   for (const mode of ["console", "go"] as const) {
     const id: "opencode-console" | "opencode-go" = `opencode-${mode}`;
-    const discovered = new Map<string, DiscoveredModel>();
+    const storage = () => (options.catalogStorage ?? browserCatalogStorage)();
+    const restoreCatalog = () => {
+      if(mode !== 'console') return [];
+      try {return loadModelCatalog(registry.endpointFor(id)!, storage());} catch {return [];}
+    };
+    const discovered = new Map<string, DiscoveredModel>(restoreCatalog().map(model=>[model.id,model]));
     let endpointVersion = 0;
     registry.register({
       id,
       allowUndiscoveredSelection: true,
       limits: (model) => discovered.get(model),
+      modelFeatures: (model) => discovered.get(model)?.features,
       catalog: () => mode === "console" ? Array.from(new Set([...catalog.map((model) => model.id), ...discovered.keys()])).filter((model) => consoleModelSelectable(model, discovered.get(model))) : Array.from(new Set([...catalog.map((model) => model.id).filter((model) => goModelIds.has(model)), ...discovered.keys()])),
       discover: async () => {
         const version = endpointVersion;
         const models = await discoverModels(mode, fetch, discoveryEndpoint(id, registry.endpointFor(id)!));
         if (version !== endpointVersion) throw new Error("Endpoint changed during model discovery.");
+        if(mode === 'console') {
+          try {saveModelCatalog(registry.endpointFor(id)!, models, storage());}
+          catch {throw new Error('Model catalog could not be saved. Retry Refresh Models.');}
+        }
         discovered.clear();
         models.forEach((model) => discovered.set(model.id, model));
         return models;
@@ -217,7 +231,7 @@ export function createProviderRegistry(
         }
         return undefined;
       },
-      onEndpointChanged: () => { endpointVersion++; discovered.clear(); },
+      onEndpointChanged: () => { endpointVersion++; discovered.clear(); restoreCatalog().forEach(model=>discovered.set(model.id,model)); },
       execute: overrides[id] ?? openCodeAdapter(mode, fetch, () => registry.endpointFor(id)!),
     });
   }

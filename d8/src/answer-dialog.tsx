@@ -1,3 +1,4 @@
+import { vintagePalette as p } from "./vintage-palette";
 import { useState } from "react";
 import {
   Alert,
@@ -40,10 +41,10 @@ function JsonValue({ value }: { value: string }) {
       {pieces.map((piece, index) => {
         const color = /^"/.test(piece)
           ? pieces[index + 1]?.trimStart().startsWith(":")
-            ? "#4D36AE"
-            : "#80512c"
+            ? p.pinkInk
+            : p.warning
           : /^(?:true|false|null|-?\d)/.test(piece)
-            ? "#5b5682"
+            ? p.blueInk
             : undefined;
         return (
           <span key={index} style={color ? { color } : undefined}>

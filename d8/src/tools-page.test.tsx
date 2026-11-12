@@ -1,3 +1,4 @@
+import { vintagePalette as p } from "./vintage-palette";
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
@@ -254,7 +255,7 @@ it('renders a compact, scrollable four-column built-in table before Custom Tools
   expect(html).toContain('data-testid="CodeOutlinedIcon"');
   expect(html).toContain('data-testid="PublicOutlinedIcon"');
   expect(html).toContain('data-testid="LocalLibraryOutlinedIcon"');
-  for (const color of ['#6954cc', '#087f72', '#1b5ea8']) expect(html.toLowerCase()).toContain(color);
+  for (const color of [p.pinkInk, p.tealInk, p.amberInk]) expect(html.toLowerCase()).toContain(color.toLowerCase());
 });
 
 it('connects each name button to collapsed details and renders full schema or automatic Library details when expanded', () => {
