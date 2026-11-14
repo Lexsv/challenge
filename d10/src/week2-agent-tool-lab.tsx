@@ -3,6 +3,7 @@ import { sessionLimitOnClose } from "./session-limit";
 import { SessionStatsPanel, SessionStatsContent, SessionStatsFrame, sessionChatColumns } from "./session-stats-panel";
 import { restoreSessionModelPair, type SessionModelPair } from "./session-model-selection";
 import { ChatComposer } from "./chat-composer";
+import { KeyValueDetails } from "./key-value-details";
 import { ChatRunLog } from "./chat-run-log";
 import { contextPhaseLabel } from "./context-compaction";
 import { createAndSelectSession } from "./session-creation";
@@ -14,12 +15,14 @@ import { SessionRow } from "./session-row";
 import { submitSession } from "./session-send";
 import { credentials } from "./saved-credentials";
 import { HistoryWriter, restoreHistory } from "./conversation-history";
-import { saveSessionRequestTokenLimit, saveSessionContextSetting, loadSessionFacts, saveSessionFacts, listSessions, createSession as persistSession, renameSession, emptySession, loadHistory, loadHistoryPage, saveHistoryEvent, deleteSession } from "./session-api";
-import { useLayoutEffect, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { openMemorySession, selectMemorySession, loadMemory, saveMemory, openStickySession, selectStickySession, openSlidingSession, selectSlidingSession, saveFullContext, saveSessionRequestTokenLimit, saveSessionContextSetting, loadSessionFacts, saveSessionFacts, listSessions, createSession as persistSession, renameSession, emptySession, loadHistory, loadHistoryPage, saveHistoryEvent, deleteSession } from "./session-api";
+import type {MemoryEntry} from './key-value-memory';
+import { useLayoutEffect, useEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction } from "react";
 import {
   Alert,
   Box,
   Button,
+  GlobalStyles,
   IconButton,
   Menu,
   MenuItem,
@@ -36,6 +39,7 @@ import {
   FormControl,
   FormLabel,
   Stack,
+  Chip,
   TextField,
   Typography,
 } from "@mui/material";
@@ -337,7 +341,67 @@ export function Week2AgentToolLab(props: LabProps) {
   );
 }
 
-export function SessionChat({
+type SessionChatProps = LabProps & {initialConversation: ManagerConversationState; active?: boolean; title: string};
+
+export function SessionChat(props: SessionChatProps) {
+  const [sliding, setSliding] = useState(!!props.initialConversation.conversation.slidingSelected);
+  const [sticky, setSticky] = useState(!!props.initialConversation.conversation.stickySelected || (!!props.initialConversation.conversation.contextStrategy && !props.initialConversation.conversation.fullContext && !props.initialConversation.conversation.slidingSelected && !props.initialConversation.conversation.memorySelected));
+  const [memory, setMemory] = useState(!!props.initialConversation.conversation.memorySelected);
+  const [slidingState, setSlidingState] = useState<ManagerConversationState>();
+  const [stickyState, setStickyState] = useState<ManagerConversationState>();
+  const [memoryState, setMemoryState] = useState<ManagerConversationState>();
+  const [selection,setSelection] = useState<SessionModelPair>({provider:'openai',model:props.openAIModel});
+  const [modelChoices,setModelChoices] = useState<Record<string,string>>({openai:props.openAIModel});
+  const restoredSelection = useRef(false);
+  const [switching, setSwitching] = useState(false);
+  const [switchError, setSwitchError] = useState('');
+  const [root, setRoot] = useState(props.initialConversation);
+  useEffect(() => {
+    if (!sliding || slidingState) return;
+    let current = true;
+    void openSlidingSession(root.conversation.id).then(item => {if(current)setSlidingState(emptySession(item));}).catch(()=>{if(current)setSwitchError('Could not load Sliding Window history.');});
+    return () => {current=false;};
+  },[sliding,slidingState,root.conversation.id]);
+  useEffect(() => {
+    if (!sticky || stickyState) return;
+    let current=true;
+    void openStickySession(root.conversation.id).then(item=>{if(current)setStickyState(emptySession(item));}).catch(()=>{if(current)setSwitchError('Could not load Sticky Facts history.');});
+    return ()=>{current=false;};
+  },[sticky,stickyState,root.conversation.id]);
+  useEffect(()=>{if(!memory || memoryState)return;let current=true;void openMemorySession(root.conversation.id).then(item=>{if(current)setMemoryState(emptySession(item));}).catch(()=>{if(current)setSwitchError('Could not load Key-Value Memory history.');});return()=>{current=false;};},[memory,memoryState,root.conversation.id]);
+  const switchTab = async (next:'full'|'legacy'|'sliding'|'sticky'|'memory') => {
+    if (switching) return;
+    setSwitching(true); setSwitchError('');
+    try {
+      if (next === 'sliding') {
+        const child = emptySession(await openSlidingSession(root.conversation.id));
+        await selectSlidingSession(root.conversation.id,true);
+        setSlidingState(child); setSticky(false); setMemory(false); setSliding(true);
+      } else if (next === 'sticky') {
+        const child = emptySession(await openStickySession(root.conversation.id));
+        await selectStickySession(root.conversation.id,true);
+        setStickyState(child); setSliding(false); setMemory(false); setSticky(true);
+      } else if(next==='memory') {
+        const child=emptySession(await openMemorySession(root.conversation.id));
+        await selectMemorySession(root.conversation.id,true);
+        setMemoryState(child);setSliding(false);setSticky(false);setMemory(true);
+      } else {
+        await saveFullContext(root.conversation.id,next === 'full');
+        await selectSlidingSession(root.conversation.id,false);
+        await selectStickySession(root.conversation.id,false);
+        setRoot(current=>({...current,conversation:{...current.conversation,fullContext:next==='full'}}));
+        await selectMemorySession(root.conversation.id,false);
+        setSliding(false); setSticky(false); setMemory(false);
+      }
+    } catch {setSwitchError('Could not switch context mode.');}
+    finally {setSwitching(false);}
+  };
+  const current = sliding ? slidingState : sticky ? stickyState : memory ? memoryState : root;
+  if (!current) return <Alert severity={switchError ? 'error' : 'info'}>{switchError || 'Loading context history…'}</Alert>;
+  return <Box sx={{minHeight:650}}><Box key={`${current.conversation.id}-${sliding ? 'sliding' : sticky ? 'sticky' : memory ? 'memory' : 'full'}`} sx={{animation:'contextFade 180ms ease-out','@keyframes contextFade':{from:{opacity:.72},to:{opacity:1}},'@media (prefers-reduced-motion: reduce)':{animation:'none'}}}><SessionChatView {...props} initialConversation={current} sliding={sliding} sticky={sticky} memory={memory} selection={selection} setSelection={setSelection} modelChoices={modelChoices} setModelChoices={setModelChoices} restoredSelection={restoredSelection} switchTab={switchTab} switching={switching} /></Box>{switchError && <Alert severity="error">{switchError}</Alert>}</Box>;
+}
+
+function SessionChatView({
   toolRegistry,
   registry,
   openAIModel,
@@ -347,6 +411,10 @@ export function SessionChat({
   initialConversation,
   active = true,
   title,
+  sliding,
+  sticky, memory, selection, setSelection, modelChoices, setModelChoices, restoredSelection,
+  switchTab,
+  switching,
 }: {
   toolRegistry: ToolRegistry;
   registry: ProviderRegistry;
@@ -357,12 +425,21 @@ export function SessionChat({
   initialConversation: ManagerConversationState;
   active?: boolean;
   title: string;
+  sliding: boolean;
+  sticky: boolean;
+  memory: boolean;
+  selection: SessionModelPair;
+  setSelection: Dispatch<SetStateAction<SessionModelPair>>;
+  modelChoices: Record<string,string>;
+  setModelChoices: Dispatch<SetStateAction<Record<string,string>>>;
+  restoredSelection: {current:boolean};
+  switchTab: (next:'full'|'legacy'|'sliding'|'sticky'|'memory') => Promise<void>;
+  switching: boolean;
 }) {
-  const [selection, setSelection] = useState<SessionModelPair>({ provider: 'openai', model: openAIModel });
   const { provider, model: selectedModel } = selection;
-  const [modelChoices, setModelChoices] = useState<Record<string, string>>({ openai: openAIModel });
   const [requestTokenLimit, setRequestTokenLimit] = useState(initialConversation.conversation.requestTokenLimit ?? 0);
   const [contextStrategy, setContextStrategy] = useState<'token-budget'|'key-facts'>(initialConversation.conversation.contextStrategy ?? 'token-budget');
+  const [fullContext] = useState(!!initialConversation.conversation.fullContext);
   const [recentMessages, setRecentMessages] = useState(initialConversation.conversation.recentMessages ?? 10);
   const [recentDraft, setRecentDraft] = useState(String(initialConversation.conversation.recentMessages ?? 10));
   const [contextSaving, setContextSaving] = useState(false);
@@ -374,6 +451,12 @@ export function SessionChat({
       const saved = await saveSessionContextSetting(initialConversation.conversation.id, setting);
       setContextStrategy(saved.contextStrategy ?? 'token-budget');
       setRecentMessages(saved.recentMessages ?? 10); setRecentDraft(String(saved.recentMessages ?? 10));
+      if (sliding && 'recentMessages' in setting) {
+        const events = await loadHistory(initialConversation.conversation.id);
+        pageEvents.current = events; fullHistory.current = true;
+        setPageCursor({before:null,snapshot:events.at(-1)?.sequence ?? 0});
+        setVisibleRuns(new Set(events.map(eventRunId))); setConversation(restoreHistory(initialConversation,events));
+      }
     } catch { setLimitError('Could not save context settings.'); setRecentDraft(String(recentMessages)); }
     finally { contextLock.current = false; setContextSaving(false); }
   };
@@ -415,7 +498,10 @@ export function SessionChat({
   const prependAnchor = useRef<{height:number;top:number} | null>(null);
   const [accountingState, setAccountingState] = useState<ManagerConversationState>();
   const [dialogueCounts, setDialogueCounts] = useState<import('./session-api').HistoryPage['dialogueTokens']>();
+  const [savedDialogueCount, setSavedDialogueCount] = useState<number>();
   const [factsRevision, setFactsRevision] = useState(0);
+  const [memoryEntries,setMemoryEntries] = useState<MemoryEntry[]>([]);
+  useEffect(()=>{if(!active || !memory)return;let current=true;void loadMemory(initialConversation.conversation.id).then(value=>{if(current)setMemoryEntries(value.entries);}).catch(()=>{if(current)setHistoryError('Could not load Key-Value Memory.');});return()=>{current=false;};},[active,memory,initialConversation.conversation.id]);
 
   const [historyError, setHistoryError] = useState("");
   const [historyAttempt, setHistoryAttempt] = useState(0);
@@ -436,10 +522,11 @@ export function SessionChat({
       setVisibleRuns(new Set(page.events.map(eventRunId)));
       const restored = restoreHistory(initialConversation, page.events);
       const accounting = restoreHistory(initialConversation, page.accountingEvents ?? page.events);
-      setAccountingState(accounting); setDialogueCounts(page.dialogueTokens);
+      setAccountingState(accounting); setDialogueCounts(page.dialogueTokens); setSavedDialogueCount(page.dialogueCount);
       const pair = restoreSessionModelPair(accounting, registry, openAIModel);
-      setSelection(pair);
-      setModelChoices(current => ({ ...current, [pair.provider]: pair.model }));
+      if (!restoredSelection.current) {
+        setSelection(pair); setModelChoices(current => ({ ...current, [pair.provider]: pair.model })); restoredSelection.current=true;
+      }
       setConversation(restored);
       setHistoryLoaded(true);
     }).catch(() => { if (current) setHistoryError("Could not load conversation history. Retry before sending."); });
@@ -456,7 +543,7 @@ export function SessionChat({
       setConversation(restored.conversation);
       setFactsRevision(n=>n+1);
       setOlderError('');
-      fullHistory.current = true; setAccountingState(undefined); setDialogueCounts(undefined);
+      fullHistory.current = true; setAccountingState(undefined); setDialogueCounts(undefined); setSavedDialogueCount(undefined);
       setSaveFailed(false); setHistoryError("");
     }
     catch { setHistoryError("History save failed. Retry to save pending events; tools will not be replayed."); }
@@ -560,7 +647,7 @@ export function SessionChat({
           working = restoreHistory(initialConversation, await loadHistory(initialConversation.conversation.id));
           fullHistory.current = true;
         }
-        setAccountingState(undefined); setDialogueCounts(undefined);
+        setAccountingState(undefined); setDialogueCounts(undefined); setSavedDialogueCount(undefined);
         const savedFunctions = await loadFunctions();
         toolRegistry.replaceCustomTools(savedFunctions.map(executableFunction));
         const adapter = createManagerLlmAdapter({
@@ -569,15 +656,16 @@ export function SessionChat({
           apiKey: selectedKey,
           useSavedKey,
           registry,
-          requestTokenLimit,
+          requestTokenLimit: fullContext || sliding ? 0 : requestTokenLimit,
         });
         const manager = new ManagerAgent(adapter, toolRegistry, {
           maxIterations: 8,
         });
         runStarted = true;
+        let memoryRevision=0;
         const pendingResult = manager.run({
           state: working,
-          ...(contextStrategy === 'key-facts' ? { keyFacts: { recentMessages, load: () => loadSessionFacts(working.conversation.id), save: async (value: Parameters<typeof saveSessionFacts>[1]) => { await saveSessionFacts(working.conversation.id, value); setFactsRevision(n=>n+1); } } } : {}),
+          ...(memory ? {keyValue:{load:async()=>{const value=await loadMemory(working.conversation.id); memoryRevision=value.revision; return value.entries;},save:async(entries:MemoryEntry[])=>{const value=await saveMemory(working.conversation.id,{revision:memoryRevision,entries});memoryRevision=value.revision;setMemoryEntries(value.entries);}}} : sliding ? {contextMode:'sliding' as const, windowSize:recentMessages} : fullContext ? {contextMode: 'full' as const} : contextStrategy === 'key-facts' ? { keyFacts: { recentMessages, load: () => loadSessionFacts(working.conversation.id), save: async (value: Parameters<typeof saveSessionFacts>[1]) => { await saveSessionFacts(working.conversation.id, value); setFactsRevision(n=>n+1); } } } : {}),
           onEvent: async (event) => {
             if(event.type==='message' && event.payload.role==='user' && pendingQuestionId.current){
               const id=pendingQuestionId.current; pendingQuestionId.current=null;
@@ -598,7 +686,12 @@ export function SessionChat({
         // run() records the user message before its first provider await.
         setConversation(structuredClone(working));
         const result = await pendingResult;
-        setConversation(structuredClone(result.state));
+        if (sliding) {
+          const events = await loadHistory(initialConversation.conversation.id);
+          pageEvents.current = events; fullHistory.current = true;
+          setVisibleRuns(new Set(events.map(eventRunId))); setPageCursor({before:null,snapshot:events.at(-1)?.sequence ?? 0});
+          setConversation(restoreHistory(initialConversation,events));
+        } else setConversation(structuredClone(result.state));
         if (result.error) {
           setUiEvents((events) => [
             ...events,
@@ -644,10 +737,10 @@ export function SessionChat({
 
   return (
     <Box sx={{ display: "grid", gridTemplateColumns: sessionChatColumns, gap: 2, alignItems: "start", minWidth: 0 }}>
+    <GlobalStyles styles={{ html: { overscrollBehaviorY: 'none' } }} />
     <Stack spacing={2} sx={{ minWidth: 0 }}>
-      {!historyLoaded && !historyError && <Typography role="status">Loading history…</Typography>}
       {historyError && <Alert severity="error" action={<Button disabled={retryingSave || running} onClick={() => { if (saveFailed) void retrySave(); else setHistoryAttempt((n) => n + 1); }}>Retry</Button>}>{historyError}</Alert>}
-      <Paper variant="outlined" sx={{ p: 2 }}>
+      <Paper variant="outlined" sx={{ p: 2, pb: 3 }}>
         <Stack spacing={1.5}>
           <Stack direction="row" alignItems="flex-start" justifyContent="space-between" gap={1} sx={{ minWidth: 0 }}>
             <Typography variant="h6" component="h3" sx={{ minWidth: 0, flex: 1, overflowWrap: "anywhere" }}>
@@ -663,6 +756,13 @@ export function SessionChat({
             </IconButton>
             </Stack>
           </Stack>
+          <Box role="group" aria-label="Context strategy" sx={{display:'flex',flexWrap:'wrap',gap:1,minHeight:40,alignItems:'center'}}>
+            {([['full','Full Context'],['sliding','Sliding Window'],['sticky','Sticky Facts'],['memory','Key-Value Memory']] as const).map(([value,label]) => {
+              const selected = (sliding ? 'sliding' : sticky ? 'sticky' : memory ? 'memory' : 'full') === value;
+              return <Chip key={value} label={label} clickable disabled={running || contextSaving || switching} onClick={()=>void switchTab(value)} aria-pressed={selected} color={selected?'primary':'default'} variant={selected?'filled':'outlined'} sx={{transition:'background-color 180ms ease, border-color 180ms ease', ...(selected ? {border:'1px solid',borderColor:'primary.main',bgcolor:'primary.main',color:'primary.dark','&&:hover':{bgcolor:'primary.main',color:'primary.dark',borderColor:'primary.main'}} : {}), '&.Mui-focusVisible':{outline:'2px solid',outlineColor:'primary.dark',outlineOffset:2},'@media (prefers-reduced-motion: reduce)':{transition:'none'}}} />;
+            })}
+          </Box>
+          {(sliding || sticky) && <TextField label="Recent messages" type="number" size="small" sx={{ width: 180, maxWidth: '100%' }} value={recentDraft} disabled={contextSaving || running} onChange={event=>setRecentDraft(event.target.value)} onBlur={()=>void saveRecent()} slotProps={{htmlInput:{min:1,step:1}}} helperText={sliding ? `${Math.min(savedDialogueCount ?? conversation?.messages.filter(message => message.role !== 'system').length ?? 0, recentMessages)} / ${recentMessages} messages` : undefined} />}
           {limitError && <Alert severity="error">{limitError}</Alert>}
           {!timeline.length && (
             <Typography color="text.secondary">
@@ -718,11 +818,11 @@ export function SessionChat({
                   </MenuItem>
                 ))}
               </TextField>
-              <FormControl disabled={contextSaving || running}>
+              {!fullContext && !sliding && !sticky && !memory && <><FormControl disabled={contextSaving || running}>
                 <FormLabel>Context strategy</FormLabel>
                 <RadioGroup value={contextStrategy} onChange={e => { const next=e.target.value as 'token-budget'|'key-facts'; void (async () => { if (contextStrategy === 'key-facts') await saveRecent(); await saveContextSetting({contextStrategy:next}); })(); }}>
                   <FormControlLabel value="token-budget" control={<Radio />} label="Token budget" />
-                  <FormControlLabel value="key-facts" control={<Radio />} label="Key Facts" />
+                  <FormControlLabel value="key-facts" control={<Radio />} label="Sticky Facts" />
                 </RadioGroup>
               </FormControl>
               {contextStrategy === 'token-budget' ? <TextField label="History token target" type="number" size="small" value={limitDraft}
@@ -730,7 +830,7 @@ export function SessionChat({
                 helperText="Target estimated input tokens per request. Set to 0 to use the model’s available input budget."
                 slotProps={{ htmlInput: { min: 0, step: 1 } }} /> : <TextField label="Recent messages" type="number" size="small" value={recentDraft}
                 disabled={contextSaving || running} onChange={e => setRecentDraft(e.target.value)}
-                slotProps={{ htmlInput: { min: 1, step: 1 } }} />}
+                slotProps={{ htmlInput: { min: 1, step: 1 } }} />}</>}
               {limitError && <Alert severity="error">{limitError}</Alert>}
 
             </Stack>
@@ -743,6 +843,7 @@ export function SessionChat({
               overflowY: "auto",
               overflowAnchor: "none",
               pr: 0.5,
+              pb: 9,
               display: "flex",
               flexDirection: "column",
               gap: 1,
@@ -757,6 +858,7 @@ export function SessionChat({
             }}
             aria-label="Week 2 conversation history"
           >
+            {!historyLoaded && !historyError && <Typography role="status">Loading history…</Typography>}
             {pageCursor?.before != null && <Button size="small" disabled={olderLoading || running || saveFailed || retryingSave} onClick={()=>void loadOlder()}>{olderLoading?'Loading older messages…':'Load older messages'}</Button>}
             {olderError && <Alert severity="error">{olderError}</Alert>}
             <ChatRunLog events={timeline} />
@@ -766,6 +868,7 @@ export function SessionChat({
               </Typography>
             )}
           </Box>
+          <Box sx={{ position: 'sticky', bottom: 24, zIndex: 1, bgcolor: 'background.paper' }}>
           <ChatComposer
             draft={input}
             onDraftChange={setInput}
@@ -773,13 +876,17 @@ export function SessionChat({
             disabled={running || !historyLoaded || saveFailed}
             running={running}
           />
+          </Box>
         </Stack>
       </Paper>
     </Stack>
-    <SessionStatsPanel state={conversation ?? initialConversation} draft={input}
+    <Box><SessionStatsPanel state={conversation ?? initialConversation} draft={input}
       request={{ providerId: provider, model: selectedModel, registry, requestTokenLimit }} tools={toolRegistry}
       active={active} loaded={historyLoaded} running={running} accountingState={accountingState} dialogueCounts={dialogueCounts}
-      contextStrategy={contextStrategy} recentMessages={recentMessages} factsRevision={factsRevision} />
+      contextStrategy={fullContext || sliding || memory ? undefined : contextStrategy} recentMessages={recentMessages} factsRevision={factsRevision} fullContext={fullContext || sliding || memory} >
+      {memory && <KeyValueDetails entries={memoryEntries} />}
+      </SessionStatsPanel>
+    </Box>
     </Box>
   );
 }

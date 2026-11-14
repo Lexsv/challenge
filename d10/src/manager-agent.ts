@@ -1,5 +1,7 @@
 import { historicalContext, type ContextEvent } from "./context-compaction";
 import { KeyFactsContext, factHistory, type FactStore } from './key-facts-context';
+import { slidingWindow } from './sliding-window';
+import { maintainMemory, memoryAnswerContext, selectMemory, type MemoryEntry } from './key-value-memory';
 import { ManagerProviderError } from "./manager-llm-adapter";
 import type { ModelRequestMeter, RequestMeter } from "./token-meter";
 import type { HistoryEvent } from "./conversation-history";
@@ -109,6 +111,9 @@ export class ManagerAgent {
     agentId?: string;
     maxIterations?: number;
     keyFacts?: FactStore;
+    contextMode?: 'full' | 'sliding';
+    windowSize?: number;
+    keyValue?: {load: () => Promise<MemoryEntry[]>; save: (entries: MemoryEntry[]) => Promise<void>};
     onEvent?: (event: HistoryEvent) => Promise<void>;
   }): Promise<ManagerRunResult> {
     const maxIterations = input.maxIterations ?? this.defaults.maxIterations ?? 8;
@@ -166,6 +171,9 @@ export class ManagerAgent {
     }, run.id)).filter(turn => turn.length > 0);
     const historyForFacts = factHistory(input.state, run.id);
     const keyFacts = input.keyFacts ? new KeyFactsContext(this.llm, input.keyFacts) : undefined;
+    let memoryContext: ManagerLlmMessage[] | undefined;
+    let memoryAmbiguous = false;
+    let memoryClarification = '';
     let selectedTurns: ManagerLlmMessage[][] = [];
     // Once overflow removes a turn, do not reselect it or older turns during this run.
     let firstEligibleTurn = 0;
@@ -191,7 +199,22 @@ export class ManagerAgent {
     for (let iteration = 0; iteration < maxIterations; iteration += 1) {
       let response: ManagerLlmResponse;
       try {
+        if (input.keyValue && !memoryContext && !memoryAmbiguous) {
+          const previous = await input.keyValue.load();
+          const priorAssistant = input.state.messages.filter(message=>message.runId !== run.id && message.role==='assistant').at(-1);
+          const lastQuestion = input.state.messages.filter(message=>message.runId !== run.id && message.role==='user').at(-1)?.text;
+          const priorQuestion = priorAssistant?.text.startsWith('Уточните, пожалуйста') && lastQuestion && /[?？]/.test(lastQuestion) && input.userText.trim().length <= 50 && !/[?？]/.test(input.userText) ? lastQuestion : undefined;
+          const query = priorQuestion ? `${priorQuestion}\nУточнение: ${input.userText}` : input.userText;
+          const isQuestion = !!priorQuestion || /[?？]/.test(input.userText);
+          const result = isQuestion ? {entries:previous,selection:await selectMemory(this.llm,previous,query,onMeter)} : await maintainMemory(this.llm, previous, input.userText, onMeter);
+          if (JSON.stringify(result.entries) !== JSON.stringify(previous)) await input.keyValue.save(result.entries);
+          if (result.selection.kind === 'ambiguous') {memoryAmbiguous = true; memoryClarification = `Уточните, пожалуйста, о какой теме идёт речь: ${previous.map(entry=>entry.key).join('; ')}?`;}
+          else memoryContext = [...memoryAnswerContext(result.selection, query).slice(0,-1), ...(priorQuestion ? [{role:'system' as const,content:`The user is clarifying this earlier question: ${priorQuestion}`}] : [])];
+        }
         if (keyFacts) llmMessages = await keyFacts.prepare(historyForFacts, current, executableTools, onMeter);
+        else if (input.keyValue) llmMessages = [...(memoryContext ?? []), ...current];
+        else if (input.contextMode === 'full') { selectedTurns = turns; history = turns.flat(); llmMessages = [...history, ...current]; }
+        else if (input.contextMode === 'sliding') llmMessages = slidingWindow(historyForFacts, current, input.windowSize ?? 10);
         else if (this.llm.context) await prepare();
         else { selectedTurns = turns.slice(firstEligibleTurn); history = selectedTurns.flat(); llmMessages = [...history, ...current]; }
         const request = async () => {
@@ -199,7 +222,7 @@ export class ManagerAgent {
           if (this.llm.context) {
             const sent = await this.llm.context.assess(llmMessages, executableTools);
             const limit = hardLimit(sent);
-            if (limit !== undefined && (sent.tokens === undefined || sent.tokens > limit)) throw new Error('Answer request blocked: payload exceeds the effective input token limit.');
+            if (limit !== undefined && (sent.tokens === undefined || sent.tokens > limit)) throw new Error(input.contextMode === 'full' ? 'Full Context exceeds the model input budget. Start a new session or use a different context mode.' : 'Answer request blocked: payload exceeds the effective input token limit.');
             const full = await this.llm.context.assess([
               ...historicalContext({ ...input.state, contextEvents: [] }, run.id), ...current,
             ], executableTools);
@@ -214,9 +237,10 @@ export class ManagerAgent {
             throw error;
           }
         };
-        try { response = await request(); }
+        try { response = memoryAmbiguous ? {text:memoryClarification} : await request(); }
         catch (error) {
-          if (keyFacts || !(error instanceof ManagerProviderError) || error.metadata.kind !== 'context-overflow') throw error;
+          if (input.contextMode === 'full' && error instanceof ManagerProviderError && error.metadata.kind === 'context-overflow') throw new Error('Full Context exceeds the model input budget. Start a new session or use a different context mode.');
+          if (keyFacts || input.keyValue || input.contextMode === 'full' || input.contextMode === 'sliding' || !(error instanceof ManagerProviderError) || error.metadata.kind !== 'context-overflow') throw error;
           await contextEvent('overflow');
           if (!selectedTurns.length) throw new Error('Context overflow: no older history can be removed for a retry.');
           const previous = await this.llm.context?.assess(llmMessages, executableTools);

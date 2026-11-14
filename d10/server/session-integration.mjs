@@ -38,7 +38,7 @@ test('two sessions and rename survive backend restart and fresh list load', asyn
     for (const value of [-1, 1.5, '1000', null]) {
       assert.equal((await fetch(`${url}/${first.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({requestTokenLimit:value}) })).status,400);
     }
-    for (const setting of [{contextStrategy:'key-facts'}, {recentMessages:7}, {contextStrategy:'token-budget'}]) {
+    for (const setting of [{contextStrategy:'key-facts'}, {recentMessages:7}, {contextStrategy:'token-budget'}, {fullContext:1}]) {
       const response = await fetch(`${url}/${first.id}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify(setting) });
       assert.equal(response.status, 200);
       Object.assign(renamed, await response.json());
@@ -52,14 +52,29 @@ test('two sessions and rename survive backend restart and fresh list load', asyn
     const put = () => fetch(`${url}/${first.id}/facts`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(facts)});
     assert.equal((await put()).status,200);
     assert.equal((await put()).status,409);
+    assert.equal((await fetch(`${url}/${first.id}`, {method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({contextStrategy:'key-facts'})})).status,200);
+    assert.equal((await fetch(`${url}/${first.id}`, {method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({fullContext:0})})).status,200);
+    const sticky = await (await fetch(`${url}/${first.id}/sticky`, {method:'POST'})).json();
+    assert.notEqual(sticky.id,first.id);
+    assert.equal(sticky.recentMessages,7);
+    assert.equal((await (await fetch(`${url}/${sticky.id}/events`)).json())[0].payload.text,'Original dialogue');
+    assert.deepEqual(await (await fetch(`${url}/${sticky.id}/facts`)).json(),{facts:facts.facts,coveredMessageId:'m1'});
+    const memory = await (await fetch(`${url}/${first.id}/memory-session`, {method:'POST'})).json();
+    const entries=[{id:'topic-1',key:'Synthetic picnic',value:'Nora brings cucumbers.'}];
+    const writeMemory=()=>fetch(`${url}/${memory.id}/memory`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({revision:0,entries})});
+    assert.equal((await writeMemory()).status,200);
+    assert.equal((await writeMemory()).status,409);
+    Object.assign(renamed, await (await fetch(`${url}/${first.id}`, {method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({contextStrategy:'token-budget'})})).json());
     await stop();
     url = await start();
     assert.deepEqual(await (await fetch(`${url}/${first.id}/facts`)).json(),{facts:facts.facts,coveredMessageId:'m1'});
+    assert.deepEqual(await (await fetch(`${url}/${sticky.id}/facts`)).json(),{facts:facts.facts,coveredMessageId:'m1'});
+    assert.deepEqual(await (await fetch(`${url}/${memory.id}/memory`)).json(),{revision:1,entries});
     assert.equal((await (await fetch(`${url}/${first.id}/events`)).json())[0].payload.text,'Original dialogue');
     const restored = await (await fetch(url)).json();
     assert.deepEqual(restored.map(({updatedAt, ...item}) => item), [renamed, second]);
     assert.ok(restored[0].updatedAt >= restored[0].createdAt);
-    assert.deepEqual(Object.keys(restored[0]).sort(), ['contextStrategy', 'createdAt', 'id', 'recentMessages', 'requestTokenLimit', 'title', 'updatedAt']);
+    assert.deepEqual(Object.keys(restored[0]).sort(), ['contextStrategy', 'createdAt', 'fullContext', 'id', 'memorySelected', 'recentMessages', 'requestTokenLimit', 'slidingSelected', 'stickySelected', 'title', 'updatedAt']);
   } finally {
     if (server?.listening) await stop();
     await rm(folder, { recursive: true, force: true });

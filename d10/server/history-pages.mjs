@@ -19,9 +19,10 @@ export function createHistoryPager(db) {
     const prior = cache.get(sessionId);
     if (prior?.snapshot === snapshot) return prior.value;
     const messages = [], tools = new Map();
+    let dialogueCount = 0;
     for (const row of dialogue.all(sessionId, snapshot)) {
       const payload = JSON.parse(row.payload);
-      if (row.type === 'message') { if (payload.role !== 'system') messages.push({role: payload.role, content: payload.text}); }
+      if (row.type === 'message') { if (payload.role !== 'system') { dialogueCount++; messages.push({role: payload.role, content: payload.text}); } }
       else tools.set(payload.id, payload);
     }
     for (const tool of tools.values()) {
@@ -34,7 +35,7 @@ export function createHistoryPager(db) {
       if (!encoders.has(name)) encoders.set(name, getEncoding(name));
       dialogueTokens[name] = messages.length ? encoders.get(name).encode(JSON.stringify(messages), [], []).length : 0;
     }
-    const value = {accountingEvents:accounting.all(sessionId,snapshot).map(decode),dialogueTokens};
+    const value = {accountingEvents:accounting.all(sessionId,snapshot).map(decode),dialogueTokens,dialogueCount};
     // Only one numeric/accounting snapshot per session; never cache dialogue text.
     cache.set(sessionId,{snapshot,value});
     return value;

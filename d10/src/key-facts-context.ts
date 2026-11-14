@@ -33,7 +33,7 @@ export class KeyFactsContext {
   private saved?: {facts: KeyFact[]; coveredMessageId: string | null};
   constructor(private readonly adapter: ManagerLlmAdapter, private readonly store: FactStore) {}
   async prepare(history: readonly FactHistoryMessage[], current: readonly ManagerLlmMessage[], tools: readonly ToolCatalogItem[], onMeter?: (meter: RequestMeter) => Promise<void>): Promise<ManagerLlmMessage[]> {
-    if (!this.adapter.context || !Number.isSafeInteger(this.store.recentMessages) || this.store.recentMessages < 1) throw new Error('Key Facts requires a positive window and model budget estimate.');
+    if (!this.adapter.context || !Number.isSafeInteger(this.store.recentMessages) || this.store.recentMessages < 1) throw new Error('Sticky Facts requires a positive window and model budget estimate.');
     this.saved ??= await this.store.load();
     const initial = selectFactLayers(history, this.saved.coveredMessageId, this.store.recentMessages);
     let uncovered = [...initial.buffer, ...initial.recent];
@@ -44,7 +44,7 @@ export class KeyFactsContext {
     const assessment = async () => {
       const result = await this.adapter.context!.assess(payload(), tools);
       const limit = result.modelInputBudget ?? result.limit;
-      if (result.tokens === undefined || limit === undefined) throw new Error('The model input budget is unavailable for Key Facts.');
+      if (result.tokens === undefined || limit === undefined) throw new Error('The model input budget is unavailable for Sticky Facts.');
       return {tokens:result.tokens,limit};
     };
     const extract = async (count: number) => {
@@ -74,7 +74,7 @@ export class KeyFactsContext {
       active = [{role:'user',content:`Essential facts extracted from the current message: ${JSON.stringify(essential)}`}, ...active.slice(1)];
       size = await assessment();
     }
-    if (size.tokens > size.limit) throw new Error('Key Facts request exceeds the model input budget.');
+    if (size.tokens > size.limit) throw new Error('Sticky Facts request exceeds the model input budget.');
     return payload();
   }
 }

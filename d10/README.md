@@ -1,6 +1,6 @@
 # Day 10 — AI Lab
 
-Day 10 starts from [Day 9](../d9/README.md), retaining its custom Functions, saved-provider connections, and per-session context strategies. **Key Facts** keeps a structured fact table alongside a verbatim message window; **Token budget** retains Day 8 newest-first, whole-turn history trimming. Both preserve the full saved dialogue in SQLite. See the [Day 8 README](../d8/README.md) for the inherited architecture, providers, and tools.
+Day 10 builds on [Day 9](../d9/README.md), retaining custom Functions and saved-provider connections. In **Labs → Week 2**, choose **Full Context**, **Sliding Window**, **Sticky Facts**, or **Key-Value Memory**. Each strategy has separate conversation state; Sliding Window limits the messages sent to the model while retaining its full saved dialogue. Sticky Facts stores extracted facts alongside a verbatim window, and Key-Value Memory retrieves topic values by their descriptions. See the [Day 8 README](../d8/README.md) for inherited architecture, providers, and tools.
 
 ## How context compression works
 

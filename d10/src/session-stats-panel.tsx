@@ -82,12 +82,14 @@ export function SessionStatsContent({
   contextPending = false,
   breakdown,
   showBreakdown = false,
+  fullContext = false,
 }: {
   stats?: SessionStats;
   context?: NextSessionContext;
   contextPending?: boolean;
   breakdown?: ContextBreakdown;
   showBreakdown?: boolean;
+  fullContext?: boolean;
 }) {
   const usage = (value: SessionStats["input"] | undefined) =>
     value?.reportedRequests ? number(value.knownTokens) : "Not reported";
@@ -133,12 +135,12 @@ export function SessionStatsContent({
     ["Context", ""],
     ["Model window", context?.contextWindow === undefined ? "Unavailable" : number(context.contextWindow)],
     ["Dialogue", context?.dialogueTokens === undefined ? (contextPending ? "Updating…" : "Unavailable") : number(context.dialogueTokens)],
-    ["Compaction target", context?.requestTokenLimit === undefined ? "Unavailable" : context.requestTokenLimit === 0 ? (context.contextWindow === undefined ? "Auto" : `${number(context.contextWindow)} (Auto)`) : number(context.requestTokenLimit)],
     ["Last request", stats?.lastAnswer
       ? (stats.lastAnswer.sentInputTokens ?? stats.lastAnswer.estimatedInputTokens) !== undefined
         ? `≈${number((stats.lastAnswer.sentInputTokens ?? stats.lastAnswer.estimatedInputTokens)!)}` : "Unavailable"
       : "—"],
   );
+  if (!fullContext) rows.splice(rows.length - 1, 0, ["Compaction target", context?.requestTokenLimit === undefined ? "Unavailable" : context.requestTokenLimit === 0 ? (context.contextWindow === undefined ? "Auto" : `${number(context.contextWindow)} (Auto)`) : number(context.requestTokenLimit)]);
   if (showBreakdown) rows.push(['Recent messages', breakdown?.recent === undefined ? '—' : `≈${number(breakdown.recent)}`]);
   return (
     <Box
@@ -212,6 +214,8 @@ export function SessionStatsPanel({
   contextStrategy,
   recentMessages,
   factsRevision,
+  fullContext,
+  children,
 }: {
   state: ManagerConversationState;
   draft: string;
@@ -225,6 +229,8 @@ export function SessionStatsPanel({
   contextStrategy?: 'token-budget'|'key-facts';
   recentMessages?: number;
   factsRevision?: number;
+  fullContext?: boolean;
+  children?: ReactNode;
 }) {
   const stats = useMemo(() => aggregateSessionStats(accountingState ?? state), [state, accountingState]);
   const budget = managerContextBudget(request);
@@ -255,7 +261,8 @@ export function SessionStatsPanel({
     <SessionStatsFrame>
       <SessionStatsContent stats={loaded ? stats : undefined}
         context={{ ...budget, dialogueTokens: pending ? undefined : dialogue?.tokens }} contextPending={pending}
-        showBreakdown={contextStrategy==='key-facts'} breakdown={breakdown} />
+        showBreakdown={contextStrategy==='key-facts'} breakdown={breakdown} fullContext={fullContext} />
+      {children}
     </SessionStatsFrame>
   );
 }

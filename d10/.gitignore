@@ -20,6 +20,7 @@ work/
 
 # Local session database and SQLite sidecars
 /data/
+/artifacts/
 *.sqlite
 *.sqlite-*
 *.db

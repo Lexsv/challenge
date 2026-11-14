@@ -1,4 +1,5 @@
 import { createHistoryPager } from './history-pages.mjs';
+import { createContextWorkspaceStore } from './context-workspaces.mjs';
 import { createCredentialRoutes } from "./credentials.mjs";
 import { DatabaseSync } from 'node:sqlite';
 import { createServer } from 'node:http';
@@ -112,6 +113,18 @@ export function createSessionServer(databasePath = fileURLToPath(new URL('../dat
   const sessionColumns = db.prepare('PRAGMA table_info(sessions)').all().map(column => column.name);
   if (!sessionColumns.includes('contextStrategy')) db.exec("ALTER TABLE sessions ADD COLUMN contextStrategy TEXT NOT NULL DEFAULT 'token-budget' CHECK(contextStrategy IN ('token-budget','key-facts'))");
   if (!sessionColumns.includes('recentMessages')) db.exec('ALTER TABLE sessions ADD COLUMN recentMessages INTEGER NOT NULL DEFAULT 10 CHECK(recentMessages > 0)');
+  if (!sessionColumns.includes('fullContext')) db.exec('ALTER TABLE sessions ADD COLUMN fullContext INTEGER NOT NULL DEFAULT 0 CHECK(fullContext IN (0,1))');
+  if (!sessionColumns.includes('slidingSelected')) db.exec('ALTER TABLE sessions ADD COLUMN slidingSelected INTEGER NOT NULL DEFAULT 0 CHECK(slidingSelected IN (0,1))');
+  if (!sessionColumns.includes('stickySelected')) {
+    db.exec("ALTER TABLE sessions ADD COLUMN stickySelected INTEGER NOT NULL DEFAULT 0 CHECK(stickySelected IN (0,1)); UPDATE sessions SET stickySelected=1 WHERE contextStrategy='key-facts' AND fullContext=0 AND slidingSelected=0");
+  }
+  if (!sessionColumns.includes('memorySelected')) db.exec('ALTER TABLE sessions ADD COLUMN memorySelected INTEGER NOT NULL DEFAULT 0 CHECK(memorySelected IN (0,1))');
+  db.exec(`CREATE TABLE IF NOT EXISTS sliding_sessions (
+    parentId TEXT PRIMARY KEY REFERENCES sessions(id), childId TEXT UNIQUE NOT NULL REFERENCES sessions(id)
+  )`);
+  db.exec('CREATE TABLE IF NOT EXISTS sticky_sessions (parentId TEXT PRIMARY KEY REFERENCES sessions(id), childId TEXT UNIQUE NOT NULL REFERENCES sessions(id))');
+  db.exec('CREATE TABLE IF NOT EXISTS memory_sessions (parentId TEXT PRIMARY KEY REFERENCES sessions(id), childId TEXT UNIQUE NOT NULL REFERENCES sessions(id))');
+  db.exec("CREATE TABLE IF NOT EXISTS session_memory (sessionId TEXT PRIMARY KEY REFERENCES sessions(id), revision INTEGER NOT NULL DEFAULT 0, entries TEXT NOT NULL CHECK(json_valid(entries)))");
   if (!db.prepare('PRAGMA table_info(sessions)').all().some(column => column.name === 'updatedAt')) {
     db.exec(`ALTER TABLE sessions ADD COLUMN updatedAt INTEGER NOT NULL DEFAULT 0;
       UPDATE sessions SET updatedAt = MAX(createdAt, COALESCE((SELECT MAX(COALESCE(json_extract(payload,'$.endedAt'), json_extract(payload,'$.createdAt'), json_extract(payload,'$.startedAt'),0)) FROM history_events WHERE sessionId = sessions.id),0));`);
@@ -120,8 +133,9 @@ export function createSessionServer(databasePath = fileURLToPath(new URL('../dat
   const saveLimit = db.prepare('UPDATE sessions SET requestTokenLimit = ? WHERE id = ?');
   const saveStrategy = db.prepare('UPDATE sessions SET contextStrategy = ? WHERE id = ?');
   const saveRecent = db.prepare('UPDATE sessions SET recentMessages = ? WHERE id = ?');
-  const list = db.prepare('SELECT id, title, createdAt, requestTokenLimit, contextStrategy, recentMessages, updatedAt FROM sessions ORDER BY createdAt, rowid');
-  const get = db.prepare('SELECT id, title, createdAt, requestTokenLimit, contextStrategy, recentMessages FROM sessions WHERE id = ?');
+  const saveFullContext = db.prepare('UPDATE sessions SET fullContext = ? WHERE id = ?');
+  const list = db.prepare('SELECT id, title, createdAt, requestTokenLimit, contextStrategy, recentMessages, fullContext, slidingSelected, stickySelected, memorySelected, updatedAt FROM sessions WHERE id NOT IN (SELECT childId FROM sliding_sessions UNION SELECT childId FROM sticky_sessions UNION SELECT childId FROM memory_sessions) ORDER BY createdAt, rowid');
+  const get = db.prepare('SELECT id, title, createdAt, requestTokenLimit, contextStrategy, recentMessages, fullContext, slidingSelected, stickySelected, memorySelected FROM sessions WHERE id = ?');
   const insert = db.prepare('INSERT INTO sessions (id, title, createdAt, requestTokenLimit) VALUES (?, ?, ?, 0)');
   const deleteHistory = db.prepare('DELETE FROM history_events WHERE sessionId = ?');
   const deleteFacts = db.prepare('DELETE FROM session_facts WHERE sessionId = ?');
@@ -131,9 +145,18 @@ export function createSessionServer(databasePath = fileURLToPath(new URL('../dat
   const update = db.prepare('UPDATE sessions SET title = ? WHERE id = ?');
   const history = db.prepare('SELECT id, sessionId, sequence, type, payload FROM history_events WHERE sessionId = ? ORDER BY sequence');
   const pager = createHistoryPager(db);
+  const workspaces = createContextWorkspaceStore(db);
   const existingEvent = db.prepare('SELECT * FROM history_events WHERE id = ?');
   const findEntity = db.prepare("SELECT payload FROM history_events WHERE sessionId = ? AND type = ? AND json_extract(payload, '$.id') = ? ORDER BY sequence LIMIT 1");
   const addEvent = db.prepare('INSERT INTO history_events (id, sessionId, sequence, type, payload) VALUES (?, ?, (SELECT COALESCE(MAX(sequence), 0) + 1 FROM history_events WHERE sessionId = ?), ?, ?)');
+  const slidingChild = db.prepare('SELECT childId FROM sliding_sessions WHERE parentId = ?');
+  const slidingParent = db.prepare('SELECT parentId FROM sliding_sessions WHERE childId = ?');
+  const insertSliding = db.prepare('INSERT INTO sliding_sessions (parentId, childId) VALUES (?, ?)');
+  const selectSliding = db.prepare('UPDATE sessions SET slidingSelected = ?, stickySelected = CASE WHEN ?=1 THEN 0 ELSE stickySelected END, memorySelected=0 WHERE id = ?');
+  const stickyChild = db.prepare('SELECT childId FROM sticky_sessions WHERE parentId = ?');
+  const stickyParent = db.prepare('SELECT parentId FROM sticky_sessions WHERE childId = ?');
+  const selectSticky = db.prepare('UPDATE sessions SET stickySelected = ?, slidingSelected = CASE WHEN ?=1 THEN 0 ELSE slidingSelected END, memorySelected=0 WHERE id = ?');
+  const memoryChild=db.prepare('SELECT childId FROM memory_sessions WHERE parentId=?');
   const functions = db.prepare('SELECT id, name, description, pseudocode FROM custom_functions ORDER BY rowid');
   const findFunction = db.prepare('SELECT id, name, description, pseudocode FROM custom_functions WHERE id = ?');
   const insertFunction = db.prepare('INSERT INTO custom_functions (id, name, description, pseudocode) VALUES (?, ?, ?, ?)');
@@ -155,6 +178,122 @@ export function createSessionServer(databasePath = fileURLToPath(new URL('../dat
     const match = path.match(/^\/api\/sessions\/([a-zA-Z0-9-]+)$/);
     try {
       if (await credentialRoutes(req, path, reply)) return;
+      const workspaceRoute = path.match(/^\/api\/sessions\/([a-zA-Z0-9-]+)\/(checkpoints|branches)$/);
+      if (workspaceRoute) {
+        const [, id, action] = workspaceRoute;
+        if (!get.get(id) || slidingParent.get(id) || stickyParent.get(id) || db.prepare('SELECT 1 FROM memory_sessions WHERE childId=?').get(id)) { reply(404,{error:'Session not found.'}); return; }
+        if (action === 'checkpoints' && req.method === 'GET') { reply(200,workspaces.checkpoints(id,'full')); return; }
+        if (req.method !== 'POST') { reply(405,{error:'Method not allowed.'}); return; }
+        if (!req.headers['content-type']?.startsWith('application/json')) { reply(415,{error:'JSON required.'}); return; }
+        let body=''; for await (const chunk of req) { body+=chunk; if (Buffer.byteLength(body)>10000) { reply(413,{error:'Request too large.'}); return; } }
+        let value; try { value=JSON.parse(body); } catch { reply(400,{error:'Invalid JSON.'}); return; }
+        if (!value || typeof value.name !== 'string' || !value.name.trim() || value.name.length > 200 || (action === 'branches' && (typeof value.checkpointId !== 'string' || !/^[a-zA-Z0-9-]{1,100}$/.test(value.checkpointId)))) { reply(400,{error:'Invalid checkpoint or branch.'}); return; }
+        db.exec('BEGIN IMMEDIATE');
+        try {
+          if (action === 'checkpoints') {
+            const capture = sourceId => ({ metadata:get.get(sourceId), events:history.all(sourceId), facts:getFacts.get(sourceId) ?? null, memory:db.prepare('SELECT revision, entries FROM session_memory WHERE sessionId=?').get(sourceId) ?? null });
+            const children = Object.fromEntries([['sliding',slidingChild],['sticky',stickyChild],['memory',memoryChild]].map(([key,query])=>[key,query.get(id)?.childId]).filter(([,child])=>child).map(([key,child])=>[key,capture(child)]));
+            const snapshot={root:capture(id),children};
+            for (const part of [snapshot.root,...Object.values(children)]) {
+              const latest = new Map();
+              for (const row of part.events) if (row.type === 'run') { const run=JSON.parse(row.payload); latest.set(run.id,run.status); }
+              if ([...latest.values()].some(status=>status==='running' || status==='pending')) { db.exec('ROLLBACK'); reply(409,{error:'Wait for the current run to finish before saving a checkpoint.'}); return; }
+            }
+            const branch=workspaces.create(id,'full','Checkpoint source',snapshot);
+            const checkpoint=workspaces.checkpoint(id,'full',branch.id,value.name);
+            db.exec('COMMIT'); reply(201,{id:checkpoint.id,name:checkpoint.name}); return;
+          }
+          const checkpoint=workspaces.checkpoints(id,'full').find(item=>item.id===value.checkpointId);
+          if (!checkpoint) { db.exec('ROLLBACK'); reply(404,{error:'Checkpoint not found.'}); return; }
+          const branch=workspaces.branchFrom(id,'full',value.checkpointId,value.name);
+          const snapshot=branch.state, newRoot=randomUUID(), ids=new Map([[snapshot.root.metadata.id,newRoot]]);
+          for (const part of Object.values(snapshot.children)) ids.set(part.metadata.id,randomUUID());
+          const copy = (part,title) => {
+            const meta=part.metadata, target=ids.get(meta.id);
+            insert.run(target,title,Date.now());
+            db.prepare('UPDATE sessions SET requestTokenLimit=?,contextStrategy=?,recentMessages=?,fullContext=?,slidingSelected=?,stickySelected=?,memorySelected=? WHERE id=?').run(meta.requestTokenLimit,meta.contextStrategy,meta.recentMessages,meta.fullContext,meta.slidingSelected,meta.stickySelected,meta.memorySelected,target);
+            const eventIds = new Map(part.events.map(event=>[event.id,randomUUID()]));
+            for (const event of part.events) {
+              const payload=JSON.parse(event.payload);
+              if (payload.conversationId === meta.id) payload.conversationId=target;
+              if (payload.sessionId === meta.id) payload.sessionId=target;
+              if (payload.coveredEventId && eventIds.has(payload.coveredEventId)) payload.coveredEventId=eventIds.get(payload.coveredEventId);
+              addEvent.run(eventIds.get(event.id),target,target,event.type,JSON.stringify(payload));
+            }
+            if (part.facts) putFacts.run(target,part.facts.facts,part.facts.coveredMessageId);
+            if (part.memory) db.prepare('INSERT INTO session_memory(sessionId,revision,entries) VALUES (?,?,?)').run(target,part.memory.revision,part.memory.entries);
+            return target;
+          };
+          copy(snapshot.root,value.name.trim());
+          for (const [key,part] of Object.entries(snapshot.children)) {
+            const child=copy(part,part.metadata.title);
+            const table={sliding:'sliding_sessions',sticky:'sticky_sessions',memory:'memory_sessions'}[key];
+            db.prepare(`INSERT INTO ${table}(parentId,childId) VALUES (?,?)`).run(newRoot,child);
+          }
+          db.exec('COMMIT'); reply(201,get.get(newRoot)); return;
+        } catch (error) { db.exec('ROLLBACK'); throw error; }
+      }
+      const memorySessionRoute=path.match(/^\/api\/sessions\/([a-zA-Z0-9-]+)\/memory-session$/);
+      if (memorySessionRoute && req.method === 'POST') {
+        const id=memorySessionRoute[1]; if(!get.get(id) || slidingParent.get(id) || stickyParent.get(id) || db.prepare('SELECT parentId FROM memory_sessions WHERE childId=?').get(id)){reply(404,{error:'Session not found.'});return;}
+        db.exec('BEGIN IMMEDIATE'); try {let child=memoryChild.get(id);if(!child){const childId=randomUUID();insert.run(childId,'Key-Value Memory',Date.now());db.prepare('INSERT INTO memory_sessions(parentId,childId) VALUES(?,?)').run(id,childId);child={childId};}db.exec('COMMIT');reply(200,get.get(child.childId));return;}catch(error){db.exec('ROLLBACK');throw error;}
+      }
+      const memoryRoute=path.match(/^\/api\/sessions\/([a-zA-Z0-9-]+)\/memory$/);
+      if (memoryRoute) {
+        const id=memoryRoute[1];
+        if (!get.get(id)) {reply(404,{error:'Session not found.'});return;}
+        const read=()=>{const row=db.prepare('SELECT revision, entries FROM session_memory WHERE sessionId=?').get(id);return row ? {revision:row.revision,entries:JSON.parse(row.entries)} : {revision:0,entries:[]};};
+        if (req.method === 'GET') {reply(200,read());return;}
+        if (req.method === 'PUT') {
+          if (!req.headers['content-type']?.startsWith('application/json')) {reply(415,{error:'JSON required.'});return;}
+          let body=''; for await (const chunk of req) {body+=chunk;if(Buffer.byteLength(body)>1048576){reply(413,{error:'Memory too large.'});return;}}
+          let value; try {value=JSON.parse(body);} catch {reply(400,{error:'Invalid JSON.'});return;}
+          if (!value || Object.keys(value).sort().join() !== 'entries,revision' || !Number.isSafeInteger(value.revision) || value.revision<0 || !Array.isArray(value.entries) || value.entries.some(e=>!e || typeof e !== 'object' || Array.isArray(e) || Object.keys(e).sort().join() !== 'id,key,value' || typeof e.id !== 'string' || !/^[a-zA-Z0-9-]{1,100}$/.test(e.id) || typeof e.key !== 'string' || !e.key.trim() || e.key.length>300 || typeof e.value !== 'string' || !e.value.trim() || e.value.length>100000) || new Set(value.entries.map(e=>e.id)).size !== value.entries.length) {reply(400,{error:'Invalid memory.'});return;}
+          db.exec('BEGIN IMMEDIATE');
+          try {
+            if (read().revision !== value.revision) {db.exec('ROLLBACK');reply(409,{error:'Memory changed.'});return;}
+            db.prepare('INSERT INTO session_memory(sessionId,revision,entries) VALUES(?,?,?) ON CONFLICT(sessionId) DO UPDATE SET revision=excluded.revision,entries=excluded.entries').run(id,value.revision+1,JSON.stringify(value.entries));
+            db.exec('COMMIT'); reply(200,read());return;
+          } catch (error) {db.exec('ROLLBACK');throw error;}
+        }
+        reply(405,{error:'Method not allowed.'});return;
+      }
+      const stickyRoute = path.match(/^\/api\/sessions\/([a-zA-Z0-9-]+)\/sticky$/);
+      if (stickyRoute && req.method === 'POST') {
+        const parentId=stickyRoute[1], parent=get.get(parentId);
+        if (!parent || slidingParent.get(parentId) || stickyParent.get(parentId)) { reply(404,{error:'Session not found.'}); return; }
+        db.exec('BEGIN IMMEDIATE');
+        try {
+          let child=stickyChild.get(parentId);
+          if (!child) {
+            const id=randomUUID(); insert.run(id,'Sticky Facts',Date.now());
+            db.prepare("UPDATE sessions SET contextStrategy='key-facts', recentMessages=? WHERE id=?").run(parent.recentMessages,id);
+            db.prepare('INSERT INTO sticky_sessions (parentId, childId) VALUES (?,?)').run(parentId,id);
+            if (parent.contextStrategy === 'key-facts' || !parent.fullContext) {
+              for (const row of history.all(parentId)) {
+                const payload=JSON.parse(row.payload);
+                if (payload.conversationId === parentId) payload.conversationId=id;
+                if (payload.sessionId === parentId) payload.sessionId=id;
+                addEvent.run(randomUUID(),id,id,row.type,JSON.stringify(payload));
+              }
+              const facts=getFacts.get(parentId); if (facts) putFacts.run(id,facts.facts,facts.coveredMessageId);
+            }
+            child={childId:id};
+          }
+          db.exec('COMMIT'); reply(200,get.get(child.childId)); return;
+        } catch (error) {db.exec('ROLLBACK'); throw error;}
+      }
+      const slidingRoute = path.match(/^\/api\/sessions\/([a-zA-Z0-9-]+)\/sliding$/);
+      if (slidingRoute && req.method === 'POST') {
+        const parentId = slidingRoute[1];
+        if (!get.get(parentId) || slidingParent.get(parentId)) { reply(404, {error:'Session not found.'}); return; }
+        db.exec('BEGIN IMMEDIATE');
+        try {
+          let child = slidingChild.get(parentId);
+          if (!child) { const id = randomUUID(); insert.run(id, 'Sliding Window', Date.now()); insertSliding.run(parentId,id); child = {childId:id}; }
+          db.exec('COMMIT'); reply(200, get.get(child.childId)); return;
+        } catch (error) { db.exec('ROLLBACK'); throw error; }
+      }
       const functionRoute = path.match(/^\/api\/functions(?:\/([a-zA-Z0-9-]{1,100}))?$/);
       if (functionRoute) {
         const functionId = functionRoute[1];
@@ -180,6 +319,13 @@ export function createSessionServer(databasePath = fileURLToPath(new URL('../dat
       if (match && req.method === 'DELETE') {
         db.exec('BEGIN IMMEDIATE');
         try {
+          db.prepare('DELETE FROM session_memory WHERE sessionId=?').run(match[1]);
+          const memory = memoryChild.get(match[1]);
+          if(memory){db.prepare('DELETE FROM memory_sessions WHERE parentId=?').run(match[1]);db.prepare('DELETE FROM session_memory WHERE sessionId=?').run(memory.childId);deleteHistory.run(memory.childId);deleteMetadata.run(memory.childId);pager.forget(memory.childId);}
+          const child = slidingChild.get(match[1]);
+          if (child) { db.prepare('DELETE FROM sliding_sessions WHERE parentId=?').run(match[1]); db.prepare('DELETE FROM session_memory WHERE sessionId=?').run(child.childId); deleteFacts.run(child.childId); deleteHistory.run(child.childId); deleteMetadata.run(child.childId); pager.forget(child.childId); }
+          const sticky = stickyChild.get(match[1]);
+          if (sticky) { db.prepare('DELETE FROM sticky_sessions WHERE parentId=?').run(match[1]); db.prepare('DELETE FROM session_memory WHERE sessionId=?').run(sticky.childId); deleteFacts.run(sticky.childId); deleteHistory.run(sticky.childId); deleteMetadata.run(sticky.childId); pager.forget(sticky.childId); }
           deleteFacts.run(match[1]);
           deleteHistory.run(match[1]);
           pager.forget(match[1]);
@@ -293,6 +439,7 @@ export function createSessionServer(databasePath = fileURLToPath(new URL('../dat
       if (path === '/api/sessions' && req.method === 'POST') {
         const session = { id: randomUUID(), title: 'New session', createdAt: Date.now() };
         insert.run(session.id, session.title, session.createdAt);
+        saveFullContext.run(1,session.id);
         reply(201, get.get(session.id)); return;
       }
       if (match && req.method === 'PATCH') {
@@ -304,6 +451,26 @@ export function createSessionServer(databasePath = fileURLToPath(new URL('../dat
         }
         let value;
         try { value = JSON.parse(body); } catch { reply(400, { error: 'Invalid JSON.' }); return; }
+        if(value && Object.keys(value).length===1 && Object.hasOwn(value,'memorySelected')) {
+          if(value.memorySelected!==0 && value.memorySelected!==1){reply(400,{error:'Invalid context mode.'});return;}
+          if(!db.prepare('UPDATE sessions SET memorySelected=?,slidingSelected=CASE WHEN ?=1 THEN 0 ELSE slidingSelected END,stickySelected=CASE WHEN ?=1 THEN 0 ELSE stickySelected END WHERE id=?').run(value.memorySelected,value.memorySelected,value.memorySelected,match[1]).changes){reply(404,{error:'Session not found.'});return;}
+          reply(200,get.get(match[1]));return;
+        }
+        if (value && Object.keys(value).length === 1 && Object.hasOwn(value, 'slidingSelected')) {
+          if (value.slidingSelected !== 0 && value.slidingSelected !== 1) { reply(400, {error:'Invalid context mode.'}); return; }
+          if (!selectSliding.run(value.slidingSelected, value.slidingSelected, match[1]).changes) { reply(404, {error:'Session not found.'}); return; }
+          reply(200, get.get(match[1])); return;
+        }
+        if (value && Object.keys(value).length === 1 && Object.hasOwn(value, 'stickySelected')) {
+          if (value.stickySelected !== 0 && value.stickySelected !== 1) {reply(400,{error:'Invalid context mode.'});return;}
+          if (!selectSticky.run(value.stickySelected,value.stickySelected,match[1]).changes) {reply(404,{error:'Session not found.'});return;}
+          reply(200,get.get(match[1]));return;
+        }
+        if (value && Object.keys(value).length === 1 && Object.hasOwn(value, 'fullContext')) {
+          if (value.fullContext !== 0 && value.fullContext !== 1) { reply(400, { error: 'Invalid context mode.' }); return; }
+          if (!saveFullContext.run(value.fullContext, match[1]).changes) { reply(404, { error: 'Session not found.' }); return; }
+          touch.run(Date.now(), match[1]); reply(200, get.get(match[1])); return;
+        }
         if (value && Object.keys(value).length === 1 && Object.hasOwn(value, 'contextStrategy')) {
           if (!['token-budget', 'key-facts'].includes(value.contextStrategy)) { reply(400, { error: 'Invalid context strategy.' }); return; }
           if (!saveStrategy.run(value.contextStrategy, match[1]).changes) { reply(404, { error: 'Session not found.' }); return; }

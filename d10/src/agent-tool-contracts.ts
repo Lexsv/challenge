@@ -19,6 +19,10 @@ export interface TextMessage extends BaseMessage {
 }
 
 export interface Conversation {
+  fullContext?: boolean;
+  slidingSelected?: boolean;
+  stickySelected?: boolean;
+  memorySelected?: boolean;
   requestTokenLimit?: number;
   contextStrategy?: 'token-budget' | 'key-facts';
   recentMessages?: number;
