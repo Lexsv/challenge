@@ -11,6 +11,9 @@ Each training day is maintained as an independent project directory at the repos
 | 5 | Expert Lab UI Redesign | [Day 5 source](d5/) | — | — |
 | 6 | Manager Agent and Tool Execution Lab | [Day 6 source](d6/) | — | — |
 | 7 | Persistent Agent Sessions — save and restore chat history and tool results with SQLite | [Day 7 source](d7/) | — | — |
+| 8 | Session History and Context — paginate saved conversations and trim Manager history to fit the model | [Day 8 source](d8/) | — | — |
+| 9 | Context Management — compare token budgets and extracted key facts while preserving the full dialogue | [Day 9 source](d9/) | — | — |
+| 10 | Context Strategies — explore full context, sliding windows, sticky facts, and key-value memory | [Day 10 source](d10/) | — | — |
 
 Historical tag links point to the original published revisions.
 
