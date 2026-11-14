@@ -21,6 +21,7 @@ work/
 # Local session database and SQLite sidecars
 /data/
 /artifacts/
+/designs/session-stats.png
 *.sqlite
 *.sqlite-*
 *.db

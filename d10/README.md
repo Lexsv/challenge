@@ -24,8 +24,6 @@ With **N = 10**, counting user and assistant messages:
 
 Session stats estimates tokens locally with `js-tiktoken`. **Compression** displays `Fact context tokens ÷ Dialogue tokens`: for example, **39 ÷ 396 ≈ 10%**. The buffer bar shows message occupancy, not token share.
 
-![Session stats with synthetic dialogue and a 10 percent fact-context indicator](designs/session-stats.png)
-
 ## Run and verify
 
 From `d10/`, install the locked dependencies with `pnpm install --frozen-lockfile`, then run `pnpm server` and `pnpm dev` in separate terminals. Open <http://127.0.0.1:5174/> and select **Labs → Week 2**. The backend listens on port 3002 and stores sessions separately in `d10/data/sessions.sqlite`; the existing macOS Keychain integration is retained. Configure a provider in the app to send requests.
