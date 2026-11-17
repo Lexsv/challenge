@@ -244,7 +244,8 @@ export function toOpenAIChatMessages(
       });
       continue;
     }
-    mapped.push({ role: message.role, content: message.content });
+    // OpenCode's OpenAI-compatible chat endpoint accepts system instructions.
+    mapped.push({ role: message.role === 'developer' ? 'system' : message.role, content: message.content });
   }
   return mapped;
 }
