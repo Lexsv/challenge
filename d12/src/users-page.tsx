@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Alert, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle, IconButton, Paper, Stack, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, TextField, Tooltip, Typography } from "@mui/material";
+import { Alert, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle, IconButton, Paper, Stack, Tab, Tabs, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, TextField, Tooltip, Typography } from "@mui/material";
 import Add from "@mui/icons-material/Add";
 import DeleteOutline from "@mui/icons-material/DeleteOutline";
 import SettingsOutlined from "@mui/icons-material/SettingsOutlined";
@@ -24,6 +24,40 @@ export type ContextProfile = { id: string; name: string; habits: string; is_syst
 export type ProfilesState = { status: 'loading' } | { status: 'error' } | { status: 'loaded'; profiles: ContextProfile[] };
 export type ProfileDraft = { name: string; habits: string; existing?: ContextProfile };
 export type DeletionTarget = { kind:'profile'; profile:ContextProfile } | { kind:'clear' };
+
+export function parseHabits(text:string):string[] {
+  return text.split(/\r\n|\n|\r/).filter(line=>line.startsWith('* ')).map(line=>line.slice(2));
+}
+
+type HabitsMode = 'raw' | 'preview';
+export function HabitsEditorView({value,onChange,disabled,mode,onModeChange}:{value:string;onChange:(value:string)=>void;disabled:boolean;mode:HabitsMode;onModeChange:(mode:HabitsMode)=>void}) {
+  const habits=parseHabits(value);
+  return <Box sx={{display:'grid',gridTemplateColumns:{xs:'minmax(0, 1fr)',md:'minmax(0, 1.2fr) minmax(0, 1fr)'},gap:3}}>
+    <Box sx={{minWidth:0}}>
+      <Typography variant="subtitle1" fontWeight={700} sx={{mb:1}}>Habits</Typography>
+      <Tabs value={mode} onChange={(_event,next:HabitsMode)=>onModeChange(next)} aria-label="Habits mode" sx={{mb:1}}>
+        <Tab value="raw" label="Raw" id="habits-tab-raw" aria-controls="habits-panel" />
+        <Tab value="preview" label="Preview" id="habits-tab-preview" aria-controls="habits-panel" />
+      </Tabs>
+      <Box role="tabpanel" id="habits-panel" aria-labelledby={`habits-tab-${mode}`}>
+        {mode==='raw' ? <TextField fullWidth label="Habits / preferences" multiline minRows={6} disabled={disabled} value={value} onChange={event=>onChange(event.target.value)} /> : <Box>
+          <Typography variant="body2" color="text.secondary">Preview shows lines starting with * followed by a space. All raw text is saved unchanged.</Typography>
+          {habits.length ? <Box component="ul" sx={{pl:3,overflowWrap:'anywhere'}}>{habits.map((habit,index)=><li key={index}><Typography component="span" sx={{whiteSpace:'pre-wrap'}}>{habit}</Typography></li>)}</Box> : <Typography color="text.secondary" sx={{mt:1}}>No habits to preview.</Typography>}
+        </Box>}
+      </Box>
+    </Box>
+    <Paper variant="outlined" sx={{p:2.5,bgcolor:'secondary.main',alignSelf:'start',minWidth:0}}>
+      <Typography variant="h6">Example</Typography>
+      <Typography variant="body2" color="text.secondary">Write each persistent instruction on a separate line. Start every instruction with an asterisk followed by one space: <Box component="code" sx={{whiteSpace:'pre-wrap'}}>* </Box>.</Typography>
+      <Box component="pre" sx={{p:2,borderRadius:1.5,bgcolor:'background.paper',whiteSpace:'pre-wrap',overflowWrap:'anywhere',fontSize:'0.85rem'}}>{'* Always start responses with a greeting.\n* Always provide detailed explanations.\n* Explain technical concepts using examples.'}</Box>
+    </Paper>
+  </Box>;
+}
+
+function HabitsEditor({value,onChange,disabled}:{value:string;onChange:(value:string)=>void;disabled:boolean}) {
+  const [mode,setMode]=useState<HabitsMode>('raw');
+  return <HabitsEditorView value={value} onChange={onChange} disabled={disabled} mode={mode} onModeChange={setMode} />;
+}
 
 export async function loadProfiles(fetcher: typeof fetch = fetch, signal?: AbortSignal): Promise<ContextProfile[]> {
   const response = await fetcher('/api/users', { signal });
@@ -137,12 +171,12 @@ export function UsersPage({sessionsRevision=0,onProfilesChanged,onProfileMutatio
   const close=()=>{if(!pending){setDraft(null);setSaveError('');}};
   return <>
     <UsersView state={state} counts={counts} onRetry={() => setAttempt(current => current + 1)} onAdd={()=>{setSaveError('');setDraft({name:'',habits:''});}} onEdit={profile=>{if(profile.is_system===0 && profile.id!=='general'){setSaveError('');setDraft({name:profile.name,habits:profile.habits,existing:profile});}}} onDelete={profile=>{if(profile.is_system===0 && profile.id!=='general'){setDeleteError('');setTarget({kind:'profile',profile});}}} onClear={()=>{setDeleteError('');setTarget({kind:'clear'});}} />
-    <Dialog open={!!draft} onClose={close} fullWidth maxWidth="sm" aria-labelledby="user-form-title">
+    <Dialog open={!!draft} onClose={close} fullWidth maxWidth="md" aria-labelledby="user-form-title">
       <DialogTitle id="user-form-title">{draft?.existing ? 'Edit User' : 'Add User'}</DialogTitle>
       <DialogContent><Stack spacing={2} sx={{pt:1}}>
         {saveError && <Alert severity="error" action={<Button color="inherit" onClick={()=>{setDraft(null);setSaveError('');setAttempt(current=>current+1);}}>Reload profiles</Button>}>{saveError}</Alert>}
         <TextField autoFocus label="Name" required disabled={pending} value={draft?.name ?? ''} onChange={event=>setDraft(current=>current && {...current,name:event.target.value})} />
-        <TextField label="Habits / preferences" multiline minRows={3} disabled={pending} value={draft?.habits ?? ''} onChange={event=>setDraft(current=>current && {...current,habits:event.target.value})} />
+        <HabitsEditor value={draft?.habits ?? ''} disabled={pending} onChange={habits=>setDraft(current=>current && {...current,habits})} />
       </Stack></DialogContent>
       <DialogActions><Button disabled={pending} onClick={close}>Cancel</Button><Button variant="contained" disabled={pending || !draft?.name.trim()} onClick={async()=>{if(draft){setSaveError('');const error=await save(draft);if(error)setSaveError(error);}}}>Save</Button></DialogActions>
     </Dialog>

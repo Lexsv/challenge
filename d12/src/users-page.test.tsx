@@ -1,12 +1,48 @@
 import React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { createProfileDeleter, createProfileSaver, DeletionDialog, loadProfiles, UsersPage, UsersView, type ContextProfile } from './users-page';
+import { createProfileDeleter, createProfileSaver, DeletionDialog, HabitsEditorView, loadProfiles, parseHabits, UsersPage, UsersView, type ContextProfile } from './users-page';
 
 const profiles: ContextProfile[] = [
   {id:'profile-1',name:'Taylor',habits:'Prefers diagrams',is_system:0,revision:2},
   {id:'general',name:'General',habits:'',is_system:1,revision:1},
 ];
+
+describe('Habits Markdown editor',()=>{
+  const raw='* First habit\nlegacy free text\n* Second habit\r\n * indented is unsupported\n* Third habit';
+  it('parses only lines beginning with an asterisk and space without modifying the input',()=>{
+    expect(parseHabits(raw)).toEqual(['First habit','Second habit','Third habit']);
+    expect(parseHabits('')).toEqual([]);
+    expect(parseHabits('Plain text\n*missing space\n- other')).toEqual([]);
+    expect(parseHabits('*  preserve leading space\n* ')).toEqual([' preserve leading space','']);
+    expect(raw).toContain('legacy free text');
+  });
+  it('renders exact raw text, a preview list, and the permanent example panel',()=>{
+    const props={value:raw,onChange:vi.fn(),disabled:false,onModeChange:vi.fn()};
+    const rawHtml=renderToStaticMarkup(<HabitsEditorView {...props} mode="raw" />);
+    const preview=renderToStaticMarkup(<HabitsEditorView {...props} mode="preview" />);
+    expect(rawHtml).toContain(raw);expect(rawHtml).toContain('Habits / preferences');
+    for(const html of [rawHtml,preview]) {expect(html).toContain('Example');expect(html).toContain('Write each persistent instruction');expect(html).toContain('Always provide detailed explanations.');}
+    expect(preview).toContain('First habit');expect(preview).toContain('Second habit');expect(preview).toContain('Third habit');
+    expect(preview).not.toContain('legacy free text');expect(preview).toContain('All raw text is saved unchanged.');
+    expect(renderToStaticMarkup(<HabitsEditorView {...props} value="" mode="preview" />)).toContain('No habits to preview.');
+    expect(props.onChange).not.toHaveBeenCalled();
+  });
+  it('switches modes without changing raw text or saving',()=>{
+    const change=vi.fn(), mode=vi.fn(), fetcher=vi.fn();
+    const element=HabitsEditorView({value:raw,onChange:change,disabled:false,mode:'raw',onModeChange:mode});
+    const columns=React.Children.toArray(element.props.children) as React.ReactElement<{children:React.ReactNode}>[];
+    const items=React.Children.toArray(columns[0].props.children) as React.ReactElement<{onChange?:(_event:unknown,next:'raw'|'preview')=>void}>[];
+    items[1].props.onChange?.(null,'preview');
+    expect(mode).toHaveBeenCalledWith('preview');expect(change).not.toHaveBeenCalled();expect(fetcher).not.toHaveBeenCalled();expect(raw).toContain('\r\n');
+  });
+  it('saves multiline Markdown verbatim with the existing revision',async()=>{
+    const fetcher=vi.fn().mockResolvedValue(new Response('{}',{status:200}));
+    const save=createProfileSaver(fetcher,()=>{},()=>{});
+    expect(await save({name:'Taylor',habits:raw,existing:profiles[0]})).toBeNull();
+    expect(JSON.parse(fetcher.mock.calls[0][1].body)).toEqual({name:'Taylor',habits:raw,expectedRevision:2});
+  });
+});
 
 describe('Users profiles', () => {
   it('loads and validates actual profile data from the API', async () => {
