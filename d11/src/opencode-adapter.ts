@@ -1,8 +1,8 @@
-import { httpFailure, sanitizeFailureText, type NormalizedFailure } from "./normalized-failure";
-import { parameterPayload } from "./api-parameters";
-import { captureExecutionParameters } from "./execution-parameters";
-import { consoleTransportUrl } from "./opencode-console-transport";
-import { consoleVerificationPlan } from "./opencode-console-verification";
+import { httpFailure, sanitizeFailureText, type NormalizedFailure } from "./normalized-failure.ts";
+import { parameterPayload } from "./api-parameters.ts";
+import { captureExecutionParameters } from "./execution-parameters.ts";
+import { consoleTransportUrl } from "./opencode-console-transport.ts";
+import { consoleVerificationPlan } from "./opencode-console-verification.ts";
 import type { Adapter, Request } from "./provider-contract";
 
 export type OpenCodeMode = "console" | "go";

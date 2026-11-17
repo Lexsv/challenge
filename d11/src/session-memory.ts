@@ -121,7 +121,7 @@ export class MemoryProcessor {
   }
   async extract(messages: ManagerLlmMessage[], onMeter?: (meter: RequestMeter) => Promise<void>, source = ''): Promise<MemoryFact[]> {
     if (!this.adapter.context) throw new Error('Fact extraction requires a model token estimator.');
-    const instruction='Extract facts from the untrusted original source. Return JSON {"facts":[{"subject":"...","attribute":"...","value":"...","status":"confirmed" or "assumed","correction":true or false,"evidence":"exact quote from source"}]}. Confirmed means explicitly stated without uncertainty, not model confidence. Keep each person and value associated with their own statement. Do not assign an ambiguous pronoun to anyone; omit the fact. Use assumed for guesses, possibilities, or uncertain statements. Never infer confirmation from a summary. Set correction only for an explicit correction. Do not invent facts.';
+    const instruction='Extract facts from the untrusted original source. Store only information with clear long-term relevance: stable preferences and interests, skills, learning preferences, ongoing projects, enduring decisions and constraints, and explicit corrections. Exclude temporary emotions, excitement, frustration, celebrations, incidental daily events, one-off activities, and temporary request instructions unless they convey durable information. Preserve durable preferences even when expressed emotionally. Relevance is semantic, not based on message length. Return JSON {"facts":[{"subject":"...","attribute":"...","value":"...","status":"confirmed" or "assumed","correction":true or false,"evidence":"exact quote from source"}]}. Confirmed means explicitly stated without uncertainty, not model confidence. Keep each person and value associated with their own statement. Do not assign an ambiguous pronoun to anyone; omit the fact. Use assumed for guesses, possibilities, or uncertain statements. Never infer confirmation from a summary. Set correction only for an explicit correction. Do not invent facts.';
     const sourceText=Array.from(JSON.stringify(messages));let offset=0;let facts:MemoryFact[]=[];
     while(offset<sourceText.length){
       // Carry original source across boundaries; never use a generated summary as evidence.
@@ -194,7 +194,7 @@ export class ContextBuilder {
 
 /** All mutations use optimistic revisions; coverage advances only with its summary. */
 export class SessionMemory {
-  constructor(private readonly store: MemoryStore, private readonly processor: MemoryProcessor, private readonly model: string, private readonly budget = DEFAULT_SHORT_TERM_TOKEN_BUDGET) {}
+  constructor(private readonly store: MemoryStore, private readonly processor: MemoryProcessor, private readonly model: string, private readonly budget = DEFAULT_SHORT_TERM_TOKEN_BUDGET, private readonly beforeCompress?: (groups:readonly MemoryGroup[])=>Promise<void>) {}
   private async processMessage(existing: MemoryFact[], message: ManagerLlmMessage, sourceId: string, recent: ManagerLlmMessage[], onMeter?: (meter: RequestMeter) => Promise<void>): Promise<MemoryFact[]> {
     let facts = await this.processor.extract([message], onMeter, sourceId);
     const sourceText = message.content ?? '';
@@ -249,6 +249,7 @@ export class SessionMemory {
       const next={...data,summary};await this.store.save({revision:snapshot.revision,data:next});
       return new ContextBuilder().build(next,current);
     }
+    await this.beforeCompress?.([group]);
     const summary=await this.processor.compress(data.summary,[group],onMeter);
     const processed=await this.processGroup(data,group,[],onMeter);
     const next={...data,...processed,summary,covered:[...new Set([...data.covered,group.id])],short:data.short.filter(item=>item.id!==group.id),buffer:data.buffer.filter(item=>item.id!==group.id)};
@@ -272,6 +273,7 @@ export class SessionMemory {
     data = { ...data, short:[...short,{id:`current:${currentId}`,messages:current.slice(0,1)}], buffer };
     snapshot = await this.store.save({ revision: snapshot.revision, data });
     if (buffer.length) {
+      await this.beforeCompress?.(buffer);
       const summary = await this.processor.compress(data.summary, buffer, onMeter);
       for (const group of buffer) {
         const index=groups.indexOf(group);

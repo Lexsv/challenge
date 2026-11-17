@@ -1,4 +1,4 @@
-import {parseModels, type DiscoveredModel} from './opencode-catalog';
+import {parseModels, type DiscoveredModel} from './opencode-catalog.ts';
 
 export type CatalogStorage = Pick<Storage, 'getItem' | 'setItem'>;
 export const browserCatalogStorage = () => typeof window === 'undefined' ? undefined : window.localStorage;

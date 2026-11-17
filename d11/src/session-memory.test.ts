@@ -125,7 +125,7 @@ it('rejects a truncated summary even when the provider returned partial text',as
 it('carries original text across extraction boundaries and deduplicates overlapping evidence',async()=>{
   const seen:string[]=[];
   const processor=new MemoryProcessor({
-    context:{assess:async messages=>({tokens:JSON.stringify(messages).length,limit:950}),summarize:async()=>''},
+    context:{assess:async messages=>({tokens:JSON.stringify(messages).length,limit:1400}),summarize:async()=>''},
     complete:async({messages})=>{const text=messages[1].content;seen.push(text);const facts=[];
       if(text.includes('deadline was November 20') && text.includes('new deadline is November 25'))facts.push({subject:'Project',attribute:'deadline',value:'November 25',status:'confirmed',correction:true,evidence:'new deadline is November 25'});
       if(text.includes('budget was 40') && text.includes('revised to 48 units'))facts.push({subject:'Project',attribute:'budget',value:'48 units',status:'confirmed',correction:true,evidence:'revised to 48 units'});
@@ -141,7 +141,7 @@ it('carries original text across extraction boundaries and deduplicates overlapp
 });
 it('leaves a fact absent when required evidence spans beyond every extraction window',async()=>{
   const seen:string[]=[];
-  const processor=new MemoryProcessor({context:{assess:async messages=>({tokens:JSON.stringify(messages).length,limit:900}),summarize:async()=>''},complete:async({messages})=>{const source=messages[1].content;seen.push(source);return {text:JSON.stringify({facts:source.includes('BEGIN deadline') && source.includes('END November 25') ? [{subject:'Project',attribute:'deadline',value:'November 25',status:'confirmed',correction:true,evidence:'END November 25'}] : []})};}});
+  const processor=new MemoryProcessor({context:{assess:async messages=>({tokens:JSON.stringify(messages).length,limit:1350}),summarize:async()=>''},complete:async({messages})=>{const source=messages[1].content;seen.push(source);return {text:JSON.stringify({facts:source.includes('BEGIN deadline') && source.includes('END November 25') ? [{subject:'Project',attribute:'deadline',value:'November 25',status:'confirmed',correction:true,evidence:'END November 25'}] : []})};}});
   const facts=await processor.extract([user('BEGIN deadline '+ 'intervening context '.repeat(150) +'END November 25')],undefined,'source');
   expect(seen.length).toBeGreaterThan(3);expect(seen.every(chunk=>!(chunk.includes('BEGIN deadline') && chunk.includes('END November 25')))).toBe(true);expect(facts).toEqual([]);
 });

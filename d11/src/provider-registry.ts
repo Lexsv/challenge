@@ -1,23 +1,23 @@
-import {browserCatalogStorage, loadModelCatalog, saveModelCatalog, type CatalogStorage} from './model-catalog-storage';
+import {browserCatalogStorage, loadModelCatalog, saveModelCatalog, type CatalogStorage} from './model-catalog-storage.ts';
 import type { ModelFeatures } from "./model-capabilities";
-import { type Settings } from "./models";
+import type { Settings } from "./models";
 import {
   validSettings,
   initialParameters,
   validateNewOpenAISettings,
-} from "./openai-model-compat";
-import { capabilities, catalog as openAICatalog } from "./openai-model-catalog";
-import { respond, respondAtEndpoint } from "./openai";
-import { DEFAULT_ENDPOINTS, discoveryEndpoint, validateEndpoint, type BuiltinEndpointId } from "./provider-endpoints";
+} from "./openai-model-compat.ts";
+import { capabilities, catalog as openAICatalog } from "./openai-model-catalog.ts";
+import { respond, respondAtEndpoint } from "./openai.ts";
+import { DEFAULT_ENDPOINTS, discoveryEndpoint, validateEndpoint, type BuiltinEndpointId } from "./provider-endpoints.ts";
 import type { Adapter } from "./provider-contract";
-import { validateParameters, type ApiParameter } from "./api-parameters";
-import { consoleModelSelectable } from "./opencode-console-verification";
-import { openCodeAdapter } from "./opencode-adapter";
+import { validateParameters, type ApiParameter } from "./api-parameters.ts";
+import { consoleModelSelectable } from "./opencode-console-verification.ts";
+import { openCodeAdapter } from "./opencode-adapter.ts";
 import {
   catalog,
   discoverModels,
   type DiscoveredModel,
-} from "./opencode-catalog";
+} from "./opencode-catalog.ts";
 
 // Documented Go IDs that are also present in the existing bundled catalog.
 // https://opencode.ai/docs/console/go/

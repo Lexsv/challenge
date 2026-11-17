@@ -1,6 +1,6 @@
 import { Tiktoken, getEncodingNameForModel, type TiktokenModel } from 'js-tiktoken/lite';
-import { catalog } from './opencode-catalog';
-import { DEFAULT_ENDPOINTS } from './provider-endpoints';
+import { catalog } from './opencode-catalog.ts';
+import { DEFAULT_ENDPOINTS } from './provider-endpoints.ts';
 
 export type TokenPricing = {
   currency: 'USD'; inputPerMillion: number; outputPerMillion: number; cachedInputPerMillion?: number;

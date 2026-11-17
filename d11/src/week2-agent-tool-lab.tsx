@@ -51,6 +51,7 @@ import SettingsOutlined from "@mui/icons-material/SettingsOutlined";
 import type { ProviderRegistry } from "./provider-registry";
 import { ManagerAgent, createManagerConversation } from "./manager-agent";
 import { createManagerLlmAdapter } from "./manager-llm-adapter";
+import { createDevManagerMock } from './dev-manager-mock';
 import type { ToolRegistry } from "./tool-runtime";
 import { loadFunctions } from './custom-functions-api';
 import { executableFunction } from './custom-function-runtime';
@@ -512,9 +513,12 @@ function SessionChatView({
   const [factsRevision, setFactsRevision] = useState(0);
   const [memoryEntries,setMemoryEntries] = useState<MemoryEntry[]>([]);
   const [sessionMemorySnapshot,setSessionMemorySnapshot] = useState<MemorySnapshot>();
+  const [devMockModel,setDevMockModel]=useState(false);
+  const [topicModeReady,setTopicModeReady]=useState(false);
   const [memoryTokens,setMemoryTokens] = useState<MemoryTokenStats>();
   const memoryTokenCache=useRef<MemoryTokenCache>({});
   useEffect(()=>{if(!week3 || !active)return;let live=true;void week3Api.loadSessionMemory(initialConversation.conversation.id).then(value=>{if(live)setSessionMemorySnapshot(value);}).catch(()=>{if(live)setHistoryError('Could not load session memory.');});return()=>{live=false;};},[week3,active,initialConversation.conversation.id]);
+  useEffect(()=>{setDevMockModel(false);setTopicModeReady(false);if(!week3 || !active)return;let live=true;void week3Api.topicProcessingMode(initialConversation.conversation.id).then(value=>{if(live){setDevMockModel(value.mockModel);setTopicModeReady(true);}}).catch(()=>{if(live)setHistoryError('Could not load topic processing configuration.');});return()=>{live=false;};},[week3,active,initialConversation.conversation.id]);
   useEffect(()=>{if(!week3 || !sessionMemorySnapshot){setMemoryTokens(undefined);return;}let live=true;setMemoryTokens(undefined);void estimateMemoryTokenStats(sessionMemorySnapshot.data,selectedModel,memoryTokenCache.current).then(value=>{if(live)setMemoryTokens(value);});return()=>{live=false;};},[week3,selectedModel,sessionMemorySnapshot]);
   useEffect(()=>{if(!active || !memory)return;let current=true;void loadMemory(initialConversation.conversation.id).then(value=>{if(current)setMemoryEntries(value.entries);}).catch(()=>{if(current)setHistoryError('Could not load Key-Value Memory.');});return()=>{current=false;};},[active,memory,initialConversation.conversation.id]);
 
@@ -588,11 +592,11 @@ function SessionChatView({
 
   const [, refreshModelMetadata] = useState(0);
   useEffect(() => {
-    if (!active || provider !== 'opencode-console' || registry.get(provider)?.limits?.(selectedModel)?.contextWindow) return;
+    if (!active || (week3 && (!topicModeReady || devMockModel)) || provider !== 'opencode-console' || registry.get(provider)?.limits?.(selectedModel)?.contextWindow) return;
     let current = true;
     void registry.get(provider)?.discover?.().then(() => { if (current) refreshModelMetadata(n => n + 1); }).catch(() => { /* Unknown catalog limits remain unavailable. */ });
     return () => { current = false; };
-  }, [active, provider, selectedModel, registry]);
+  }, [active, provider, selectedModel, registry, week3, topicModeReady, devMockModel]);
   const providerModels = registry.modelOptionsFor(provider);
   const modelProblem = selectedModel && !providerModels.includes(selectedModel) ? 'The selected model is unavailable for this provider. Select an available model.' : '';
   const selectedKey = provider === "openai" ? openAIKey : openCodeKeys[provider];
@@ -605,7 +609,7 @@ function SessionChatView({
   const credentialStates = useSyncExternalStore(credentials.subscribe, credentials.getSnapshot, credentials.getSnapshot);
   const savedCredential = credentialStates[provider];
   const useSavedKey = !selectedKey.trim() && !!savedCredential?.saved && savedCredential.verification === 'verified';
-  const hasCredential = !!selectedKey.trim() || useSavedKey;
+  const hasCredential = devMockModel || !!selectedKey.trim() || useSavedKey;
   const timeline = useMemo(
     () =>
       [...buildWeek2Timeline(conversation, toolRegistry).filter(event=>!visibleRuns || visibleRuns.has(event.runId)), ...uiEvents].sort(
@@ -665,7 +669,9 @@ function SessionChatView({
         setAccountingState(undefined); setDialogueCounts(undefined); setSavedDialogueCount(undefined);
         const savedFunctions = await loadFunctions();
         toolRegistry.replaceCustomTools(savedFunctions.map(executableFunction));
-        const adapter = createManagerLlmAdapter({
+        const topicMode=week3 ? await week3Api.topicProcessingMode(working.conversation.id) : {enabled:false,mockModel:false};
+        if(devMockModel && !topicMode.mockModel)throw new Error('The test model is unavailable; retry after restoring test mode.');
+        const adapter = topicMode.mockModel ? createDevManagerMock(selectedModel,async()=>{const mode=await week3Api.topicProcessingMode(working.conversation.id);if(!mode.mockModel)throw new Error('The test model is unavailable.');return mode.failSummary;}) : createManagerLlmAdapter({
           providerId: provider,
           model: selectedModel,
           apiKey: selectedKey,
@@ -678,7 +684,7 @@ function SessionChatView({
         });
         runStarted = true;
         let memoryRevision=0;
-        const sessionMemory = week3 ? new SessionMemory({load:()=>week3Api.loadSessionMemory(working.conversation.id),save:async snapshot=>{const saved=await week3Api.saveSessionMemory(working.conversation.id,snapshot);setSessionMemorySnapshot(saved);return saved;}},new MemoryProcessor(adapter),selectedModel) : undefined;
+        const sessionMemory = week3 ? new SessionMemory({load:()=>week3Api.loadSessionMemory(working.conversation.id),save:async snapshot=>{const saved=await week3Api.saveSessionMemory(working.conversation.id,snapshot);setSessionMemorySnapshot(saved);return saved;}},new MemoryProcessor(adapter),selectedModel,undefined,topicMode.enabled ? async groups=>{for(const group of groups)await week3Api.processTopicSegment(working.conversation.id,group.id);} : undefined) : undefined;
         const pendingResult = manager.run({
           state: working,
           ...(sessionMemory ? {sessionMemory} : memory ? {keyValue:{load:async()=>{const value=await loadMemory(working.conversation.id); memoryRevision=value.revision; return value.entries;},save:async(entries:MemoryEntry[])=>{const value=await saveMemory(working.conversation.id,{revision:memoryRevision,entries});memoryRevision=value.revision;setMemoryEntries(value.entries);}}} : sliding ? {contextMode:'sliding' as const, windowSize:recentMessages} : fullContext ? {contextMode: 'full' as const} : contextStrategy === 'key-facts' ? { keyFacts: { recentMessages, load: () => loadSessionFacts(working.conversation.id), save: async (value: Parameters<typeof saveSessionFacts>[1]) => { await saveSessionFacts(working.conversation.id, value); setFactsRevision(n=>n+1); } } } : {}),

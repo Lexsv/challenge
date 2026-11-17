@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
+import { createTopicRepository } from './topic-repository.mjs';
 
 // Week 3 owns its session and event rows. Shared provider and tool data stay separate.
-export function createWeek3Routes(db, validateEvent) {
+export function createWeek3Routes(db, validateEvent, options = {}) {
   db.exec(`CREATE TABLE IF NOT EXISTS week3_sessions (
     id TEXT PRIMARY KEY, title TEXT NOT NULL, createdAt INTEGER NOT NULL,
     updatedAt INTEGER NOT NULL DEFAULT 0, requestTokenLimit INTEGER NOT NULL DEFAULT 0
@@ -16,16 +17,34 @@ export function createWeek3Routes(db, validateEvent) {
     revision INTEGER NOT NULL DEFAULT 0,
     data TEXT NOT NULL CHECK(json_valid(data))
   );`);
+  const topicRepository=createTopicRepository(db);
   const get=db.prepare('SELECT *, 1 AS fullContext FROM week3_sessions WHERE id=?');
   const list=db.prepare('SELECT *, 1 AS fullContext FROM week3_sessions ORDER BY createdAt, rowid');
   const events=db.prepare('SELECT id,sessionId,sequence,type,payload FROM week3_history_events WHERE sessionId=? ORDER BY sequence');
   return async (req,path,reply) => {
-    const match=path.match(/^\/api\/week3\/sessions(?:\/([a-zA-Z0-9-]+))?(?:\/(events|memory))?$/);
+    const match=path.match(/^\/api\/week3\/sessions(?:\/([a-zA-Z0-9-]+))?(?:\/(events|memory|topic-mode|segments))?$/);
     if (!match) return false;
     const [,id,resource]=match;
     if (!id && req.method==='GET') {reply(200,list.all());return true;}
     if (!id && req.method==='POST') {const key=randomUUID();db.prepare('INSERT INTO week3_sessions(id,title,createdAt) VALUES (?,?,?)').run(key,'New session',Date.now());reply(201,get.get(key));return true;}
     if (!id || !get.get(id)) {reply(404,{error:'Session not found.'});return true;}
+    if(resource==='topic-mode' && req.method==='GET'){reply(200,{enabled:typeof options.topicProcess==='function',...(options.mockModel?{mockModel:true,failSummary:!!options.mockSummaryFailure?.()}:{})});return true;}
+    if(resource==='segments' && req.method==='POST'){
+      if(typeof options.topicProcess!=='function'){reply(503,{error:'Topic processing is disabled.'});return true;}
+      let body='';for await(const chunk of req){body+=chunk;if(Buffer.byteLength(body)>4096){reply(413,{error:'Request too large.'});return true;}}
+      let value;try{value=JSON.parse(body);}catch{reply(400,{error:'Invalid JSON.'});return true;}
+      if(!value || Object.keys(value).join()!=='runId' || typeof value.runId!=='string' || !/^[a-zA-Z0-9-]{1,100}$/.test(value.runId)){reply(400,{error:'Invalid segment request.'});return true;}
+      let source;
+      try{source=topicRepository.segment(id,[value.runId]);}catch{reply(404,{error:'Segment not found in this session.'});return true;}
+      try {
+        if(source.completed){reply(200,{status:'already_completed',segmentId:source.segmentId});return true;}
+        await options.topicProcess(topicRepository,id,value.runId);
+        const after=topicRepository.segment(id,[value.runId]);
+        if(!after.completed)throw new Error('Segment processing did not complete.');
+        reply(200,{status:'completed',segmentId:after.segmentId});
+      }catch{reply(500,{error:'Topic processing failed. Please retry.'});}
+      return true;
+    }
     if (resource==='memory' && req.method==='GET') {
       const row=db.prepare('SELECT revision,data FROM week3_session_memory WHERE sessionId=?').get(id);
       reply(200,row ? {revision:row.revision,data:JSON.parse(row.data)} : {revision:0,data:null});return true;

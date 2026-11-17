@@ -1,9 +1,9 @@
 import { providerError, type ProviderErrorMetadata } from "../server/provider-error.mjs";
-import { openAIContextLimits } from "./openai-model-catalog";
-import { beginMeter, finishMeter, estimateContextInput, type RequestMeter } from "./token-meter";
-import { DEFAULT_ENDPOINTS } from "./provider-endpoints";
+import { openAIContextLimits } from "./openai-model-catalog.ts";
+import { beginMeter, finishMeter, estimateContextInput, type RequestMeter } from "./token-meter.ts";
+import { DEFAULT_ENDPOINTS } from "./provider-endpoints.ts";
 import type { ProviderRegistry } from "./provider-registry";
-import { consoleTransportUrl } from "./opencode-console-transport";
+import { consoleTransportUrl } from "./opencode-console-transport.ts";
 import type {
   ManagerLlmAdapter,
   ManagerLlmMessage,
@@ -324,6 +324,7 @@ export function createManagerLlmAdapter(input: {
   useSavedKey?: boolean;
   registry: ProviderRegistry;
   fetcher?: typeof fetch;
+  transport?: (providerId:ProviderId, body:Record<string,unknown>)=>Promise<{status:number;body:unknown}>;
   maxOutputTokens?: number;
   requestTokenLimit?: number;
 }): ManagerLlmAdapter {
@@ -334,6 +335,10 @@ export function createManagerLlmAdapter(input: {
   }
 
   const providerFetch = async (body: unknown, target: string) => {
+    if (input.transport) {
+      const result=await input.transport(input.providerId,body as Record<string,unknown>);
+      return new Response(JSON.stringify(result.body),{status:result.status,headers:{'Content-Type':'application/json'}});
+    }
     if (input.useSavedKey) {
       return fetcher(`/api/credentials/${input.providerId}/request`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
@@ -353,7 +358,7 @@ export function createManagerLlmAdapter(input: {
     return { tokens: estimate.estimatedInputTokens, modelInputBudget: estimate.inputBudget, limit: estimate.inputBudget, target: estimate.requestTokenLimit };
   };
   const request = async (messages: readonly ManagerLlmMessage[], tools: readonly ToolCatalogItem[], onMeter?: (meter: RequestMeter) => Promise<void>, output = outputTokens, requestKind: 'answer' | 'summary' = 'answer', requireComplete = false) => {
-    if (!input.useSavedKey && !input.apiKey.trim()) throw new Error('Provider API key is missing.');
+    if (!input.transport && !input.useSavedKey && !input.apiKey.trim()) throw new Error('Provider API key is missing.');
     const body = makeBody(messages, tools, output);
     const estimate = await estimateContextInput(input.model, body);
     const initial = { ...await beginMeter(input.providerId, input.model, body, pricingEndpoint), requestKind, sentInputTokens: estimate.estimatedInputTokens };
@@ -416,7 +421,9 @@ export function createManagerLlmAdapter(input: {
 }
 
 export class ManagerProviderError extends Error {
-  constructor(readonly metadata: ProviderErrorMetadata) {
+  readonly metadata:ProviderErrorMetadata;
+  constructor(metadata: ProviderErrorMetadata) {
     super(metadata.kind === 'context-overflow' ? 'The model context limit was exceeded.' : `Manager provider request failed (${metadata.status}).`);
+    this.metadata=metadata;
   }
 }

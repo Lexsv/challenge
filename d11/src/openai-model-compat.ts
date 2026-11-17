@@ -1,17 +1,17 @@
 // Explicit compatibility behavior for existing OpenAI configurations.
-import { capabilities, known } from "./openai-model-catalog";
+import { capabilities, known } from "./openai-model-catalog.ts";
 import {
   validateParameters,
   parseParameterValue,
   type ApiParameter,
-} from "./api-parameters";
+} from "./api-parameters.ts";
 import type { Settings, Expert } from "./models";
 export {
   capabilities,
   known,
   catalog,
   modelCatalog,
-} from "./openai-model-catalog";
+} from "./openai-model-catalog.ts";
 export function initialParameters(maxTokens: number): ApiParameter[] {
   return [
     {

@@ -10,3 +10,8 @@ export class MacKeychainStore implements CredentialStore {
   forget(provider: string): Promise<void>;
   read(provider: string): Promise<string>;
 }
+export function createSavedProviderTransport(
+  store?: CredentialStore,
+  fetcher?: typeof fetch,
+  waitForPending?: (provider:string)=>Promise<void>,
+): (provider:string, request:Record<string,unknown>, isCurrent?:()=>boolean)=>Promise<{status:number;body:unknown}>;

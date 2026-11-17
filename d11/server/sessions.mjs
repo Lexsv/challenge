@@ -66,6 +66,7 @@ function validateMeter(p, sessionId) {
 }
 
 export function createSessionServer(databasePath = fileURLToPath(new URL('../data/sessions.sqlite', import.meta.url)), options = {}) {
+  if(options.mockModel && process.env.NODE_ENV==='production')throw new Error('The test model is unavailable in production.');
   const credentialRoutes = createCredentialRoutes(options.credentialStore, options.fetcher);
   mkdirSync(dirname(databasePath), { recursive: true });
   const db = new DatabaseSync(databasePath);
@@ -146,7 +147,7 @@ export function createSessionServer(databasePath = fileURLToPath(new URL('../dat
   const update = db.prepare('UPDATE sessions SET title = ? WHERE id = ?');
   const history = db.prepare('SELECT id, sessionId, sequence, type, payload FROM history_events WHERE sessionId = ? ORDER BY sequence');
   const pager = createHistoryPager(db);
-  const week3Routes = createWeek3Routes(db, validateEvent);
+  const week3Routes = createWeek3Routes(db, validateEvent, {topicProcess:options.topicProcess,mockModel:options.mockModel,mockSummaryFailure:options.mockSummaryFailure});
   const workspaces = createContextWorkspaceStore(db);
   const existingEvent = db.prepare('SELECT * FROM history_events WHERE id = ?');
   const findEntity = db.prepare("SELECT payload FROM history_events WHERE sessionId = ? AND type = ? AND json_extract(payload, '$.id') = ? ORDER BY sequence LIMIT 1");
@@ -506,7 +507,21 @@ export function createSessionServer(databasePath = fileURLToPath(new URL('../dat
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const server = createSessionServer();
-  server.listen(3003, '127.0.0.1', () => console.log('Session backend: http://127.0.0.1:3003'));
+  const args=process.argv.slice(2);let databasePath;let options={};let port=3003;
+  if(args.length){
+    if(![3,5].includes(args.length) || args[0]!=='--topic-mock' || args[1]!=='--db' || !args[2] || (args.length===5 && args[3]!=='--port'))throw new Error('Usage: node server/sessions.mjs [--topic-mock --db <temporary database path> [--port <port>]]');
+    if(args.length===5){port=Number(args[4]);if(!Number.isSafeInteger(port) || port<0 || port>65535)throw new Error('Invalid backend port.');}
+    if(process.env.NODE_ENV==='production')throw new Error('The topic mock is unavailable in production.');
+    const { realpathSync, lstatSync, existsSync }=await import('node:fs');const { resolve, dirname, sep }=await import('node:path');const { tmpdir }=await import('node:os');
+    databasePath=resolve(args[2]);const parent=realpathSync(dirname(databasePath));const roots=[realpathSync(tmpdir()),realpathSync('/tmp')];
+    if(!roots.some(root=>parent===root || parent.startsWith(root+sep)) || (existsSync(databasePath) && lstatSync(databasePath).isSymbolicLink()))throw new Error('The topic mock requires an isolated database under a temporary directory.');
+    const mockProcessor=(await import('./dev-topic-mock.mjs')).processMockTopic;
+    options={topicProcess:async(...parameters)=>{if(existsSync(databasePath+'.fail-topic'))throw new Error('Synthetic topic failure.');return mockProcessor(...parameters);},mockModel:true,
+      mockSummaryFailure:()=>existsSync(databasePath+'.fail-summary'),
+      credentialStore:{status:async()=>false,save:async()=>{throw new Error('Credentials are disabled in test mode.');},forget:async()=>{},read:async()=>{throw new Error('Credentials are disabled in test mode.');}},
+      fetcher:async()=>{throw new Error('External provider requests are disabled in test mode.');}};
+  }
+  const server = createSessionServer(databasePath,options);
+  server.listen(port, '127.0.0.1', () => console.log(`Session backend: http://127.0.0.1:${server.address().port}${args.length ? ' (synthetic topic mock)' : ''}`));
   for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => server.close());
 }

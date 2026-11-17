@@ -1,13 +1,13 @@
-import { capabilities } from "./openai-model-catalog";
+import { capabilities } from "./openai-model-catalog.ts";
 import {
   captureExecutionParameters,
   type ExecutionParameters,
-} from "./execution-parameters";
-import { parameterPayload, validateParameters } from "./api-parameters";
-import { incompleteExplanation } from "./result-explanations";
-import { type Usage, type IncompleteReason } from "./models";
-import { validSettings } from "./openai-model-compat";
-import { sanitizeFailureText } from "./normalized-failure";
+} from "./execution-parameters.ts";
+import { parameterPayload, validateParameters } from "./api-parameters.ts";
+import { incompleteExplanation } from "./result-explanations.ts";
+import type { Usage, IncompleteReason } from "./models";
+import { validSettings } from "./openai-model-compat.ts";
+import { sanitizeFailureText } from "./normalized-failure.ts";
 import type { Adapter, Request } from "./provider-contract";
 import type { Attempt } from "./models";
 export type { Adapter, Request } from "./provider-contract";

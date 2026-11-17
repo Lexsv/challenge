@@ -34,6 +34,32 @@ export class MacKeychainStore {
   async read(provider) { return (await this.operation('read', provider)).key; }
 }
 
+// Internal transport; its result contains only sanitized response data or errors.
+export function createSavedProviderTransport(store = new MacKeychainStore(), fetcher = fetch, waitForPending = async () => {}) {
+  return async (provider, value, isCurrent = () => true) => {
+    if (typeof provider !== 'string' || !Object.hasOwn(endpoints, provider)) return { status: 404, body: { error: 'Unsupported saved-key provider.' } };
+    try {
+      await waitForPending(provider);
+      const saved = await store.status(provider);
+      if (!saved) return { status: 404, body: { saved: false, verification: 'unchecked' } };
+      const key = await store.read(provider);
+      if (typeof key !== 'string' || !key) throw new Error('Saved credential unavailable.');
+      if (!isCurrent()) return { status: 409, body: { error: 'Credential operation superseded.' } };
+      if (!value || typeof value.model !== 'string' || !value.model.trim() || value.model.length > 200) return { status: 400, body: { error: 'Model required.' } };
+      const reserved = new Set(['model','store','instructions','input','messages','text','response_format','tools','tool_choice','max_output_tokens','max_completion_tokens','reasoning']);
+      const extra = value.parameters && typeof value.parameters === 'object' && !Array.isArray(value.parameters) ? value.parameters : {};
+      if (Object.keys(extra).some(name => reserved.has(name))) return { status: 400, body: { error: 'A parameter conflicts with managed request fields.' } };
+      const payload = provider === 'openai'
+        ? { ...extra, model: value.model, store: false, input: value.input, ...(value.reasoning && typeof value.reasoning === 'object' ? {reasoning:value.reasoning} : {}), ...(typeof value.instructions === 'string' ? {instructions:value.instructions} : {}), ...(value.text && typeof value.text === 'object' ? {text:value.text} : {}), ...(value.tools ? {tools:value.tools, tool_choice:value.tool_choice ?? 'auto'} : {}), ...(Number.isSafeInteger(value.max_output_tokens) && value.max_output_tokens > 0 ? { max_output_tokens: value.max_output_tokens } : {}) }
+        : { ...extra, model: value.model, messages: value.messages, ...(value.response_format && typeof value.response_format === 'object' ? {response_format:value.response_format} : {}), ...(value.tools ? {tools:value.tools, tool_choice:value.tool_choice ?? 'auto'} : {}), ...(Number.isSafeInteger(value.max_completion_tokens) && value.max_completion_tokens > 0 ? { max_completion_tokens: value.max_completion_tokens } : {}) };
+      const response = await fetcher(endpoints[provider], { method:'POST', redirect:'error', signal:AbortSignal.timeout(120000), headers:{'Content-Type':'application/json',Authorization:`Bearer ${key}`}, body:JSON.stringify(payload) });
+      if (!response.ok) { const data = await response.json().catch(() => null); return { status:502, body:{error:`Provider request failed (${response.status}).`,providerError:providerError(response.status,data)} }; }
+      const serialized=JSON.stringify(await response.json());
+      return {status:200,body:JSON.parse(serialized.split(JSON.stringify(key).slice(1,-1)).join('[redacted]'))};
+    } catch { return { status:503, body:{error:'Saved credential operation unavailable.'} }; }
+  };
+}
+
 export function createCredentialRoutes(store = new MacKeychainStore(), fetcher = fetch) {
   const statuses = new Map();
   const generations = new Map();
@@ -54,6 +80,7 @@ export function createCredentialRoutes(store = new MacKeychainStore(), fetcher =
     queues.set(provider, pending);
     return pending;
   };
+  const requestSavedProvider = createSavedProviderTransport(store, fetcher, async provider => { await (queues.get(provider) ?? Promise.resolve()).catch(() => {}); });
   const snapshot = async (provider) => ({ saved: await store.status(provider), verification: statuses.get(provider)?.verification ?? 'unchecked', ...(statuses.get(provider)?.reason ? { reason: statuses.get(provider).reason } : {}) });
   const forget = async (provider) => {
     // Invalidate immediately, before waiting for a save already in progress.
@@ -110,23 +137,19 @@ export function createCredentialRoutes(store = new MacKeychainStore(), fetcher =
         revision = generation(provider);
         record({ verification: 'checking' });
       }
+      if (operation === 'request') { const result = await requestSavedProvider(provider, value, () => generation(provider) === revision); reply(result.status, result.body); return true; }
       await (queues.get(provider) ?? Promise.resolve()).catch(() => {});
       const saved = await store.status(provider);
       if (!candidate && !saved) { record({ verification: 'unchecked' }); reply(operation === 'verify' ? 200 : 404, { saved: false, verification: 'unchecked' }); return true; }
       const key = candidate ? value.key.trim() : await store.read(provider);
       if (generation(provider) !== revision) { reply(409, { error: 'Credential operation superseded.' }); return true; }
-      if (operation === 'request' && (typeof value.model !== 'string' || !value.model.trim() || value.model.length > 200)) { reply(400, { error: 'Model required.' }); return true; }
       const reserved = new Set(['model','store','instructions','input','messages','text','response_format','tools','tool_choice','max_output_tokens','max_completion_tokens','reasoning']);
       const extra = value.parameters && typeof value.parameters === 'object' && !Array.isArray(value.parameters) ? value.parameters : {};
       if (Object.keys(extra).some(name => reserved.has(name))) { reply(400, {error:'A parameter conflicts with managed request fields.'}); return true; }
       // OpenAI's authenticated models route is lightweight. Console's public catalog cannot prove authentication;
       // use a single-token request to a paid model already present in the local catalog.
       const target = operation === 'verify' && provider === 'openai' ? 'https://api.openai.com/v1/models' : endpoints[provider];
-      const payload = operation === 'verify'
-        ? { model: provider === 'opencode-go' ? 'glm-5.3-flash' : 'deepseek-v4.1-flash', messages: [{ role: 'user', content: 'OK' }], max_tokens: 1 }
-        : provider === 'openai'
-          ? { ...extra, model: value.model, store: false, input: value.input, ...(value.reasoning && typeof value.reasoning === 'object' ? {reasoning:value.reasoning} : {}), ...(typeof value.instructions === 'string' ? {instructions:value.instructions} : {}), ...(value.text && typeof value.text === 'object' ? {text:value.text} : {}), ...(value.tools ? {tools:value.tools, tool_choice:value.tool_choice ?? 'auto'} : {}), ...(Number.isSafeInteger(value.max_output_tokens) && value.max_output_tokens > 0 ? { max_output_tokens: value.max_output_tokens } : {}) }
-          : { ...extra, model: value.model, messages: value.messages, ...(value.response_format && typeof value.response_format === 'object' ? {response_format:value.response_format} : {}), ...(value.tools ? {tools:value.tools, tool_choice:value.tool_choice ?? 'auto'} : {}), ...(Number.isSafeInteger(value.max_completion_tokens) && value.max_completion_tokens > 0 ? { max_completion_tokens: value.max_completion_tokens } : {}) };
+      const payload = { model: provider === 'opencode-go' ? 'glm-5.3-flash' : 'deepseek-v4.1-flash', messages: [{ role: 'user', content: 'OK' }], max_tokens: 1 };
       const response = await fetcher(target, {
         method: operation === 'verify' && provider === 'openai' ? 'GET' : 'POST', redirect: 'error', signal: AbortSignal.timeout(operation === 'verify' ? 30000 : 120000),
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
@@ -150,9 +173,6 @@ export function createCredentialRoutes(store = new MacKeychainStore(), fetcher =
         const result = { saved: true, verification: 'verified' };
         record(result); reply(200, result); return true;
       }
-      if (!response.ok) { const data = await response.json().catch(() => null); reply(502, { error: `Provider request failed (${response.status}).`, providerError: providerError(response.status, data) }); return true; }
-      const serialized = JSON.stringify(await response.json());
-      reply(200, JSON.parse(serialized.split(JSON.stringify(key).slice(1, -1)).join('[redacted]'))); return true;
     } catch (error) {
       if (generation(provider) !== revision) { reply(409, { error: 'Credential operation superseded.' }); return true; }
       if (operation === 'verify') {

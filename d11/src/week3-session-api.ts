@@ -10,6 +10,15 @@ export async function loadSessionMemory(id: string): Promise<MemorySnapshot> {
 export async function saveSessionMemory(id: string, snapshot: MemorySnapshot): Promise<MemorySnapshot> {
   return await request(`/${encodeURIComponent(id)}/memory`, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(snapshot)}) as MemorySnapshot;
 }
+export async function topicProcessingMode(id:string):Promise<{enabled:boolean;mockModel:boolean;failSummary:boolean}> {
+  const value=await request(`/${encodeURIComponent(id)}/topic-mode`) as {enabled?:unknown;mockModel?:unknown;failSummary?:unknown};
+  if(typeof value.enabled!=='boolean' || (value.mockModel!==undefined && typeof value.mockModel!=='boolean') || (value.failSummary!==undefined && typeof value.failSummary!=='boolean') || (value.mockModel && !value.enabled))throw new Error('Topic processing configuration is unavailable.');
+  return {enabled:value.enabled,mockModel:value.mockModel===true,failSummary:value.failSummary===true};
+}
+export async function processTopicSegment(id:string,runId:string):Promise<void> {
+  const value=await request(`/${encodeURIComponent(id)}/segments`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({runId})}) as {status?:unknown};
+  if(value.status!=='completed' && value.status!=='already_completed')throw new Error('Topic processing did not complete.');
+}
 
 export type SessionMetadata = { id: string; title: string; createdAt: number; updatedAt?: number; requestTokenLimit?: number; contextStrategy?: 'token-budget' | 'key-facts'; recentMessages?: number; fullContext?: 0 | 1; slidingSelected?: 0 | 1; stickySelected?: 0 | 1; memorySelected?: 0 | 1 };
 

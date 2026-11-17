@@ -1,6 +1,6 @@
-import { validateEndpoint } from "./provider-endpoints";
-import { catalog, type DiscoveredModel } from "./opencode-catalog";
-import { consoleTransportUrl } from "./opencode-console-transport";
+import { validateEndpoint } from "./provider-endpoints.ts";
+import { catalog, type DiscoveredModel } from "./opencode-catalog.ts";
+import { consoleTransportUrl } from "./opencode-console-transport.ts";
 
 // Exact model IDs and native API families from OpenCode's Console model table.
 // https://opencode.ai/docs/console/models

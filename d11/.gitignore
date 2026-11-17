@@ -30,3 +30,8 @@ work/
 # These are source modules, not credential data files.
 !/server/credentials.mjs
 !/server/credentials.d.mts
+
+# Generated independent QA reports are archived outside this repository.
+/DAY11_STAGE4A_INDEPENDENT_QA_REPORT.md
+/DAY11_FINAL_REAL_MEMORY_QA_REPORT.md
+/DAY11_LONG_TERM_FILTERING_RETEST_REPORT.md

@@ -1,5 +1,5 @@
-import { parseModelFeatures, type ModelFeatures } from "./model-capabilities";
-import { consoleTransportUrl } from "./opencode-console-transport";
+import { parseModelFeatures, type ModelFeatures } from "./model-capabilities.ts";
+import { consoleTransportUrl } from "./opencode-console-transport.ts";
 // Supplied Console price snapshot. Prices do not establish account or Go eligibility.
 export type ModelTier = "Free" | "Paid" | "Premium" | "Unknown";
 export type Price = {
