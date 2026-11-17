@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { createTopicRepository } from './topic-repository.mjs';
 import { initializeWeek3ProfileReference } from './week3-profile-migration.mjs';
+import { resolveSessionPersonalization } from './session-personalization.mjs';
 
 // Week 3 owns its session and event rows. Shared provider and tool data stay separate.
 export function createWeek3Routes(db, validateEvent, options = {}) {
@@ -24,7 +25,7 @@ export function createWeek3Routes(db, validateEvent, options = {}) {
   const list=db.prepare('SELECT id,title,createdAt,updatedAt,requestTokenLimit,profile_id AS profileId, 1 AS fullContext FROM week3_sessions ORDER BY createdAt, rowid');
   const events=db.prepare('SELECT id,sessionId,sequence,type,payload FROM week3_history_events WHERE sessionId=? ORDER BY sequence');
   return async (req,path,reply) => {
-    const match=path.match(/^\/api\/week3\/sessions(?:\/([a-zA-Z0-9-]+))?(?:\/(events|memory|topic-mode|segments))?$/);
+    const match=path.match(/^\/api\/week3\/sessions(?:\/([a-zA-Z0-9-]+))?(?:\/(events|memory|topic-mode|segments|profile))?$/);
     if (!match) return false;
     const [,id,resource]=match;
     if (!id && req.method==='GET') {reply(200,list.all());return true;}
@@ -36,6 +37,11 @@ export function createWeek3Routes(db, validateEvent, options = {}) {
       const inserted=db.prepare('INSERT INTO week3_sessions(id,title,createdAt,profile_id) SELECT ?,?,?,id FROM context_profiles WHERE id=?').run(key,'New session',Date.now(),profileId);
       if(!inserted.changes){reply(404,{error:'Profile not found.'});return true;}
       reply(201,get.get(key));return true;
+    }
+    if (id && resource==='profile' && req.method==='GET') {
+      const result=resolveSessionPersonalization(db,id);
+      const status=result.ok ? 200 : result.error==='session_not_found' ? 404 : result.error==='database_error' ? 503 : 409;
+      reply(status,result);return true;
     }
     if (!id || !get.get(id)) {reply(404,{error:'Session not found.'});return true;}
     if (!resource && req.method==='GET') {reply(200,get.get(id));return true;}

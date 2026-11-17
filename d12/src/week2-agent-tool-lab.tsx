@@ -704,6 +704,8 @@ function SessionChatView({
       working.conversation.title = title;
       let runStarted = false;
       try {
+        // Keep one immutable snapshot for the entire turn; it is not yet sent to the model.
+        const personalizationSnapshot=week3 ? await week3Api.loadPersonalizationSnapshot(working.conversation.id) : undefined;
         if(!fullHistory.current){
           working = restoreHistory(initialConversation, await loadHistory(initialConversation.conversation.id));
           fullHistory.current = true;
@@ -750,6 +752,7 @@ function SessionChatView({
         // run() records the user message before its first provider await.
         setConversation(structuredClone(working));
         const result = await pendingResult;
+        void personalizationSnapshot;
         if (sessionMemory) {
           const messages = result.state.messages.filter(message=>message.runId===result.run.id);
           if (messages[0]) try {await sessionMemory.finishCurrent(messages[0].id,messages.map(message=>({role:message.role,content:message.text})));} catch {setHistoryError('Could not update short-term memory. The original dialogue remains saved.');}
@@ -774,7 +777,7 @@ function SessionChatView({
             },
           ]);
         }
-      } catch {
+      } catch (error) {
         if(!runStarted){
           setInput(current=>current || question);
           const id=pendingQuestionId.current; pendingQuestionId.current=null;
@@ -795,7 +798,7 @@ function SessionChatView({
             runId: activeRun?.id ?? "ui",
             category: "SYSTEM",
             status: "failed",
-            description:
+            description: error instanceof week3Api.PersonalizationError ? error.message :
               "Manager execution failed. Check provider, model, key, and tool compatibility.",
           },
         ]);

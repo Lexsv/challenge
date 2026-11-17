@@ -4,6 +4,30 @@ import type { KeyFact } from './fact-extractor';
 import type { MemoryEntry } from './key-value-memory';
 import type { MemorySnapshot } from './session-memory';
 
+export type PersonalizationSnapshot = Readonly<{sessionId:string;profileId:string;profileRevision:number;habits:string}>;
+export type PersonalizationErrorCode = 'session_not_found' | 'profile_not_found' | 'invalid_association' | 'database_error' | 'unavailable';
+export class PersonalizationError extends Error {
+  constructor(readonly code:PersonalizationErrorCode) {
+    super(code==='session_not_found' ? 'This session is unavailable.' : code==='profile_not_found' ? 'The session profile is missing.' : code==='invalid_association' ? 'The session profile association is invalid.' : 'Could not resolve the session profile. Please retry.');
+  }
+}
+/** Read a new snapshot for each turn; no profile ID is supplied by the client. */
+export async function loadPersonalizationSnapshot(sessionId:string):Promise<PersonalizationSnapshot> {
+  let response:Response;
+  try {response=await fetch(`/api/week3/sessions/${encodeURIComponent(sessionId)}/profile`,{cache:'no-store'});}
+  catch {throw new PersonalizationError('unavailable');}
+  let result:unknown;
+  try {result=await response.json();} catch {throw new PersonalizationError('unavailable');}
+  const value=result as {ok?:unknown;data?:Partial<PersonalizationSnapshot>;error?:unknown} | null;
+  if (!response.ok || value?.ok!==true) {
+    const codes:PersonalizationErrorCode[]=['session_not_found','profile_not_found','invalid_association','database_error'];
+    throw new PersonalizationError(codes.includes(value?.error as PersonalizationErrorCode) ? value!.error as PersonalizationErrorCode : 'unavailable');
+  }
+  const data=value.data;
+  if (!data || data.sessionId!==sessionId || typeof data.profileId!=='string' || !data.profileId.trim() || data.profileId!==data.profileId.trim() || !Number.isSafeInteger(data.profileRevision) || data.profileRevision!<1 || typeof data.habits!=='string' || (data.profileId==='general' && data.habits!=='')) throw new PersonalizationError('invalid_association');
+  return Object.freeze({sessionId:data.sessionId,profileId:data.profileId,profileRevision:data.profileRevision!,habits:data.habits});
+}
+
 export async function loadSessionMemory(id: string): Promise<MemorySnapshot> {
   return await request(`/${encodeURIComponent(id)}/memory`) as MemorySnapshot;
 }
