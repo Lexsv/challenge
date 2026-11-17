@@ -1,6 +1,7 @@
 import { createHistoryPager } from './history-pages.mjs';
 import { createWeek3Routes } from './week3-sessions.mjs';
 import { createContextProfileRepository } from './context-profile-repository.mjs';
+import { createContextProfileRoutes } from './context-profile-routes.mjs';
 import { createContextWorkspaceStore } from './context-workspaces.mjs';
 import { createCredentialRoutes } from "./credentials.mjs";
 import { DatabaseSync } from 'node:sqlite';
@@ -71,7 +72,7 @@ export function createSessionServer(databasePath = fileURLToPath(new URL('../dat
   const credentialRoutes = createCredentialRoutes(options.credentialStore, options.fetcher);
   mkdirSync(dirname(databasePath), { recursive: true });
   const db = new DatabaseSync(databasePath);
-  createContextProfileRepository(db);
+  const profileRoutes = createContextProfileRoutes(createContextProfileRepository(db));
   db.exec(`PRAGMA journal_mode = WAL;
     CREATE TABLE IF NOT EXISTS sessions (
       id TEXT PRIMARY KEY,
@@ -182,6 +183,7 @@ export function createSessionServer(databasePath = fileURLToPath(new URL('../dat
     const path = new URL(req.url, 'http://localhost').pathname;
     const match = path.match(/^\/api\/sessions\/([a-zA-Z0-9-]+)$/);
     try {
+      if (await profileRoutes(req, path, reply)) return;
       if (await week3Routes(req, path, reply)) return;
       if (await credentialRoutes(req, path, reply)) return;
       const workspaceRoute = path.match(/^\/api\/sessions\/([a-zA-Z0-9-]+)\/(checkpoints|branches)$/);
