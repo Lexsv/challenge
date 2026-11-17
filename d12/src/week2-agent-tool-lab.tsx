@@ -8,6 +8,8 @@ import { ChatRunLog } from "./chat-run-log";
 import { contextPhaseLabel } from "./context-compaction";
 import { createAndSelectSession } from "./session-creation";
 import { EmptySessionChat, SessionCreateButton } from "./session-empty-state";
+import { NewSessionDialog } from "./new-session-dialog";
+import { sampleUsers, type MockUser } from "./users-page";
 import type { ModelRequestMeter } from "./token-meter";
 import { isWeek2Provider, unsupportedWeek2ProviderMessage, week2ProviderOptions } from "./week2-provider";
 import { SessionDeletion } from "./session-deletion";
@@ -207,6 +209,7 @@ export function buildWeek2Timeline(
 
 type LabProps = {
   week3?: boolean;
+  mockUsers?: readonly MockUser[];
   toolRegistry: ToolRegistry;
   registry: ProviderRegistry;
   openAIModel: string;
@@ -218,6 +221,7 @@ type LabProps = {
 export function Week2AgentToolLab(props: LabProps) {
   const { listSessions, createSession: persistSession, renameSession, emptySession, deleteSession } = props.week3 ? week3Api : week2Api;
   const [sessions, setSessions] = useState<ManagerConversationState[]>([]);
+  const [sessionOwners, setSessionOwners] = useState<Record<string, string>>({});
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [context, setContext] = useState<{ id: string; x: number; y: number } | null>(null);
   const [renameId, setRenameId] = useState<string | null>(null);
@@ -225,11 +229,13 @@ export function Week2AgentToolLab(props: LabProps) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [newSessionOpen, setNewSessionOpen] = useState(false);
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [loaded, setLoaded] = useState(false);
   const saveLock = useRef(false);
   const [deletion] = useState(() => new SessionDeletion(deleteSession, (id) => {
     setSessions((current) => current.filter((session) => session.conversation.id !== id));
+    setSessionOwners(current=>{const next={...current};delete next[id];return next;});
     setSelectedId((current) => {
       if(current!==id)return current;
       void listSessions().then(items=>setSelectedId(selected=>selected ?? items.slice().sort((a,b)=>(b.updatedAt||b.createdAt)-(a.updatedAt||a.createdAt))[0]?.id??null)).catch(()=>setError('Could not load sessions. Please retry.'));
@@ -256,13 +262,20 @@ export function Week2AgentToolLab(props: LabProps) {
   }, [loadAttempt]);
   useEffect(()=>{if(!loaded)return;try {if(selectedId)localStorage.setItem((props.week3 ? 'expert-lab:d11:week3:last-session' : 'expert-lab:d8:last-session'),selectedId);else localStorage.removeItem((props.week3 ? 'expert-lab:d11:week3:last-session' : 'expert-lab:d8:last-session'));} catch {/* storage may be unavailable */}},[selectedId,loaded]);
   const createDisabled = loading || !loaded || saving || deleteState.pending;
-  const createSession = () => { void createAndSelectSession({
-    lock: saveLock, ready: loaded && !loading && !deleteState.pending, create: persistSession,
+  const openNewSession = () => { setError(""); setNewSessionOpen(true); };
+  const createSession = (name: string, owner: string) => { void createAndSelectSession({
+    lock: saveLock, ready: loaded && !loading && !deleteState.pending, create: async () => {
+      const created = await persistSession();
+      try { return await renameSession(created.id, name); }
+      catch { setError('Session was created, but its name could not be saved. You can rename it later.'); return created; }
+    },
     onPending: setSaving, onError: setError,
     onCreated: (saved) => {
       const session = emptySession(saved);
       setSessions((current) => [...current, session]);
+      setSessionOwners(current=>({...current,[session.conversation.id]:owner}));
       setSelectedId(session.conversation.id);
+      setNewSessionOpen(false);
     },
   }); };
   const rename = async () => {
@@ -287,13 +300,13 @@ export function Week2AgentToolLab(props: LabProps) {
       <Paper component="aside" variant="outlined" aria-label="Sessions" sx={{ p: 1, minWidth: 0 }}>
         <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ px: 1 }}>
           <Typography variant="subtitle2" color="text.secondary">Sessions</Typography>
-          <SessionCreateButton compact onCreate={createSession} pending={saving} disabled={createDisabled} />
+          <SessionCreateButton compact onCreate={openNewSession} pending={saving} disabled={createDisabled} />
         </Stack>
         {loading && <Typography variant="caption" role="status">Loading sessions…</Typography>}
         {error && <Alert severity="error" action={!loaded ? <Button onClick={() => setLoadAttempt((n) => n + 1)}>Retry</Button> : undefined}>{error}</Alert>}
         <List disablePadding aria-label="Session list">
           {sessions.map((session) => (
-            <SessionRow key={session.conversation.id} id={session.conversation.id} title={session.conversation.title ?? 'New session'}
+            <SessionRow key={session.conversation.id} id={session.conversation.id} title={session.conversation.title ?? 'New session'} owner={sessionOwners[session.conversation.id] ?? 'General'}
               selected={selectedId === session.conversation.id} menuOpen={context?.id === session.conversation.id}
               disabled={saving || deleteState.pending} onSelect={() => setSelectedId(session.conversation.id)}
               onActions={(position) => setContext({ id: session.conversation.id, ...position })} />
@@ -304,7 +317,7 @@ export function Week2AgentToolLab(props: LabProps) {
         {!selectedId && (
           <Box sx={{ display: "grid", gridTemplateColumns: sessionChatColumns, gap: 2, alignItems: "start", minWidth: 0 }}>
             <EmptySessionChat showEmptyState={loaded && !loading && sessions.length === 0}
-              onCreate={createSession} pending={saving} disabled={createDisabled} />
+              onCreate={openNewSession} pending={saving} disabled={createDisabled} />
             <SessionStatsFrame><SessionStatsContent /></SessionStatsFrame>
           </Box>
         )}
@@ -315,6 +328,7 @@ export function Week2AgentToolLab(props: LabProps) {
           </Box>
         ))}
       </Box>
+      <NewSessionDialog open={newSessionOpen} users={props.mockUsers ?? sampleUsers} pending={saving} error={error} onClose={()=>setNewSessionOpen(false)} onCreate={createSession} />
       <Menu id="session-actions-menu" slotProps={{ list: { "aria-labelledby": context ? `session-actions-${context.id}` : undefined } }} open={!!context} onClose={() => setContext(null)} anchorReference="anchorPosition"
         anchorPosition={context ? { top: context.y, left: context.x } : undefined}>
         <MenuItem disabled={saving || deleteState.pending} onClick={() => {

@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { App } from "./main";
 
 describe("Day 11 application shell", () => {
-  it("exposes the four approved pages and keeps the batch action in Labs week 1", () => {
+  it("exposes the navigation pages and keeps the batch action in Labs week 1", () => {
     const html = renderToStaticMarkup(<App />);
     const primaryTabs = html.slice(
       html.indexOf('aria-label="Primary navigation"'),
@@ -16,7 +16,7 @@ describe("Day 11 application shell", () => {
         primaryTabs.matchAll(/aria-controls="panel-([^"]+)"/g),
         (match) => match[1],
       ),
-    ).toEqual(["lab", "agents", "tools", "settings"]);
+    ).toEqual(["lab", "agents", "users", "tools", "settings"]);
     expect(primaryTabs).toContain(">Labs<");
     expect(html).toContain(">Week 1<");
     expect(html).toContain(">Week 2<");

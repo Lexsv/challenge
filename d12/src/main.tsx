@@ -54,6 +54,7 @@ import { duplicateExpert } from "./duplicate-expert";
 import DeleteOutline from "@mui/icons-material/DeleteOutline";
 import Close from "@mui/icons-material/Close";
 import ScienceOutlined from "@mui/icons-material/ScienceOutlined";
+import PeopleOutline from "@mui/icons-material/PeopleOutline";
 import { theme } from "./theme";
 import {
   resolveExpert,
@@ -86,10 +87,12 @@ import { executeBatch, type BatchTask } from "./batch-tasks";
 import { ToolsPage } from "./tools-page";
 import { Week2AgentToolLab } from "./week2-agent-tool-lab";
 import { createBuiltInToolRegistry } from "./tool-runtime";
+import { UsersPage, sampleUsers, type MockUser } from "./users-page";
 
 const navigation = [
   { id: "lab", label: "Labs", icon: ScienceOutlined },
   { id: "agents", label: "Agents", icon: SmartToyOutlined },
+  { id: "users", label: "Users", icon: PeopleOutline },
   { id: "tools", label: "Tools", icon: BuildOutlined },
   { id: "settings", label: "Providers", icon: StorageOutlined },
 ] as const;
@@ -271,6 +274,7 @@ export function App({
     () => suppliedRegistry ?? createProviderRegistry(adapter),
   );
   const [toolRegistry] = useState(() => createBuiltInToolRegistry());
+  const [mockUsers, setMockUsers] = useState<MockUser[]>(() => sampleUsers.map(user => ({...user, sessions:[...user.sessions]})));
   const [openCodeKeys, setOpenCodeKeys] = useState<OpenCodeKeys>(() => ({
     "opencode-console": getProviderKey?.("opencode-console") ?? "",
     "opencode-go": getProviderKey?.("opencode-go") ?? "",
@@ -878,6 +882,7 @@ export function App({
               hidden={labsTab !== "week2"}
             >
               <Week2AgentToolLab
+                mockUsers={mockUsers}
                 toolRegistry={toolRegistry}
                 registry={registry}
                 openAIModel={openAIModel}
@@ -887,7 +892,7 @@ export function App({
               />
             </Box>
             <Box role="tabpanel" aria-labelledby="labs-week3-tab" hidden={labsTab !== "week3"}>
-              <Week2AgentToolLab week3 toolRegistry={toolRegistry} registry={registry} openAIModel={openAIModel} onOpenAIModelChange={setOpenAIModel} openAIKey={key} openCodeKeys={openCodeKeys} />
+              <Week2AgentToolLab week3 mockUsers={mockUsers} toolRegistry={toolRegistry} registry={registry} openAIModel={openAIModel} onOpenAIModelChange={setOpenAIModel} openAIKey={key} openCodeKeys={openCodeKeys} />
             </Box>
             <Typography variant="caption" color="text.secondary">
               Week 2 conversation history is saved locally. Agents, Week 1 history, and built-in credentials reset on reload.
@@ -1399,6 +1404,14 @@ export function App({
               </Typography>
             )}
           </Stack>
+        </Box>
+        <Box
+          role="tabpanel"
+          id="panel-users"
+          aria-labelledby="tab-users"
+          hidden={tab !== "users"}
+        >
+          <UsersPage users={mockUsers} onUsersChange={setMockUsers} />
         </Box>
         <Box
           role="tabpanel"

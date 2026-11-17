@@ -19,6 +19,15 @@ it('ellipsizes an unbroken sidebar title while retaining its full accessible nam
   expect(html).toContain('text-overflow:ellipsis');
   expect(html).toContain(`title="${title}"`);
   expect(html).toContain(`aria-label="Actions for ${title}"`);
+  expect(html).toContain('>General<');
+});
+
+it('shows a selected owner below the title and truncates long owner names', () => {
+  const owner='VeryLongMockUserName'.repeat(10);
+  const html=renderToStaticMarkup(<SessionRow id="owned" title="Planning" owner={owner} selected={false} menuOpen={false} disabled={false} onSelect={()=>{}} onActions={()=>{}} />);
+  expect(html.indexOf('>Planning<')).toBeLessThan(html.indexOf(`>${owner}<`));
+  expect(html).toContain(`title="${owner}"`);
+  expect(html).toContain('text-overflow:ellipsis');
 });
 
 it('renders the entire unbroken header title separately from the fixed icon group', () => {

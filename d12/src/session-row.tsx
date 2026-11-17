@@ -1,8 +1,8 @@
 import { IconButton, ListItem, ListItemButton, ListItemText } from '@mui/material';
 import MoreHoriz from '@mui/icons-material/MoreHoriz';
 
-export function SessionRow({ id, title, selected, menuOpen, disabled, onSelect, onActions }: {
-  id: string; title: string; selected: boolean; menuOpen: boolean; disabled: boolean;
+export function SessionRow({ id, title, owner = 'General', selected, menuOpen, disabled, onSelect, onActions }: {
+  id: string; title: string; owner?: string; selected: boolean; menuOpen: boolean; disabled: boolean;
   onSelect: () => void; onActions: (position: { x: number; y: number }) => void;
 }) {
   return <ListItem disablePadding secondaryAction={
@@ -17,7 +17,7 @@ export function SessionRow({ id, title, selected, menuOpen, disabled, onSelect, 
     <ListItemButton selected={selected} aria-current={selected ? 'true' : undefined} onClick={onSelect}
       onContextMenu={(event) => { event.preventDefault(); if (!disabled) onActions({ x: event.clientX, y: event.clientY }); }}
       sx={{ borderRadius: 2, my: 0.5, pr: 6, minWidth: 0 }}>
-      <ListItemText sx={{ minWidth: 0 }} primary={title} primaryTypographyProps={{ variant: 'body2', noWrap: true, title }} />
+      <ListItemText sx={{ minWidth: 0 }} primary={title} secondary={owner} primaryTypographyProps={{ variant: 'body2', noWrap: true, title }} secondaryTypographyProps={{ variant: 'caption', color: 'text.secondary', noWrap: true, title: owner }} />
     </ListItemButton>
   </ListItem>;
 }
