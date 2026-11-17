@@ -31,7 +31,7 @@ test('profile API validates, protects General, checks revisions and survives res
     assert.equal((await api(uri,'PATCH',{name:'Alex',habits:'Brief',expectedRevision:2})).status,409);
     result=await api(uri,'PATCH',{name:'Alex',habits:'Brief',expectedRevision:1});assert.equal(result.status,200);profile=await result.json();assert.equal(profile.revision,2);
     await stop();await start();result=await api(uri);assert.equal(result.status,200);assert.equal((await result.json()).habits,'Brief');
-    result=await api(uri,'DELETE');assert.equal(result.status,200);assert.deepEqual(await result.json(),{id:profile.id,deleted:true});assert.equal((await api(uri)).status,404);
+    result=await api(uri,'DELETE');assert.equal(result.status,200);assert.deepEqual(await result.json(),{id:profile.id,deleted:true,sessionsDeleted:0});assert.equal((await api(uri)).status,404);
     assert.equal((await api('/general')).status,200);
   } finally {if(server?.listening)await stop();await rm(folder,{recursive:true,force:true});}
 });

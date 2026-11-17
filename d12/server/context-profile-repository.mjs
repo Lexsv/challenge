@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { validateProfileDeletionSchema } from './profile-deletion-safety.mjs';
 
 export const GENERAL_PROFILE_ID = 'general';
 
@@ -35,6 +36,19 @@ export function createContextProfileRepository(db) {
   const validate = (name, habits) => {
     if (typeof name !== 'string' || !name.trim() || name.trim().toLowerCase() === 'general' || typeof habits !== 'string') throw new Error('Invalid profile.');
   };
+  // The profile and its Week 3 sessions are removed together; topic tables use
+  // ON DELETE CASCADE, while archive and snapshot rows require explicit deletion.
+  const removeSessions = id => {
+    db.prepare('DELETE FROM week3_session_memory WHERE sessionId IN (SELECT id FROM week3_sessions WHERE profile_id = ?)').run(id);
+    db.prepare('DELETE FROM week3_history_events WHERE sessionId IN (SELECT id FROM week3_sessions WHERE profile_id = ?)').run(id);
+    return db.prepare('DELETE FROM week3_sessions WHERE profile_id = ?').run(id).changes;
+  };
+  const transaction = action => {
+    if (db.prepare('PRAGMA foreign_keys').get().foreign_keys !== 1) throw new Error('Profile session deletion requires foreign keys.');
+    db.exec('BEGIN IMMEDIATE');
+    try { validateProfileDeletionSchema(db); const result = action(); db.exec('COMMIT'); return result; }
+    catch (error) { db.exec('ROLLBACK'); throw error; }
+  };
   return {
     list: () => list.all(),
     get: id => get.get(id) ?? null,
@@ -49,6 +63,18 @@ export function createContextProfileRepository(db) {
     delete(id) {
       if (id === GENERAL_PROFILE_ID) throw new Error('System profile cannot be deleted.');
       return remove.run(id).changes === 1;
+    },
+    deleteWithSessions(id) {
+      if (id === GENERAL_PROFILE_ID) throw new Error('System profile cannot be deleted.');
+      return transaction(() => {
+        if (!get.get(id)) return null;
+        const sessionsDeleted = removeSessions(id);
+        if (remove.run(id).changes !== 1) throw new Error('Profile could not be deleted.');
+        return { id, deleted:true, sessionsDeleted };
+      });
+    },
+    clearGeneralSessions() {
+      return transaction(() => ({ id:GENERAL_PROFILE_ID, sessionsDeleted:removeSessions(GENERAL_PROFILE_ID) }));
     },
   };
 }

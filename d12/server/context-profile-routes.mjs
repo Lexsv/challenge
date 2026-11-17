@@ -6,6 +6,11 @@ const validHabits = habits => typeof habits === 'string' && habits.length <= 500
 export function createContextProfileRoutes(profiles) {
   return async (req, path, reply) => {
     if (path !== '/api/users' && !path.startsWith('/api/users/')) return false;
+    if (path === '/api/users/general/sessions') {
+      if (req.method !== 'DELETE') reply(405,{error:'Method not allowed.'});
+      else reply(200,profiles.clearGeneralSessions());
+      return true;
+    }
     const id = path === '/api/users' ? null : path.slice('/api/users/'.length);
     if (id !== null && !validId(id)) { reply(400,{error:'Invalid profile ID.'}); return true; }
     if (req.method === 'GET') {
@@ -15,8 +20,9 @@ export function createContextProfileRoutes(profiles) {
     }
     if (req.method === 'DELETE' && id !== null) {
       if (id === 'general') { reply(403,{error:'General cannot be deleted.'}); return true; }
-      if (!profiles.delete(id)) reply(404,{error:'Profile not found.'});
-      else reply(200,{id,deleted:true});
+      const result=profiles.deleteWithSessions(id);
+      if (!result) reply(404,{error:'Profile not found.'});
+      else reply(200,result);
       return true;
     }
     if ((req.method !== 'POST' || id !== null) && (req.method !== 'PATCH' || id === null)) { reply(405,{error:'Method not allowed.'}); return true; }
