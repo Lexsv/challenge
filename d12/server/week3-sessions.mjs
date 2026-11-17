@@ -20,16 +20,25 @@ export function createWeek3Routes(db, validateEvent, options = {}) {
   );`);
   initializeWeek3ProfileReference(db);
   const topicRepository=createTopicRepository(db);
-  const get=db.prepare('SELECT id,title,createdAt,updatedAt,requestTokenLimit, 1 AS fullContext FROM week3_sessions WHERE id=?');
-  const list=db.prepare('SELECT id,title,createdAt,updatedAt,requestTokenLimit, 1 AS fullContext FROM week3_sessions ORDER BY createdAt, rowid');
+  const get=db.prepare('SELECT id,title,createdAt,updatedAt,requestTokenLimit,profile_id AS profileId, 1 AS fullContext FROM week3_sessions WHERE id=?');
+  const list=db.prepare('SELECT id,title,createdAt,updatedAt,requestTokenLimit,profile_id AS profileId, 1 AS fullContext FROM week3_sessions ORDER BY createdAt, rowid');
   const events=db.prepare('SELECT id,sessionId,sequence,type,payload FROM week3_history_events WHERE sessionId=? ORDER BY sequence');
   return async (req,path,reply) => {
     const match=path.match(/^\/api\/week3\/sessions(?:\/([a-zA-Z0-9-]+))?(?:\/(events|memory|topic-mode|segments))?$/);
     if (!match) return false;
     const [,id,resource]=match;
     if (!id && req.method==='GET') {reply(200,list.all());return true;}
-    if (!id && req.method==='POST') {const key=randomUUID();db.prepare('INSERT INTO week3_sessions(id,title,createdAt) VALUES (?,?,?)').run(key,'New session',Date.now());reply(201,get.get(key));return true;}
+    if (!id && req.method==='POST') {
+      let body='';for await(const chunk of req){body+=chunk;if(Buffer.byteLength(body)>1048576){reply(413,{error:'Request too large.'});return true;}}
+      let value;try{value=body.trim()?JSON.parse(body):{};}catch{reply(400,{error:'Invalid JSON.'});return true;}
+      if(!value || typeof value!=='object' || Array.isArray(value) || (value.profileId!==undefined && (typeof value.profileId!=='string' || !value.profileId.trim() || value.profileId!==value.profileId.trim() || value.profileId.length>200))){reply(400,{error:'Invalid profile ID.'});return true;}
+      const profileId=value.profileId ?? 'general', key=randomUUID();
+      const inserted=db.prepare('INSERT INTO week3_sessions(id,title,createdAt,profile_id) SELECT ?,?,?,id FROM context_profiles WHERE id=?').run(key,'New session',Date.now(),profileId);
+      if(!inserted.changes){reply(404,{error:'Profile not found.'});return true;}
+      reply(201,get.get(key));return true;
+    }
     if (!id || !get.get(id)) {reply(404,{error:'Session not found.'});return true;}
+    if (!resource && req.method==='GET') {reply(200,get.get(id));return true;}
     if(resource==='topic-mode' && req.method==='GET'){reply(200,{enabled:typeof options.topicProcess==='function',...(options.mockModel?{mockModel:true,failSummary:!!options.mockSummaryFailure?.()}:{})});return true;}
     if(resource==='segments' && req.method==='POST'){
       if(typeof options.topicProcess!=='function'){reply(503,{error:'Topic processing is disabled.'});return true;}

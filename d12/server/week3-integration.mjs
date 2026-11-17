@@ -53,3 +53,28 @@ test('Week 3 memory is revision checked, restored, isolated and deleted with its
   assert.equal((await fetch(`${base}/${first.id}`,{method:'DELETE'})).status,200);assert.equal((await fetch(url())).status,404);
   assert.equal((await(await fetch(`${base}/${second.id}/memory`)).json()).data,null);await stop();
 });
+
+test('Week 3 sessions persist immutable profile associations across restart',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'d12-session-profile-'));let server,base;
+  const start=async()=>{server=createSessionServer(join(dir,'test.sqlite'));await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));base=`http://127.0.0.1:${server.address().port}/api`;};
+  const stop=()=>new Promise((resolve,reject)=>server.close(error=>error?reject(error):resolve()));
+  const request=(path,method='GET',body)=>fetch(`${base}${path}`,{method,...(body===undefined?{}:{headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})});
+  try {
+    await start();
+    let result=await request('/users','POST',{name:'Test profile',habits:'concise'});assert.equal(result.status,201);const profile=await result.json();
+    result=await request('/week3/sessions','POST');assert.equal(result.status,201);const legacy=await result.json();assert.equal(legacy.profileId,'general');
+    result=await request('/week3/sessions','POST',{});assert.equal(result.status,201);assert.equal((await result.json()).profileId,'general');
+    result=await request('/week3/sessions','POST',{profileId:'general'});assert.equal(result.status,201);assert.equal((await result.json()).profileId,'general');
+    result=await request('/week3/sessions','POST',{profileId:profile.id});assert.equal(result.status,201);const selected=await result.json();assert.equal(selected.profileId,profile.id);
+    assert.equal((await request('/week3/sessions','POST',{profileId:'unknown'})).status,404);
+    for(const profileId of [null,'','  general',42])assert.equal((await request('/week3/sessions','POST',{profileId})).status,400);
+    assert.equal((await fetch(`${base}/week3/sessions`,{method:'POST',body:'{'})).status,400);
+    result=await request(`/week3/sessions/${selected.id}`,'PATCH',{profileId:'general'});assert.equal(result.status,400);
+    result=await request(`/week3/sessions/${selected.id}`,'PATCH',{title:'Renamed'});assert.equal(result.status,200);assert.equal((await result.json()).profileId,profile.id);
+    result=await request(`/week3/sessions/${selected.id}`);assert.equal(result.status,200);assert.equal((await result.json()).profileId,profile.id);
+    result=await request('/week3/sessions');const listed=await result.json();assert.equal(listed.length,4);assert.equal(listed.find(item=>item.id===selected.id).profileId,profile.id);assert.equal(listed.find(item=>item.id===legacy.id).profileId,'general');
+    await stop();await start();
+    result=await request(`/week3/sessions/${selected.id}`);assert.equal(result.status,200);const restored=await result.json();assert.equal(restored.profileId,profile.id);assert.equal(restored.title,'Renamed');
+    result=await request('/week3/sessions');assert.equal((await result.json()).find(item=>item.id===selected.id).profileId,profile.id);
+  } finally {if(server?.listening)await stop();}
+});
