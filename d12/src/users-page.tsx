@@ -21,6 +21,7 @@ export function updateMockUser(users: readonly MockUser[], draft: MockUser): Moc
 export type ContextProfile = { id: string; name: string; habits: string; is_system: 0 | 1; revision: number };
 export type ProfilesState = { status: 'loading' } | { status: 'error' } | { status: 'loaded'; profiles: ContextProfile[] };
 export type ProfileDraft = { name: string; habits: string; existing?: ContextProfile };
+export type DeletionTarget = { kind:'profile'; profile:ContextProfile } | { kind:'clear' };
 
 export async function loadProfiles(fetcher: typeof fetch = fetch, signal?: AbortSignal): Promise<ContextProfile[]> {
   const response = await fetcher('/api/users', { signal });
@@ -54,7 +55,36 @@ export function createProfileSaver(fetcher: typeof fetch, onSaved: () => void, o
   };
 }
 
-export function UsersView({ state, onRetry, onAdd = () => {}, onEdit = () => {} }: { state: ProfilesState; onRetry: () => void; onAdd?: () => void; onEdit?: (profile:ContextProfile) => void }) {
+export function createProfileDeleter(fetcher:typeof fetch, onDeleted:()=>void, onPending:(pending:boolean)=>void) {
+  let pending=false;
+  return async (target:DeletionTarget):Promise<string | null> => {
+    if(pending) return null;
+    if(target.kind==='profile' && (target.profile.is_system===1 || target.profile.id==='general')) return 'General cannot be deleted.';
+    pending=true; onPending(true);
+    try {
+      const url=target.kind==='clear' ? '/api/users/general/sessions' : `/api/users/${encodeURIComponent(target.profile.id)}`;
+      const response=await fetcher(url,{method:'DELETE'});
+      if(response.status===404) return 'This profile no longer exists. Reload the list and try again.';
+      if(!response.ok) return 'Could not complete the deletion. Please try again.';
+      onDeleted(); return null;
+    } catch { return 'Could not confirm the deletion. Reload the list before trying again.'; }
+    finally { pending=false; onPending(false); }
+  };
+}
+
+export function DeletionDialog({target,pending,error,onCancel,onConfirm}:{target:DeletionTarget | null;pending:boolean;error:string;onCancel:()=>void;onConfirm:()=>void}) {
+  const close=()=>{if(!pending)onCancel();};
+  return <Dialog open={!!target} onClose={close} aria-labelledby="delete-profile-title">
+    <DialogTitle id="delete-profile-title">{target?.kind==='clear' ? 'Clear General sessions?' : 'Delete profile?'}</DialogTitle>
+    <DialogContent><Stack spacing={2}>
+      {error && <Alert severity="error">{error}</Alert>}
+      <Typography>{target?.kind==='clear' ? 'All General sessions, their history, and memory will be permanently deleted. The General profile will remain.' : `The profile ${target?.kind==='profile' ? target.profile.name : ''} and its associated sessions, history, and memory will be permanently deleted.`}</Typography>
+    </Stack></DialogContent>
+    <DialogActions><Button disabled={pending} onClick={close}>Cancel</Button><Button disabled={pending} color="error" onClick={onConfirm}>{target?.kind==='clear' ? 'Clear Sessions' : 'Delete Profile'}</Button></DialogActions>
+  </Dialog>;
+}
+
+export function UsersView({ state, onRetry, onAdd = () => {}, onEdit = () => {}, onDelete = () => {}, onClear = () => {} }: { state: ProfilesState; onRetry: () => void; onAdd?: () => void; onEdit?: (profile:ContextProfile) => void; onDelete?: (profile:ContextProfile) => void; onClear?:()=>void }) {
   return <Stack spacing={2}>
     <Stack direction={{ xs: "column", sm: "row" }} justifyContent="space-between" alignItems={{ sm: "center" }} gap={1}>
       <Box><Typography variant="h4" component="h2">Users</Typography><Typography color="text.secondary">Manage profiles and their preferences.</Typography></Box>
@@ -71,7 +101,7 @@ export function UsersView({ state, onRetry, onAdd = () => {}, onEdit = () => {} 
             <TableCell>{user.habits ? <Tooltip title={user.habits}><Typography tabIndex={0} noWrap color="text.secondary" aria-label={`Habits for ${user.name}: ${user.habits}`}>{user.habits}</Typography></Tooltip> : <Typography color="text.secondary">No habits added.</Typography>}</TableCell>
             <TableCell align="center" sx={{px:0.5}} aria-label={`Session count unavailable for ${user.name}`}>—</TableCell>
             <TableCell align="right" sx={{px:1}}><Stack direction="row" justifyContent="flex-end" spacing={0.5}>
-              {user.is_system === 1 || user.id === 'general' ? <Tooltip title="Clear Sessions"><span><IconButton disabled size="small" aria-label="Clear Sessions for General"><DeleteSweepOutlined fontSize="small" /></IconButton></span></Tooltip> : <><Tooltip title="Edit User"><IconButton size="small" aria-label={`Edit ${user.name}`} onClick={()=>onEdit(user)}><SettingsOutlined fontSize="small" /></IconButton></Tooltip><Tooltip title="Delete User"><span><IconButton disabled size="small" color="error" aria-label={`Delete ${user.name}`}><DeleteOutline fontSize="small" /></IconButton></span></Tooltip></>}
+              {user.is_system === 1 || user.id === 'general' ? <Tooltip title="Clear Sessions"><IconButton size="small" aria-label="Clear Sessions for General" onClick={onClear}><DeleteSweepOutlined fontSize="small" /></IconButton></Tooltip> : <><Tooltip title="Edit User"><IconButton size="small" aria-label={`Edit ${user.name}`} onClick={()=>onEdit(user)}><SettingsOutlined fontSize="small" /></IconButton></Tooltip><Tooltip title="Delete User"><IconButton size="small" color="error" aria-label={`Delete ${user.name}`} onClick={()=>onDelete(user)}><DeleteOutline fontSize="small" /></IconButton></Tooltip></>}
             </Stack></TableCell>
           </TableRow>)}</TableBody>
         </Table>
@@ -85,7 +115,11 @@ export function UsersPage() {
   const [draft, setDraft] = useState<ProfileDraft | null>(null);
   const [pending, setPending] = useState(false);
   const [saveError, setSaveError] = useState('');
+  const [target, setTarget] = useState<DeletionTarget | null>(null);
+  const [deletePending, setDeletePending] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
   const [save] = useState(() => createProfileSaver((...args) => fetch(...args), () => { setDraft(null); setAttempt(current=>current+1); }, setPending));
+  const [remove] = useState(() => createProfileDeleter((...args)=>fetch(...args), () => { setTarget(null); setAttempt(current=>current+1); }, setDeletePending));
   useEffect(() => {
     const controller = new AbortController();
     setState({status:'loading'});
@@ -94,7 +128,7 @@ export function UsersPage() {
   }, [attempt]);
   const close=()=>{if(!pending){setDraft(null);setSaveError('');}};
   return <>
-    <UsersView state={state} onRetry={() => setAttempt(current => current + 1)} onAdd={()=>{setSaveError('');setDraft({name:'',habits:''});}} onEdit={profile=>{if(profile.is_system===0 && profile.id!=='general'){setSaveError('');setDraft({name:profile.name,habits:profile.habits,existing:profile});}}} />
+    <UsersView state={state} onRetry={() => setAttempt(current => current + 1)} onAdd={()=>{setSaveError('');setDraft({name:'',habits:''});}} onEdit={profile=>{if(profile.is_system===0 && profile.id!=='general'){setSaveError('');setDraft({name:profile.name,habits:profile.habits,existing:profile});}}} onDelete={profile=>{if(profile.is_system===0 && profile.id!=='general'){setDeleteError('');setTarget({kind:'profile',profile});}}} onClear={()=>{setDeleteError('');setTarget({kind:'clear'});}} />
     <Dialog open={!!draft} onClose={close} fullWidth maxWidth="sm" aria-labelledby="user-form-title">
       <DialogTitle id="user-form-title">{draft?.existing ? 'Edit User' : 'Add User'}</DialogTitle>
       <DialogContent><Stack spacing={2} sx={{pt:1}}>
@@ -104,5 +138,6 @@ export function UsersPage() {
       </Stack></DialogContent>
       <DialogActions><Button disabled={pending} onClick={close}>Cancel</Button><Button variant="contained" disabled={pending || !draft?.name.trim()} onClick={async()=>{if(draft){setSaveError('');const error=await save(draft);if(error)setSaveError(error);}}}>Save</Button></DialogActions>
     </Dialog>
+    <DeletionDialog target={target} pending={deletePending} error={deleteError} onCancel={()=>{setTarget(null);setDeleteError('');}} onConfirm={async()=>{if(target){setDeleteError('');const error=await remove(target);if(error)setDeleteError(error);}}} />
   </>;
 }
