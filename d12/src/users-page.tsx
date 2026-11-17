@@ -4,6 +4,8 @@ import Add from "@mui/icons-material/Add";
 import DeleteOutline from "@mui/icons-material/DeleteOutline";
 import SettingsOutlined from "@mui/icons-material/SettingsOutlined";
 import DeleteSweepOutlined from "@mui/icons-material/DeleteSweepOutlined";
+import { listSessions } from './week3-session-api';
+import { sessionCounts } from './profile-session-utils';
 
 // The New Session dialog still uses temporary choices until its separate integration.
 export type MockUser = { id: string; name: string; habits: string; sessions: string[]; system?: boolean };
@@ -84,7 +86,7 @@ export function DeletionDialog({target,pending,error,onCancel,onConfirm}:{target
   </Dialog>;
 }
 
-export function UsersView({ state, onRetry, onAdd = () => {}, onEdit = () => {}, onDelete = () => {}, onClear = () => {} }: { state: ProfilesState; onRetry: () => void; onAdd?: () => void; onEdit?: (profile:ContextProfile) => void; onDelete?: (profile:ContextProfile) => void; onClear?:()=>void }) {
+export function UsersView({ state, counts=null, onRetry, onAdd = () => {}, onEdit = () => {}, onDelete = () => {}, onClear = () => {} }: { state: ProfilesState; counts?:Record<string,number> | null; onRetry: () => void; onAdd?: () => void; onEdit?: (profile:ContextProfile) => void; onDelete?: (profile:ContextProfile) => void; onClear?:()=>void }) {
   return <Stack spacing={2}>
     <Stack direction={{ xs: "column", sm: "row" }} justifyContent="space-between" alignItems={{ sm: "center" }} gap={1}>
       <Box><Typography variant="h4" component="h2">Users</Typography><Typography color="text.secondary">Manage profiles and their preferences.</Typography></Box>
@@ -99,7 +101,7 @@ export function UsersView({ state, onRetry, onAdd = () => {}, onEdit = () => {},
           <TableBody>{[...state.profiles].sort((a,b)=>Number(b.id==='general')-Number(a.id==='general')).map(user=><TableRow key={user.id}>
             <TableCell component="th" scope="row"><Stack direction="row" alignItems="center" gap={1}><Typography noWrap>{user.name}</Typography>{user.is_system === 1 && <Chip label="System" size="small" />}</Stack></TableCell>
             <TableCell>{user.habits ? <Tooltip title={user.habits}><Typography tabIndex={0} noWrap color="text.secondary" aria-label={`Habits for ${user.name}: ${user.habits}`}>{user.habits}</Typography></Tooltip> : <Typography color="text.secondary">No habits added.</Typography>}</TableCell>
-            <TableCell align="center" sx={{px:0.5}} aria-label={`Session count unavailable for ${user.name}`}>—</TableCell>
+            <TableCell align="center" sx={{px:0.5}} aria-label={counts===null ? `Session count unavailable for ${user.name}` : `Sessions for ${user.name}`}>{counts===null ? '—' : counts[user.id] ?? 0}</TableCell>
             <TableCell align="right" sx={{px:1}}><Stack direction="row" justifyContent="flex-end" spacing={0.5}>
               {user.is_system === 1 || user.id === 'general' ? <Tooltip title="Clear Sessions"><IconButton size="small" aria-label="Clear Sessions for General" onClick={onClear}><DeleteSweepOutlined fontSize="small" /></IconButton></Tooltip> : <><Tooltip title="Edit User"><IconButton size="small" aria-label={`Edit ${user.name}`} onClick={()=>onEdit(user)}><SettingsOutlined fontSize="small" /></IconButton></Tooltip><Tooltip title="Delete User"><IconButton size="small" color="error" aria-label={`Delete ${user.name}`} onClick={()=>onDelete(user)}><DeleteOutline fontSize="small" /></IconButton></Tooltip></>}
             </Stack></TableCell>
@@ -109,7 +111,7 @@ export function UsersView({ state, onRetry, onAdd = () => {}, onEdit = () => {},
   </Stack>;
 }
 
-export function UsersPage() {
+export function UsersPage({sessionsRevision=0,onProfilesChanged,onProfileMutationStart,onProfileMutationSettled}: {sessionsRevision?:number;onProfilesChanged?:()=>void;onProfileMutationStart?:()=>void;onProfileMutationSettled?:()=>void} = {}) {
   const [state, setState] = useState<ProfilesState>({status:'loading'});
   const [attempt, setAttempt] = useState(0);
   const [draft, setDraft] = useState<ProfileDraft | null>(null);
@@ -118,7 +120,8 @@ export function UsersPage() {
   const [target, setTarget] = useState<DeletionTarget | null>(null);
   const [deletePending, setDeletePending] = useState(false);
   const [deleteError, setDeleteError] = useState('');
-  const [save] = useState(() => createProfileSaver((...args) => fetch(...args), () => { setDraft(null); setAttempt(current=>current+1); }, setPending));
+  const [counts,setCounts]=useState<Record<string,number> | null>(null);
+  const [save] = useState(() => createProfileSaver((...args) => fetch(...args), () => { setDraft(null); setAttempt(current=>current+1); onProfilesChanged?.(); }, setPending));
   const [remove] = useState(() => createProfileDeleter((...args)=>fetch(...args), () => { setTarget(null); setAttempt(current=>current+1); }, setDeletePending));
   useEffect(() => {
     const controller = new AbortController();
@@ -126,9 +129,14 @@ export function UsersPage() {
     loadProfiles(fetch, controller.signal).then(profiles => { if (!controller.signal.aborted) setState({status:'loaded',profiles}); }).catch(() => { if (!controller.signal.aborted) setState({status:'error'}); });
     return () => controller.abort();
   }, [attempt]);
+  useEffect(()=>{
+    let active=true;setCounts(null);
+    listSessions().then(items=>{if(active)setCounts(sessionCounts(items));}).catch(()=>{if(active)setCounts(null);});
+    return ()=>{active=false;};
+  },[sessionsRevision,attempt]);
   const close=()=>{if(!pending){setDraft(null);setSaveError('');}};
   return <>
-    <UsersView state={state} onRetry={() => setAttempt(current => current + 1)} onAdd={()=>{setSaveError('');setDraft({name:'',habits:''});}} onEdit={profile=>{if(profile.is_system===0 && profile.id!=='general'){setSaveError('');setDraft({name:profile.name,habits:profile.habits,existing:profile});}}} onDelete={profile=>{if(profile.is_system===0 && profile.id!=='general'){setDeleteError('');setTarget({kind:'profile',profile});}}} onClear={()=>{setDeleteError('');setTarget({kind:'clear'});}} />
+    <UsersView state={state} counts={counts} onRetry={() => setAttempt(current => current + 1)} onAdd={()=>{setSaveError('');setDraft({name:'',habits:''});}} onEdit={profile=>{if(profile.is_system===0 && profile.id!=='general'){setSaveError('');setDraft({name:profile.name,habits:profile.habits,existing:profile});}}} onDelete={profile=>{if(profile.is_system===0 && profile.id!=='general'){setDeleteError('');setTarget({kind:'profile',profile});}}} onClear={()=>{setDeleteError('');setTarget({kind:'clear'});}} />
     <Dialog open={!!draft} onClose={close} fullWidth maxWidth="sm" aria-labelledby="user-form-title">
       <DialogTitle id="user-form-title">{draft?.existing ? 'Edit User' : 'Add User'}</DialogTitle>
       <DialogContent><Stack spacing={2} sx={{pt:1}}>
@@ -138,6 +146,6 @@ export function UsersPage() {
       </Stack></DialogContent>
       <DialogActions><Button disabled={pending} onClick={close}>Cancel</Button><Button variant="contained" disabled={pending || !draft?.name.trim()} onClick={async()=>{if(draft){setSaveError('');const error=await save(draft);if(error)setSaveError(error);}}}>Save</Button></DialogActions>
     </Dialog>
-    <DeletionDialog target={target} pending={deletePending} error={deleteError} onCancel={()=>{setTarget(null);setDeleteError('');}} onConfirm={async()=>{if(target){setDeleteError('');const error=await remove(target);if(error)setDeleteError(error);}}} />
+    <DeletionDialog target={target} pending={deletePending} error={deleteError} onCancel={()=>{setTarget(null);setDeleteError('');}} onConfirm={async()=>{if(target){setDeleteError('');onProfileMutationStart?.();try{const error=await remove(target);if(error)setDeleteError(error);}finally{onProfileMutationSettled?.();}}}} />
   </>;
 }

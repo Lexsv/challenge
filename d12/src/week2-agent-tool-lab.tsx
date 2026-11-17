@@ -9,7 +9,9 @@ import { contextPhaseLabel } from "./context-compaction";
 import { createAndSelectSession } from "./session-creation";
 import { EmptySessionChat, SessionCreateButton } from "./session-empty-state";
 import { NewSessionDialog } from "./new-session-dialog";
-import { sampleUsers, type MockUser } from "./users-page";
+import { loadProfiles, sampleUsers, type MockUser, type ContextProfile } from "./users-page";
+import { profileName } from './profile-session-utils';
+import { SessionListRequests } from './session-list-requests';
 import type { ModelRequestMeter } from "./token-meter";
 import { isWeek2Provider, unsupportedWeek2ProviderMessage, week2ProviderOptions } from "./week2-provider";
 import { SessionDeletion } from "./session-deletion";
@@ -210,6 +212,9 @@ export function buildWeek2Timeline(
 type LabProps = {
   week3?: boolean;
   mockUsers?: readonly MockUser[];
+  profileRevision?: number;
+  onSessionsChanged?: () => void;
+  sessionListRequests?: SessionListRequests;
   toolRegistry: ToolRegistry;
   registry: ProviderRegistry;
   openAIModel: string;
@@ -218,10 +223,20 @@ type LabProps = {
   openCodeKeys: OpenCodeKeys;
 };
 
+export function SessionListErrorNotice({message,onRetry}:{message:string;onRetry:()=>void}) {
+  return <Alert severity="error" action={<Button onClick={onRetry}>Retry</Button>}>{message}</Alert>;
+}
+
 export function Week2AgentToolLab(props: LabProps) {
   const { listSessions, createSession: persistSession, renameSession, emptySession, deleteSession } = props.week3 ? week3Api : week2Api;
   const [sessions, setSessions] = useState<ManagerConversationState[]>([]);
   const [sessionOwners, setSessionOwners] = useState<Record<string, string>>({});
+  const [sessionProfiles, setSessionProfiles] = useState<Record<string, string | undefined>>({});
+  const [profiles, setProfiles] = useState<ContextProfile[]>([]);
+  const [profilesError, setProfilesError] = useState(false);
+  const [profilesAttempt, setProfilesAttempt] = useState(0);
+  const [localListRequests] = useState(() => new SessionListRequests());
+  const listRequests = props.sessionListRequests ?? localListRequests;
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [context, setContext] = useState<{ id: string; x: number; y: number } | null>(null);
   const [renameId, setRenameId] = useState<string | null>(null);
@@ -229,51 +244,63 @@ export function Week2AgentToolLab(props: LabProps) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [listError, setListError] = useState('');
   const [newSessionOpen, setNewSessionOpen] = useState(false);
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [loaded, setLoaded] = useState(false);
   const saveLock = useRef(false);
-  const [deletion] = useState(() => new SessionDeletion(deleteSession, (id) => {
+  const [deletion] = useState(() => new SessionDeletion(async id=>{
+    listRequests.invalidate();
+    try { await deleteSession(id); }
+    finally { listRequests.invalidate(); setLoadAttempt(n=>n+1); }
+  }, (id) => {
     setSessions((current) => current.filter((session) => session.conversation.id !== id));
     setSessionOwners(current=>{const next={...current};delete next[id];return next;});
-    setSelectedId((current) => {
-      if(current!==id)return current;
-      void listSessions().then(items=>setSelectedId(selected=>selected ?? items.slice().sort((a,b)=>(b.updatedAt||b.createdAt)-(a.updatedAt||a.createdAt))[0]?.id??null)).catch(()=>setError('Could not load sessions. Please retry.'));
-      return null;
-    });
+    setSessionProfiles(current=>{const next={...current};delete next[id];return next;});
+    if(props.week3) props.onSessionsChanged?.();
+    setSelectedId(current=>current===id ? null : current);
   }));
   const deleteState = useSyncExternalStore(deletion.subscribe, deletion.getSnapshot, deletion.getSnapshot);
   useEffect(() => {
     let active = true;
-    setLoading(true);
-    setError("");
-    listSessions().then((items) => {
+    if(!loaded)setLoading(true);
+    setListError('');
+    void listRequests.load(listSessions, (items) => {
       if (!active) return;
-      setSessions(items.map(emptySession));
+      setSessions(current=>items.map(item=>current.find(session=>session.conversation.id===item.id) ?? emptySession(item)));
+      if(props.week3) setSessionProfiles(Object.fromEntries(items.map(item=>[item.id,(item as week3Api.SessionMetadata).profileId])));
       setLoaded(true);
       let last:string|null=null;
       try {last=localStorage.getItem((props.week3 ? 'expert-lab:d11:week3:last-session' : 'expert-lab:d8:last-session'));} catch { /* storage may be unavailable */ }
       const selected=items.find(item=>item.id===last) ?? [...items].sort((a,b)=>(b.updatedAt || b.createdAt)-(a.updatedAt || a.createdAt))[0];
-      setSelectedId(selected?.id ?? null);
-    }).catch(() => {
-      if (active) setError("Could not load sessions. Check the local backend and retry.");
-    }).finally(() => { if (active) setLoading(false); });
-    return () => { active = false; };
-  }, [loadAttempt]);
+      setSelectedId(current=>items.some(item=>item.id===current) ? current : selected?.id ?? null);
+      setLoading(false);
+    }, () => {
+      if (active) { setListError("Could not load sessions. Check the local backend and retry."); setLoading(false); }
+    });
+    return () => { active = false; listRequests.invalidate(); };
+  }, [loadAttempt,props.week3 ? props.profileRevision : undefined]);
+  useEffect(()=>{
+    if(!props.week3)return;
+    let active=true;setProfiles([]);setProfilesError(false);
+    loadProfiles().then(items=>{if(active)setProfiles(items);}).catch(()=>{if(active)setProfilesError(true);});
+    return ()=>{active=false;};
+  },[props.week3,props.profileRevision,profilesAttempt]);
   useEffect(()=>{if(!loaded)return;try {if(selectedId)localStorage.setItem((props.week3 ? 'expert-lab:d11:week3:last-session' : 'expert-lab:d8:last-session'),selectedId);else localStorage.removeItem((props.week3 ? 'expert-lab:d11:week3:last-session' : 'expert-lab:d8:last-session'));} catch {/* storage may be unavailable */}},[selectedId,loaded]);
   const createDisabled = loading || !loaded || saving || deleteState.pending;
   const openNewSession = () => { setError(""); setNewSessionOpen(true); };
-  const createSession = (name: string, owner: string) => { void createAndSelectSession({
+  const createSession = (name: string, userId: string) => { void createAndSelectSession({
     lock: saveLock, ready: loaded && !loading && !deleteState.pending, create: async () => {
-      const created = await persistSession();
+      const created = props.week3 ? await week3Api.createSession(userId) : await persistSession();
       try { return await renameSession(created.id, name); }
       catch { setError('Session was created, but its name could not be saved. You can rename it later.'); return created; }
     },
-    onPending: setSaving, onError: setError,
+    onPending: value=>{listRequests.invalidate();setSaving(value);if(!value)setLoadAttempt(n=>n+1);}, onError: setError,
     onCreated: (saved) => {
       const session = emptySession(saved);
       setSessions((current) => [...current, session]);
-      setSessionOwners(current=>({...current,[session.conversation.id]:owner}));
+      if(props.week3){setSessionProfiles(current=>({...current,[session.conversation.id]:(saved as week3Api.SessionMetadata).profileId}));props.onSessionsChanged?.();}
+      else setSessionOwners(current=>({...current,[session.conversation.id]:(props.mockUsers ?? sampleUsers).find(user=>user.id===userId)?.name ?? 'General'}));
       setSelectedId(session.conversation.id);
       setNewSessionOpen(false);
     },
@@ -303,10 +330,11 @@ export function Week2AgentToolLab(props: LabProps) {
           <SessionCreateButton compact onCreate={openNewSession} pending={saving} disabled={createDisabled} />
         </Stack>
         {loading && <Typography variant="caption" role="status">Loading sessions…</Typography>}
-        {error && <Alert severity="error" action={!loaded ? <Button onClick={() => setLoadAttempt((n) => n + 1)}>Retry</Button> : undefined}>{error}</Alert>}
+        {listError && <SessionListErrorNotice message={listError} onRetry={() => setLoadAttempt(n=>n+1)} />}
+        {error && <Alert severity="error">{error}</Alert>}
         <List disablePadding aria-label="Session list">
           {sessions.map((session) => (
-            <SessionRow key={session.conversation.id} id={session.conversation.id} title={session.conversation.title ?? 'New session'} owner={sessionOwners[session.conversation.id] ?? 'General'}
+            <SessionRow key={session.conversation.id} id={session.conversation.id} title={session.conversation.title ?? 'New session'} owner={props.week3 ? profileName(sessionProfiles[session.conversation.id],profiles) : sessionOwners[session.conversation.id] ?? 'General'}
               selected={selectedId === session.conversation.id} menuOpen={context?.id === session.conversation.id}
               disabled={saving || deleteState.pending} onSelect={() => setSelectedId(session.conversation.id)}
               onActions={(position) => setContext({ id: session.conversation.id, ...position })} />
@@ -328,7 +356,7 @@ export function Week2AgentToolLab(props: LabProps) {
           </Box>
         ))}
       </Box>
-      <NewSessionDialog open={newSessionOpen} users={props.mockUsers ?? sampleUsers} pending={saving} error={error} onClose={()=>setNewSessionOpen(false)} onCreate={createSession} />
+      <NewSessionDialog open={newSessionOpen} users={props.week3 ? profiles : props.mockUsers ?? sampleUsers} pending={saving} error={error} persisted={props.week3} profilesError={props.week3 && profilesError} onRetryProfiles={()=>setProfilesAttempt(current=>current+1)} onClose={()=>setNewSessionOpen(false)} onCreate={createSession} />
       <Menu id="session-actions-menu" slotProps={{ list: { "aria-labelledby": context ? `session-actions-${context.id}` : undefined } }} open={!!context} onClose={() => setContext(null)} anchorReference="anchorPosition"
         anchorPosition={context ? { top: context.y, left: context.x } : undefined}>
         <MenuItem disabled={saving || deleteState.pending} onClick={() => {

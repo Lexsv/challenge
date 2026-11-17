@@ -34,6 +34,14 @@ describe('Users profiles', () => {
     expect(html).toContain('aria-label="Edit Taylor"'); expect(html).toContain('aria-label="Delete Taylor"');
     expect(html).toContain('aria-label="Clear Sessions for General"');
   });
+  it('renders supplied real counts and updates them after session changes', () => {
+    const state={status:'loaded',profiles} as const;
+    const before=renderToStaticMarkup(<UsersView state={state} counts={{general:2,'profile-1':1}} onRetry={()=>{}} />);
+    const after=renderToStaticMarkup(<UsersView state={state} counts={{'profile-1':1}} onRetry={()=>{}} />);
+    expect(before).toContain('aria-label="Sessions for General"');
+    expect(before).toMatch(/aria-label="Sessions for General"[^>]*>2</);
+    expect(after).toMatch(/aria-label="Sessions for General"[^>]*>0</);
+  });
 });
 
 describe('profile deletion', () => {

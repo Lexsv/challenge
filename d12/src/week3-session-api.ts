@@ -20,7 +20,7 @@ export async function processTopicSegment(id:string,runId:string):Promise<void> 
   if(value.status!=='completed' && value.status!=='already_completed')throw new Error('Topic processing did not complete.');
 }
 
-export type SessionMetadata = { id: string; title: string; createdAt: number; updatedAt?: number; requestTokenLimit?: number; contextStrategy?: 'token-budget' | 'key-facts'; recentMessages?: number; fullContext?: 0 | 1; slidingSelected?: 0 | 1; stickySelected?: 0 | 1; memorySelected?: 0 | 1 };
+export type SessionMetadata = { id: string; title: string; createdAt: number; profileId?: string; updatedAt?: number; requestTokenLimit?: number; contextStrategy?: 'token-budget' | 'key-facts'; recentMessages?: number; fullContext?: 0 | 1; slidingSelected?: 0 | 1; stickySelected?: 0 | 1; memorySelected?: 0 | 1 };
 
 async function request(path: string, init?: RequestInit): Promise<unknown> {
   const response = await fetch(`/api/week3/sessions${path}`, init);
@@ -39,8 +39,8 @@ export async function listSessions(): Promise<SessionMetadata[]> {
   if (!Array.isArray(values)) throw new Error('Invalid session list.');
   return values.map(metadata);
 }
-export async function createSession(): Promise<SessionMetadata> {
-  return metadata(await request('', { method: 'POST' }));
+export async function createSession(profileId?:string): Promise<SessionMetadata> {
+  return metadata(await request('', { method: 'POST', ...(profileId===undefined ? {} : {headers:{'Content-Type':'application/json'},body:JSON.stringify({profileId})}) }));
 }
 export type Checkpoint = { id: string; name: string };
 export async function listCheckpoints(id: string): Promise<Checkpoint[]> {

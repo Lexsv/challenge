@@ -19,4 +19,12 @@ describe('new session dialog',()=>{
     expect(canCreateSession('My session','missing',users,false)).toBe(false);
     expect(canCreateSession('My session','general',users,true)).toBe(false);
   });
+  it('uses supplied real profile choices and explains that ownership is saved',()=>{
+    const users=[{id:'general',name:'General'},{id:'real-profile',name:'Real User'}];
+    const html=renderToStaticMarkup(<NewSessionFields name="Planning" userId="general" users={users} persisted onNameChange={()=>{}} onUserChange={()=>{}}/>);
+    expect(html).toContain('General');expect(html).toContain('saved with the session');
+    expect(canCreateSession('Planning','real-profile',users,false)).toBe(true);
+    expect(canCreateSession('Planning','alex',users,false)).toBe(false);
+    expect(canCreateSession('','general',users,false)).toBe(false);
+  });
 });
