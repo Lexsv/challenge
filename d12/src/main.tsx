@@ -274,7 +274,7 @@ export function App({
     () => suppliedRegistry ?? createProviderRegistry(adapter),
   );
   const [toolRegistry] = useState(() => createBuiltInToolRegistry());
-  const [mockUsers, setMockUsers] = useState<MockUser[]>(() => sampleUsers.map(user => ({...user, sessions:[...user.sessions]})));
+  const [mockUsers] = useState<MockUser[]>(() => sampleUsers.map(user => ({...user, sessions:[...user.sessions]})));
   const [openCodeKeys, setOpenCodeKeys] = useState<OpenCodeKeys>(() => ({
     "opencode-console": getProviderKey?.("opencode-console") ?? "",
     "opencode-go": getProviderKey?.("opencode-go") ?? "",
@@ -1411,7 +1411,7 @@ export function App({
           aria-labelledby="tab-users"
           hidden={tab !== "users"}
         >
-          <UsersPage users={mockUsers} onUsersChange={setMockUsers} />
+          <UsersPage />
         </Box>
         <Box
           role="tabpanel"
