@@ -731,6 +731,7 @@ function SessionChatView({
         const sessionMemory = week3 ? new SessionMemory({load:()=>week3Api.loadSessionMemory(working.conversation.id),save:async snapshot=>{const saved=await week3Api.saveSessionMemory(working.conversation.id,snapshot);setSessionMemorySnapshot(saved);return saved;}},new MemoryProcessor(adapter),selectedModel,undefined,topicMode.enabled ? async groups=>{for(const group of groups)await week3Api.processTopicSegment(working.conversation.id,group.id);} : undefined) : undefined;
         const pendingResult = manager.run({
           state: working,
+          ...(personalizationSnapshot ? {personalizationSnapshot} : {}),
           ...(sessionMemory ? {sessionMemory} : memory ? {keyValue:{load:async()=>{const value=await loadMemory(working.conversation.id); memoryRevision=value.revision; return value.entries;},save:async(entries:MemoryEntry[])=>{const value=await saveMemory(working.conversation.id,{revision:memoryRevision,entries});memoryRevision=value.revision;setMemoryEntries(value.entries);}}} : sliding ? {contextMode:'sliding' as const, windowSize:recentMessages} : fullContext ? {contextMode: 'full' as const} : contextStrategy === 'key-facts' ? { keyFacts: { recentMessages, load: () => loadSessionFacts(working.conversation.id), save: async (value: Parameters<typeof saveSessionFacts>[1]) => { await saveSessionFacts(working.conversation.id, value); setFactsRevision(n=>n+1); } } } : {}),
           onEvent: async (event) => {
             if(event.type==='message' && event.payload.role==='user' && pendingQuestionId.current){
@@ -752,7 +753,6 @@ function SessionChatView({
         // run() records the user message before its first provider await.
         setConversation(structuredClone(working));
         const result = await pendingResult;
-        void personalizationSnapshot;
         if (sessionMemory) {
           const messages = result.state.messages.filter(message=>message.runId===result.run.id);
           if (messages[0]) try {await sessionMemory.finishCurrent(messages[0].id,messages.map(message=>({role:message.role,content:message.text})));} catch {setHistoryError('Could not update short-term memory. The original dialogue remains saved.');}

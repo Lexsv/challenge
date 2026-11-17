@@ -14,6 +14,7 @@ import type {
 import type { ToolCatalogItem, ToolRegistry } from "./tool-runtime";
 import type { SessionMemory } from './session-memory';
 import { createFactHistoryTool } from './fact-history-tool';
+import type { PersonalizationSnapshot } from './week3-session-api';
 
 export type ManagerLlmMessage = {
   role: "system" | "user" | "assistant" | "tool";
@@ -43,6 +44,7 @@ export interface ManagerLlmAdapter {
     messages: readonly ManagerLlmMessage[];
     tools: readonly ToolCatalogItem[];
     onMeter?: (meter: RequestMeter) => Promise<void>;
+    personalizationSnapshot?: PersonalizationSnapshot;
   }): Promise<ManagerLlmResponse>;
 }
 
@@ -117,8 +119,14 @@ export class ManagerAgent {
     windowSize?: number;
     keyValue?: {load: () => Promise<MemoryEntry[]>; save: (entries: MemoryEntry[]) => Promise<void>};
     sessionMemory?: SessionMemory;
+    personalizationSnapshot?: PersonalizationSnapshot;
     onEvent?: (event: HistoryEvent) => Promise<void>;
   }): Promise<ManagerRunResult> {
+    if (input.personalizationSnapshot && input.personalizationSnapshot.sessionId !== input.state.conversation.id) throw new Error('Personalization snapshot belongs to another session.');
+    const personalizationSnapshot = input.personalizationSnapshot && Object.freeze({
+      sessionId:input.personalizationSnapshot.sessionId,profileId:input.personalizationSnapshot.profileId,
+      profileRevision:input.personalizationSnapshot.profileRevision,habits:input.personalizationSnapshot.habits,
+    });
     const maxIterations = input.maxIterations ?? this.defaults.maxIterations ?? 8;
     const runId = id();
     const userMessage = appendTextMessage(input.state, runId, "user", input.userText);
@@ -246,6 +254,7 @@ export class ManagerAgent {
           }
           try {
             return await this.llm.complete({ messages: llmMessages, tools: executableTools,
+              ...(personalizationSnapshot ? {personalizationSnapshot} : {}),
               onMeter: meter => onMeter({ ...meter, ...comparison }) });
           } catch (error) {
             if (error instanceof ManagerProviderError && error.metadata.status === 503) throw new Error('The server is temporarily unavailable (503). Please try again later.');
