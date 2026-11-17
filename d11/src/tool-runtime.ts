@@ -58,6 +58,14 @@ export class ToolRegistry {
   private readonly libraries = new Map<string, ToolCatalogItem>();
   private readonly customTools = new Map<string, ExecutableTool<unknown, unknown>>();
 
+  fork(): ToolRegistry {
+    const copy=new ToolRegistry();
+    for(const [id,tool] of this.tools)copy.tools.set(id,tool);
+    for(const [id,tool] of this.customTools)copy.customTools.set(id,tool);
+    for(const [id,library] of this.libraries)copy.libraries.set(id,library);
+    return copy;
+  }
+
   replaceCustomTools(tools: ExecutableTool<unknown, unknown>[]) {
     this.customTools.clear();
     for (const tool of tools) this.customTools.set(tool.id, tool);

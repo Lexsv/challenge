@@ -13,6 +13,7 @@ import type {
 } from "./agent-tool-contracts";
 import type { ToolCatalogItem, ToolRegistry } from "./tool-runtime";
 import type { SessionMemory } from './session-memory';
+import { createFactHistoryTool } from './fact-history-tool';
 
 export type ManagerLlmMessage = {
   role: "system" | "user" | "assistant" | "tool";
@@ -145,7 +146,9 @@ export class ManagerAgent {
     let history: ManagerLlmMessage[] = [];
     const current: ManagerLlmMessage[] = [{ role: 'user', content: userMessage.text }];
     let llmMessages = [...history, ...current];
-    const executableTools = this.tools
+    const runTools = input.sessionMemory ? this.tools.fork() : this.tools;
+    if(input.sessionMemory)runTools.register(createFactHistoryTool(input.sessionMemory));
+    const executableTools = runTools
       .listExecutable()
       .filter((tool) => tool.executable);
 
@@ -298,7 +301,8 @@ export class ManagerAgent {
           content: response.text ?? "",
           toolCalls: response.toolCalls,
         });
-        if (response.text?.trim()) {
+        const hasHistoryCall=!!input.sessionMemory && response.toolCalls.some(call=>call.toolId==='get_fact_history');
+        if (response.text?.trim() && !hasHistoryCall) {
           const assistant = appendTextMessage(
             input.state,
             run.id,
@@ -320,13 +324,25 @@ export class ManagerAgent {
           await emit('tool-call', toolExecution);
           pendingCalls.push({ call, toolExecution });
         }
+        const historyAnswers:string[]=[];
         for (const { call, toolExecution } of pendingCalls) {
-          const execution = await this.tools.executeById(call.toolId, call.arguments);
+          const execution = await (input.sessionMemory && call.toolId==='get_fact_history' ? runTools : this.tools).executeById(call.toolId, call.arguments);
           toolExecution.endedAt = Date.now();
           toolExecution.status = execution.ok ? 'completed' : 'failed';
           if (execution.ok) toolExecution.output = execution.output;
           else toolExecution.error = execution.error.message;
           await emit('tool-result', toolExecution);
+
+          if(hasHistoryCall && call.toolId==='get_fact_history') {
+            if(!execution.ok) historyAnswers.push('Fact history is unavailable. Please try again.');
+            else {
+              const result=execution.output as {status:string;subject?:string;attribute?:string;current?:{value:string;status:string};unorderedValues?:{value:string;status:string}[]};
+              if(result.status==='not_found')historyAnswers.push('No matching fact is available in this session.');
+              else if(result.status==='ambiguous')historyAnswers.push('Multiple matching facts are available; please clarify which fact you mean.');
+              else if(!result.unorderedValues?.length)historyAnswers.push(`No historical values are available for ${result.subject} / ${result.attribute}.`);
+              else historyAnswers.push(`For ${result.subject} / ${result.attribute}, the current value is ${result.current?.value} (${result.current?.status}). The historical values include ${result.unorderedValues.map(item=>`${item.value} (${item.status})`).join('; ')}. Their chronological order cannot be verified from the available memory records.`);
+            }
+          }
 
           current.push({
             role: "tool",
@@ -342,6 +358,13 @@ export class ManagerAgent {
                   },
             ),
           });
+        }
+        if(hasHistoryCall) {
+          const finalText=historyAnswers.join('\n');
+          const assistant=appendTextMessage(input.state,run.id,'assistant',finalText);
+          run.messageIds.push(assistant.id);await emit('message',assistant);
+          run.status='completed';run.endedAt=Date.now();await emit('run',run);
+          return {state:input.state,run,finalResponse:finalText};
         }
         llmMessages = [...history, ...current];
         continue;

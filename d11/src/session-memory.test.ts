@@ -1,5 +1,6 @@
 import { expect, it, vi } from 'vitest';
-import { ContextBuilder, SessionMemory, MemoryProcessor, mergeMemoryFacts, type MemorySnapshot, type MemoryStore } from './session-memory';
+import { DEFAULT_SHORT_TERM_TOKEN_BUDGET, ContextBuilder, SessionMemory, MemoryProcessor, mergeMemoryFacts, type MemorySnapshot, type MemoryStore } from './session-memory';
+import { estimateMemoryTokenStats } from './memory-token-stats';
 import type { ManagerLlmMessage } from './manager-agent';
 import { ManagerAgent, createManagerConversation } from './manager-agent';
 import { createBuiltInToolRegistry } from './tool-runtime';
@@ -15,6 +16,22 @@ function fixture() {
   return {store,processor,read:()=>snapshot};
 }
 const user = (content:string):ManagerLlmMessage => ({role:'user',content});
+it('uses the shared 1000-token default and retains facts and recent messages across a normal overflow',async()=>{
+  expect(DEFAULT_SHORT_TERM_TOKEN_BUDGET).toBe(1000);
+  const f=fixture(),memory=new SessionMemory(f.store,f.processor,'gpt-4o-mini');
+  await memory.putFact({subject:'Schedule',attribute:'date',value:'Friday',status:'confirmed',sources:['new'],supersedes:[{value:'Monday',status:'confirmed',sources:['old']}]});
+  const small={id:'small',messages:[user('Recent detail.')]};
+  await memory.prepare([small],[user('Current question')],'first');expect(f.processor.compress).not.toHaveBeenCalled();
+  const before=await estimateMemoryTokenStats(f.read().data,'gpt-4o-mini');
+  const old={id:'old-run',messages:[user('older '.repeat(1500))]};
+  const context=await memory.prepare([old,small],[user('Next question')],'second');
+  expect(f.processor.compress).toHaveBeenCalledTimes(1);expect(f.read().data?.covered).toEqual(['old-run']);expect(f.read().data?.buffer).toEqual([]);
+  expect(context.some(message=>message.content==='Recent detail.')).toBe(true);expect(context.at(-1)?.content).toBe('Next question');
+  expect(f.read().data?.summary).toBe('Decision: use the synthetic plan.');
+  expect(f.read().data?.facts.find(fact=>fact.subject==='Schedule')?.supersedes).toEqual([{value:'Monday',status:'confirmed',sources:['old']}]);
+  expect(f.read().data?.facts.some(fact=>fact.subject==='Plan')).toBe(true);
+  const after=await estimateMemoryTokenStats(f.read().data,'gpt-4o-mini');expect(before.mediumTermTokens).toBe(0);expect(after.mediumTermTokens).toBeGreaterThan(0);expect(after.longTermTokens).toBeGreaterThan(0);
+});
 it('compresses overflow once, merges facts, and reuses covered memory after restart',async()=>{
   const f=fixture();const group={id:'one',messages:[user('old source '.repeat(100))]};
   const memory=new SessionMemory(f.store,f.processor,'gpt-4o-mini',60);
@@ -64,7 +81,7 @@ it('deduplicates facts, preserves assumptions and contradictions, and accepts ex
 });
 it('splits large compression input into ordered chunks and carries the preceding summary',async()=>{
   const calls:string[]=[];
-  const processor=new MemoryProcessor({complete:async()=>({text:''}),context:{assess:async messages=>({tokens:JSON.stringify(messages).length,limit:800}),summarize:async text=>{calls.push(text);return `summary ${calls.length}`;}}});
+  const processor=new MemoryProcessor({complete:async()=>({text:'{"preserved":true}'}),context:{assess:async messages=>messages[0].content.startsWith('Review a proposed')?{tokens:100,limit:2000}:{tokens:JSON.stringify(messages).length,limit:800},summarize:async text=>{calls.push(text);return `summary ${calls.length}`;}}});
   expect(await processor.compress('',[{id:'one',messages:[user('abc '.repeat(400))]}])).toBe(`summary ${calls.length}`);
   expect(calls.length).toBeGreaterThan(1);expect(calls[1]).toContain('summary 1');
 });
@@ -189,7 +206,7 @@ it('includes the honesty policy and traceable current and historical facts in an
   const messages=new ContextBuilder().build({covered:[],summary:'A generated summary',facts,short:[],buffer:[],extracted:[]},[user('When is my appointment?')]);
   const policy=messages[0].content;
   for(const phrase of ['If information is missing','assumed or uncertain','facts conflict','superseded values','external booking','Never invent'])expect(policy).toContain(phrase);
-  expect(JSON.stringify(messages)).toContain('Monday');expect(JSON.stringify(messages)).toContain('Tuesday');expect(messages.at(-1)?.content).toBe('When is my appointment?');
+  expect(JSON.stringify(messages)).toContain('Monday');expect(JSON.stringify(messages)).not.toContain('Tuesday');expect(messages.at(-1)?.content).toBe('When is my appointment?');
 });
 it('does not re-extract an already processed user message when its run is compressed',async()=>{
   const f=fixture(),memory=new SessionMemory(f.store,f.processor,'gpt-4o-mini',60);

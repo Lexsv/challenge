@@ -17,8 +17,9 @@ import { credentials } from "./saved-credentials";
 import { HistoryWriter, restoreHistory } from "./conversation-history";
 import * as week2Api from "./session-api";
 import * as week3Api from "./week3-session-api";
-import { MemoryProcessor, SessionMemory, type MemorySnapshot } from './session-memory';
-import { estimateContextInput } from './token-meter';
+import { DEFAULT_SHORT_TERM_TOKEN_BUDGET, MemoryProcessor, SessionMemory, type MemorySnapshot } from './session-memory';
+import { SessionMemoryCard } from './session-memory-card';
+import { estimateMemoryTokenStats, type MemoryTokenCache, type MemoryTokenStats } from './memory-token-stats';
 import type {MemoryEntry} from './key-value-memory';
 import { useLayoutEffect, useEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction } from "react";
 import {
@@ -511,9 +512,10 @@ function SessionChatView({
   const [factsRevision, setFactsRevision] = useState(0);
   const [memoryEntries,setMemoryEntries] = useState<MemoryEntry[]>([]);
   const [sessionMemorySnapshot,setSessionMemorySnapshot] = useState<MemorySnapshot>();
-  const [shortTokens,setShortTokens] = useState<number>();
+  const [memoryTokens,setMemoryTokens] = useState<MemoryTokenStats>();
+  const memoryTokenCache=useRef<MemoryTokenCache>({});
   useEffect(()=>{if(!week3 || !active)return;let live=true;void week3Api.loadSessionMemory(initialConversation.conversation.id).then(value=>{if(live)setSessionMemorySnapshot(value);}).catch(()=>{if(live)setHistoryError('Could not load session memory.');});return()=>{live=false;};},[week3,active,initialConversation.conversation.id]);
-  useEffect(()=>{if(!week3)return;let live=true;void estimateContextInput(selectedModel,sessionMemorySnapshot?.data?.short.flatMap(group=>group.messages) ?? []).then(value=>{if(live)setShortTokens(value.estimatedInputTokens);});return()=>{live=false;};},[week3,selectedModel,sessionMemorySnapshot]);
+  useEffect(()=>{if(!week3 || !sessionMemorySnapshot){setMemoryTokens(undefined);return;}let live=true;setMemoryTokens(undefined);void estimateMemoryTokenStats(sessionMemorySnapshot.data,selectedModel,memoryTokenCache.current).then(value=>{if(live)setMemoryTokens(value);});return()=>{live=false;};},[week3,selectedModel,sessionMemorySnapshot]);
   useEffect(()=>{if(!active || !memory)return;let current=true;void loadMemory(initialConversation.conversation.id).then(value=>{if(current)setMemoryEntries(value.entries);}).catch(()=>{if(current)setHistoryError('Could not load Key-Value Memory.');});return()=>{current=false;};},[active,memory,initialConversation.conversation.id]);
 
   const [historyError, setHistoryError] = useState("");
@@ -904,14 +906,8 @@ function SessionChatView({
       active={active} loaded={historyLoaded} running={running} accountingState={accountingState} dialogueCounts={dialogueCounts}
       contextStrategy={fullContext || sliding || memory ? undefined : contextStrategy} recentMessages={recentMessages} factsRevision={factsRevision} fullContext={fullContext || sliding || memory} >
       {memory && <KeyValueDetails entries={memoryEntries} />}
-      {week3 && <Box sx={{mt:2}}><Typography variant="subtitle1">Session memory</Typography>
-        <Typography variant="subtitle2">Short-term · {shortTokens ?? '—'} / 2000 estimated tokens</Typography>
-        {(sessionMemorySnapshot?.data?.short ?? []).flatMap(group=>group.messages).map((message,index)=><Typography key={index} variant="body2" sx={{whiteSpace:'pre-wrap'}}>{message.role}: {message.content}</Typography>)}
-        {!!sessionMemorySnapshot?.data?.buffer.length && <Alert severity="warning">{sessionMemorySnapshot.data.buffer.length} conversation groups await compression.</Alert>}
-        <Typography variant="subtitle2" sx={{mt:1}}>Medium-term summary</Typography><Typography variant="body2" sx={{whiteSpace:'pre-wrap'}}>{sessionMemorySnapshot?.data?.summary || 'No summary yet.'}</Typography>
-        <Typography variant="subtitle2" sx={{mt:1}}>Long-term facts</Typography>{(sessionMemorySnapshot?.data?.facts ?? []).map((fact,index)=><Typography key={index} variant="body2">{fact.subject} · {fact.attribute}: {fact.value} ({fact.status ?? 'assumed'})</Typography>)}
-      </Box>}
       </SessionStatsPanel>
+      {week3 && <SessionMemoryCard snapshot={sessionMemorySnapshot} shortTokens={memoryTokens?.shortTermTokens ?? undefined} summaryTokens={memoryTokens?.mediumTermTokens ?? undefined} factTokens={memoryTokens?.longTermTokens ?? undefined} storedFactTokens={memoryTokens?.storedLongTermTokens ?? undefined} shortLimit={DEFAULT_SHORT_TERM_TOKEN_BUDGET} />}
     </Box>
     </Box>
   );
