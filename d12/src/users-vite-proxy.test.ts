@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { createServer } from 'vite';
+import { createServer, mergeConfig } from 'vite';
 import { createSessionServer } from '../server/sessions.mjs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -8,7 +8,13 @@ import config from '../vite.config';
 
 it('proxies profiles and existing session routes through Vite', async () => {
   const proxy = config.server!.proxy!;
-  expect(proxy['/api/users']).toEqual({target:'http://127.0.0.1:3003'});
+  for(const route of ['/api/credentials','/api/users','/api/week3/sessions','/api/sessions','/api/functions']) {
+    expect(proxy[route]).toEqual({target:'http://127.0.0.1:3012'});
+  }
+  expect(proxy['^/__d5_opencode_console/(chat/completions|responses|models)$']).toMatchObject({target:'https://opencode.ai',changeOrigin:true});
+  const overridden=mergeConfig(config,{server:{proxy:{'/api/users':{target:'http://127.0.0.1:3999'}}}});
+  expect(overridden.server!.proxy!['/api/users']).toEqual({target:'http://127.0.0.1:3999'});
+  expect(overridden.server!.proxy!['/api/sessions']).toEqual({target:'http://127.0.0.1:3012'});
   const dir=await mkdtemp(join(tmpdir(),'d12-vite-proxy-'));
   let backend:ReturnType<typeof createSessionServer>|undefined;
   let vite:Awaited<ReturnType<typeof createServer>>|undefined;
