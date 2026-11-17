@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { createTopicRepository } from './topic-repository.mjs';
+import { initializeWeek3ProfileReference } from './week3-profile-migration.mjs';
 
 // Week 3 owns its session and event rows. Shared provider and tool data stay separate.
 export function createWeek3Routes(db, validateEvent, options = {}) {
@@ -17,9 +18,10 @@ export function createWeek3Routes(db, validateEvent, options = {}) {
     revision INTEGER NOT NULL DEFAULT 0,
     data TEXT NOT NULL CHECK(json_valid(data))
   );`);
+  initializeWeek3ProfileReference(db);
   const topicRepository=createTopicRepository(db);
-  const get=db.prepare('SELECT *, 1 AS fullContext FROM week3_sessions WHERE id=?');
-  const list=db.prepare('SELECT *, 1 AS fullContext FROM week3_sessions ORDER BY createdAt, rowid');
+  const get=db.prepare('SELECT id,title,createdAt,updatedAt,requestTokenLimit, 1 AS fullContext FROM week3_sessions WHERE id=?');
+  const list=db.prepare('SELECT id,title,createdAt,updatedAt,requestTokenLimit, 1 AS fullContext FROM week3_sessions ORDER BY createdAt, rowid');
   const events=db.prepare('SELECT id,sessionId,sequence,type,payload FROM week3_history_events WHERE sessionId=? ORDER BY sequence');
   return async (req,path,reply) => {
     const match=path.match(/^\/api\/week3\/sessions(?:\/([a-zA-Z0-9-]+))?(?:\/(events|memory|topic-mode|segments))?$/);
