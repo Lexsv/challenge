@@ -87,9 +87,10 @@ const appendTextMessage = (
   runId: string,
   role: TextMessage["role"],
   text: string,
+  messageId?: string,
 ) => {
   const message: TextMessage = {
-    id: id(),
+    id: messageId ?? id(),
     conversationId: state.conversation.id,
     runId,
     createdAt: Date.now(),
@@ -120,9 +121,17 @@ export class ManagerAgent {
     keyValue?: {load: () => Promise<MemoryEntry[]>; save: (entries: MemoryEntry[]) => Promise<void>};
     sessionMemory?: SessionMemory;
     personalizationSnapshot?: PersonalizationSnapshot;
+    turnIds?: {runId:string;messageId:string};
     onEvent?: (event: HistoryEvent) => Promise<void>;
   }): Promise<ManagerRunResult> {
     if (input.personalizationSnapshot && input.personalizationSnapshot.sessionId !== input.state.conversation.id) throw new Error('Personalization snapshot belongs to another session.');
+    if (input.turnIds !== undefined) {
+      const ids=input.turnIds;
+      const validId=(value:unknown):value is string=>typeof value==='string' && /^[a-zA-Z0-9-]{1,100}$/.test(value);
+      if (!ids || typeof ids!=='object' || Array.isArray(ids) || Object.keys(ids).length!==2 || Object.keys(ids).some(key=>key!=='runId' && key!=='messageId') || !validId(ids.runId) || !validId(ids.messageId) || ids.runId===ids.messageId) throw new Error('Invalid turn identifiers.');
+      const existing=new Set([...input.state.conversation.runIds,...input.state.conversation.messageIds,...input.state.runs.map(run=>run.id),...input.state.messages.map(message=>message.id)]);
+      if(existing.has(ids.runId) || existing.has(ids.messageId)) throw new Error('Turn identifier already exists.');
+    }
     const personalizationSnapshot = input.personalizationSnapshot && Object.freeze({
       sessionId:input.personalizationSnapshot.sessionId,profileId:input.personalizationSnapshot.profileId,
       profileRevision:input.personalizationSnapshot.profileRevision,habits:input.personalizationSnapshot.habits,
@@ -134,8 +143,8 @@ export class ManagerAgent {
     const answerMessages = (messages: readonly ManagerLlmMessage[]): readonly ManagerLlmMessage[] =>
       habitsInstruction ? [habitsInstruction, ...messages] : messages;
     const maxIterations = input.maxIterations ?? this.defaults.maxIterations ?? 8;
-    const runId = id();
-    const userMessage = appendTextMessage(input.state, runId, "user", input.userText);
+    const runId = input.turnIds?.runId ?? id();
+    const userMessage = appendTextMessage(input.state, runId, "user", input.userText, input.turnIds?.messageId);
     const run: AgentRun = {
       id: runId,
       conversationId: input.state.conversation.id,

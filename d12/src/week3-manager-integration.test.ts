@@ -40,13 +40,16 @@ it('saves a real Manager tool run in Week 3 and restores its log without re-exec
       save:async snapshot=>{const response=await fetch(`${base}/${session.id}/memory`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(snapshot)});if(!response.ok)throw new Error('Could not save test memory');return await response.json() as MemorySnapshot;},
     },processor,'gpt-4o-mini');
     const state = emptySession(session);
-    const result = await new ManagerAgent(provider, tools).run({ state, userText: 'Add 15% tax to 100.', sessionMemory:memory, onEvent: event => writer.append(event) });
+    const result = await new ManagerAgent(provider, tools).run({ state, userText: 'Add 15% tax to 100.', turnIds:{runId:'synthetic-run',messageId:'synthetic-message'}, sessionMemory:memory, onEvent: event => writer.append(event) });
     expect(result.run.status).toBe('completed');
     expect(execute).toHaveBeenCalledTimes(1);
     await stop();
     await start();
     const events = await (await fetch(`${base}/${session.id}/events`)).json();
     const restored = restoreHistory(emptySession(session), events);
+    expect(restored.runs[0].id).toBe('synthetic-run');
+    expect(restored.messages[0]).toMatchObject({id:'synthetic-message',runId:'synthetic-run',conversationId:session.id});
+    expect(events.filter((event:HistoryEvent)=>event.type==='message' && event.payload.role==='user')).toHaveLength(1);
     expect(restored.messages.map(message => message.text)).toEqual(['Add 15% tax to 100.', 'The total is 115.']);
     expect(buildWeek2Timeline(restored, tools).filter(event => event.kind === 'tool')).toMatchObject([{ status: 'completed', output: { total: 115 } }]);
     expect((await memory.facts())[0]).toMatchObject({subject:'Calculation',value:'100',status:'confirmed',sources:[restored.messages[0].id]});

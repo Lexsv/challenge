@@ -3,7 +3,14 @@ import { createWeek3Routes } from './week3-sessions.mjs';
 import { createContextProfileRepository } from './context-profile-repository.mjs';
 import { createContextProfileRoutes } from './context-profile-routes.mjs';
 import { createContextWorkspaceStore } from './context-workspaces.mjs';
-import { createCredentialRoutes } from "./credentials.mjs";
+import { createCredentialRoutes, createSavedProviderTransport } from "./credentials.mjs";
+import { createTurnContextStore } from './turn-context.ts';
+import { createInstructionCoordinator } from './instruction-coordinator.ts';
+import { createServerInstructionDetector } from './instruction-detector-config.ts';
+import { createInstructionDetectorStartup } from './instruction-detector-startup.ts';
+import { createInstructionProposalStore } from './instruction-proposals.ts';
+import { resolveSessionPersonalization } from './session-personalization.mjs';
+import { createProviderRegistry } from '../src/provider-registry.ts';
 import { DatabaseSync } from 'node:sqlite';
 import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
@@ -72,7 +79,8 @@ export function createSessionServer(databasePath = fileURLToPath(new URL('../dat
   const credentialRoutes = createCredentialRoutes(options.credentialStore, options.fetcher);
   mkdirSync(dirname(databasePath), { recursive: true });
   const db = new DatabaseSync(databasePath);
-  const profileRoutes = createContextProfileRoutes(createContextProfileRepository(db));
+  const profiles = createContextProfileRepository(db);
+  const profileRoutes = createContextProfileRoutes(profiles);
   db.exec(`PRAGMA journal_mode = WAL;
     CREATE TABLE IF NOT EXISTS sessions (
       id TEXT PRIMARY KEY,
@@ -150,7 +158,28 @@ export function createSessionServer(databasePath = fileURLToPath(new URL('../dat
   const update = db.prepare('UPDATE sessions SET title = ? WHERE id = ?');
   const history = db.prepare('SELECT id, sessionId, sequence, type, payload FROM history_events WHERE sessionId = ? ORDER BY sequence');
   const pager = createHistoryPager(db);
-  const week3Routes = createWeek3Routes(db, validateEvent, {topicProcess:options.topicProcess,mockModel:options.mockModel,mockSummaryFailure:options.mockSummaryFailure});
+  const turnContexts=createTurnContextStore({resolve:id=>resolveSessionPersonalization(db,id),now:options.turnContextOptions?.now,ttlMs:options.turnContextOptions?.ttlMs,maxEntries:options.turnContextOptions?.maxEntries});
+  const instructionProposals=createInstructionProposalStore(options.instructionProposalOptions);
+  const recordDetectorMeter=async ({sessionId,runId,meter})=>{
+    const payload=validateMeter({...meter,sessionId,runId},sessionId);
+    if (!payload || payload.requestKind!=='extraction') throw new Error('Invalid detector meter.');
+    const run=db.prepare("SELECT 1 FROM week3_history_events WHERE sessionId=? AND type='run' AND json_extract(payload,'$.id')=? LIMIT 1").get(sessionId,runId);
+    if (!run) throw new Error('Detector meter run unavailable.');
+    db.prepare("INSERT INTO week3_history_events(id,sessionId,sequence,type,payload) VALUES(?,?,(SELECT COALESCE(MAX(sequence),0)+1 FROM week3_history_events WHERE sessionId=?),'metering',?)").run(randomUUID(),sessionId,sessionId,JSON.stringify(payload));
+  };
+  const unavailableDetector={detect:async()=>({ok:false,error:{code:'EXECUTION_FAILED'}})};
+  const processInstructionTurn=async input=>{
+    let detector=unavailableDetector;
+    if(options.instructionDetector && (options.instructionDetectorEnabled?.() ?? true)) {
+      try {
+        detector=createServerInstructionDetector(options.instructionDetector,createProviderRegistry(),
+          meter=>(options.instructionDetectorMeter ?? recordDetectorMeter)({sessionId:input.sessionId,runId:input.runId,meter}),options.instructionDetectorTransport ?? createSavedProviderTransport(options.credentialStore,options.fetcher));
+      } catch { /* No unvalidated configuration reaches the provider. */ }
+    }
+    return createInstructionCoordinator({db,profiles,resolve:resolveSessionPersonalization,contexts:turnContexts,proposals:instructionProposals,detector}).process(input);
+  };
+  const decideInstructionProposal=input=>createInstructionCoordinator({db,profiles,resolve:resolveSessionPersonalization,contexts:turnContexts,proposals:instructionProposals,detector:unavailableDetector}).decide(input);
+  const week3Routes = createWeek3Routes(db, validateEvent, {topicProcess:options.topicProcess,mockModel:options.mockModel,mockSummaryFailure:options.mockSummaryFailure,turnContexts,processInstructionTurn,decideInstructionProposal});
   const workspaces = createContextWorkspaceStore(db);
   const existingEvent = db.prepare('SELECT * FROM history_events WHERE id = ?');
   const findEntity = db.prepare("SELECT payload FROM history_events WHERE sessionId = ? AND type = ? AND json_extract(payload, '$.id') = ? ORDER BY sequence LIMIT 1");
@@ -525,7 +554,11 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       credentialStore:{status:async()=>false,save:async()=>{throw new Error('Credentials are disabled in test mode.');},forget:async()=>{},read:async()=>{throw new Error('Credentials are disabled in test mode.');}},
       fetcher:async()=>{throw new Error('External provider requests are disabled in test mode.');}};
   }
+  const detectorStartup=createInstructionDetectorStartup(process.env.DAY12_INSTRUCTION_DETECTOR_PROVIDER,process.env.DAY12_INSTRUCTION_DETECTOR_MODEL);
+  options={...options,instructionDetector:detectorStartup.config,instructionDetectorEnabled:detectorStartup.isEnabled};
   const server = createSessionServer(databasePath,options);
   server.listen(port, '127.0.0.1', () => console.log(`Session backend: http://127.0.0.1:${server.address().port}${args.length ? ' (synthetic topic mock)' : ''}`));
+  // SIGUSR2 disables admission of future detector calls; admitted operations finish normally.
+  process.on('SIGUSR2', () => { detectorStartup.disable(); console.log('Instruction detection disabled.'); });
   for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => server.close());
 }

@@ -40,6 +40,10 @@ pnpm dev     # frontend on 127.0.0.1:5175
 
 The database is `d12/data/sessions.sqlite`, separate from previous days. Configure providers through the application; do not commit databases or credentials. The inherited development ports are unchanged and cannot be shared with a running Day 11 instance.
 
+Automatic instruction detection is disabled by default. For an explicitly approved isolated test, the server operator may set both `DAY12_INSTRUCTION_DETECTOR_PROVIDER=openai` and `DAY12_INSTRUCTION_DETECTOR_MODEL` to a model in the server's local OpenAI registry before startup. A saved credential for that provider is required; the server does not take detector configuration from browser requests. Invalid or partial configuration prevents startup. Registry membership does not guarantee account access or model availability. OpenCode detector configuration is not supported until server-side context limits are available.
+
+To disable future detector executions without a restart, send `SIGUSR2` to the confirmed backend process. This does not cancel a detector operation already admitted or any in-progress persistence; those operations may still complete. Re-enabling requires an explicitly configured restart. Detector usage is stored with the associated session and run as `extraction` metering, separate from answer usage. A metering failure fails detection rather than silently discarding its record.
+
 ## Verify
 
 ```sh

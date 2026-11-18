@@ -25,7 +25,7 @@ export function createWeek3Routes(db, validateEvent, options = {}) {
   const list=db.prepare('SELECT id,title,createdAt,updatedAt,requestTokenLimit,profile_id AS profileId, 1 AS fullContext FROM week3_sessions ORDER BY createdAt, rowid');
   const events=db.prepare('SELECT id,sessionId,sequence,type,payload FROM week3_history_events WHERE sessionId=? ORDER BY sequence');
   return async (req,path,reply) => {
-    const match=path.match(/^\/api\/week3\/sessions(?:\/([a-zA-Z0-9-]+))?(?:\/(events|memory|topic-mode|segments|profile))?$/);
+    const match=path.match(/^\/api\/week3\/sessions(?:\/([a-zA-Z0-9-]+))?(?:\/(events|memory|topic-mode|segments|profile|turn-context|turn-completion|instruction-decision))?$/);
     if (!match) return false;
     const [,id,resource]=match;
     if (!id && req.method==='GET') {reply(200,list.all());return true;}
@@ -44,6 +44,29 @@ export function createWeek3Routes(db, validateEvent, options = {}) {
       reply(status,result);return true;
     }
     if (!id || !get.get(id)) {reply(404,{error:'Session not found.'});return true;}
+    if (resource==='instruction-decision') {
+      if(req.method!=='POST'){reply(405,{error:'Method not allowed.'});return true;}
+      let body='';for await(const chunk of req){body+=chunk;if(Buffer.byteLength(body)>4096){reply(413,{error:'Request too large.'});return true;}}
+      let value;try{value=JSON.parse(body);}catch{reply(400,{error:'Invalid proposal decision.'});return true;}
+      if(!value || typeof value!=='object' || Array.isArray(value) || Object.keys(value).length!==2 || Object.keys(value).some(key=>!['proposalId','decision'].includes(key)) || typeof value.proposalId!=='string' || !/^[A-Za-z0-9_-]{43}$/.test(value.proposalId) || !['accept','reject'].includes(value.decision)){reply(400,{error:'Invalid proposal decision.'});return true;}
+      reply(200,options.decideInstructionProposal({sessionId:id,proposalId:value.proposalId,decision:value.decision}));return true;
+    }
+    if (resource==='turn-context' || resource==='turn-completion') {
+      if(req.method!=='POST'){reply(405,{error:'Method not allowed.'});return true;}
+      let body='';for await(const chunk of req){body+=chunk;if(Buffer.byteLength(body)>4096){reply(413,{error:'Request too large.'});return true;}}
+      let value;try{value=JSON.parse(body);}catch{reply(400,{error:'Invalid turn request.'});return true;}
+      const allowed=resource==='turn-context'?['runId','messageId']:['runId','messageId','turnToken'];
+      if(!value || typeof value!=='object' || Array.isArray(value) || Object.keys(value).length!==allowed.length || Object.keys(value).some(key=>!allowed.includes(key)) || !['runId','messageId'].every(key=>typeof value[key]==='string' && /^[a-zA-Z0-9-]{1,100}$/.test(value[key])) || value.runId===value.messageId || (resource==='turn-completion' && (typeof value.turnToken!=='string' || !/^[A-Za-z0-9_-]{43}$/.test(value.turnToken)))) {reply(400,{error:'Invalid turn request.'});return true;}
+      if(resource==='turn-context') {
+        const existing=db.prepare("SELECT 1 FROM week3_history_events WHERE sessionId=? AND ((type='run' AND json_extract(payload,'$.id')=?) OR (type='message' AND (json_extract(payload,'$.runId')=? OR json_extract(payload,'$.id')=?))) LIMIT 1").get(id,value.runId,value.runId,value.messageId);
+        if(existing){reply(409,{error:'Turn identifiers already exist.'});return true;}
+        const result=options.turnContexts.create({sessionId:id,runId:value.runId,messageId:value.messageId});
+        if(!result.ok){reply(result.error==='invalid_reference'?400:result.error==='duplicate'?409:503,{error:result.error});return true;}
+        reply(201,{token:result.token,snapshot:result.snapshot});return true;
+      }
+      const result=await options.processInstructionTurn({sessionId:id,runId:value.runId,messageId:value.messageId,turnToken:value.turnToken});
+      reply(200,result);return true;
+    }
     if (!resource && req.method==='GET') {reply(200,get.get(id));return true;}
     if(resource==='topic-mode' && req.method==='GET'){reply(200,{enabled:typeof options.topicProcess==='function',...(options.mockModel?{mockModel:true,failSummary:!!options.mockSummaryFailure?.()}:{})});return true;}
     if(resource==='segments' && req.method==='POST'){

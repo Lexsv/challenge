@@ -17,6 +17,8 @@ import { isWeek2Provider, unsupportedWeek2ProviderMessage, week2ProviderOptions 
 import { SessionDeletion } from "./session-deletion";
 import { SessionRow } from "./session-row";
 import { submitSession } from "./session-send";
+import { finishProfileTurn, prepareProfileTurn } from './instruction-turn-flow';
+import { HabitsConfirmationCard, createHabitsDecision, decisionNotice, proposalIsActionable, scheduleProposalExpiry, type HabitsProposal } from './habits-confirmation-card';
 import { credentials } from "./saved-credentials";
 import { HistoryWriter, restoreHistory } from "./conversation-history";
 import * as week2Api from "./session-api";
@@ -214,6 +216,7 @@ type LabProps = {
   mockUsers?: readonly MockUser[];
   profileRevision?: number;
   onSessionsChanged?: () => void;
+  onProfilesChanged?: () => void;
   sessionListRequests?: SessionListRequests;
   toolRegistry: ToolRegistry;
   registry: ProviderRegistry;
@@ -238,6 +241,7 @@ export function Week2AgentToolLab(props: LabProps) {
   const [localListRequests] = useState(() => new SessionListRequests());
   const listRequests = props.sessionListRequests ?? localListRequests;
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [proposalSwitchNotice,setProposalSwitchNotice]=useState('');
   const [context, setContext] = useState<{ id: string; x: number; y: number } | null>(null);
   const [renameId, setRenameId] = useState<string | null>(null);
   const [title, setTitle] = useState("");
@@ -342,6 +346,7 @@ export function Week2AgentToolLab(props: LabProps) {
         </List>
       </Paper>
       <Box sx={{ minWidth: 0 }}>
+        {proposalSwitchNotice && <Alert severity="warning" onClose={()=>setProposalSwitchNotice('')}>{proposalSwitchNotice}</Alert>}
         {!selectedId && (
           <Box sx={{ display: "grid", gridTemplateColumns: sessionChatColumns, gap: 2, alignItems: "start", minWidth: 0 }}>
             <EmptySessionChat showEmptyState={loaded && !loading && sessions.length === 0}
@@ -352,7 +357,7 @@ export function Week2AgentToolLab(props: LabProps) {
         {/* Keep each keyed chat mounted: its draft, timeline and pending run belong to that session. */}
         {sessions.map((session) => (
           <Box key={session.conversation.id} hidden={selectedId !== session.conversation.id}>
-            <SessionChat {...props} active={selectedId === session.conversation.id} initialConversation={session} title={session.conversation.title ?? "New session"} />
+            <SessionChat {...props} onProposalDismissed={setProposalSwitchNotice} active={selectedId === session.conversation.id} initialConversation={session} title={session.conversation.title ?? "New session"} />
           </Box>
         ))}
       </Box>
@@ -390,7 +395,7 @@ export function Week2AgentToolLab(props: LabProps) {
   );
 }
 
-type SessionChatProps = LabProps & {initialConversation: ManagerConversationState; active?: boolean; title: string};
+type SessionChatProps = LabProps & {initialConversation: ManagerConversationState; active?: boolean; title: string;onProposalDismissed?:(message:string)=>void};
 
 export function SessionChat(props: SessionChatProps) {
   const {openSlidingSession, openStickySession, openMemorySession, emptySession, selectSlidingSession, selectStickySession, selectMemorySession, saveFullContext} = props.week3 ? week3Api : week2Api;
@@ -453,6 +458,8 @@ export function SessionChat(props: SessionChatProps) {
 
 function SessionChatView({
   week3,
+  onProfilesChanged,
+  onProposalDismissed,
   toolRegistry,
   registry,
   openAIModel,
@@ -468,6 +475,8 @@ function SessionChatView({
   switching,
 }: {
   week3?: boolean;
+  onProfilesChanged?:()=>void;
+  onProposalDismissed?:(message:string)=>void;
   toolRegistry: ToolRegistry;
   registry: ProviderRegistry;
   openAIModel: string;
@@ -565,6 +574,29 @@ function SessionChatView({
   useEffect(()=>{if(!active || !memory)return;let current=true;void loadMemory(initialConversation.conversation.id).then(value=>{if(current)setMemoryEntries(value.entries);}).catch(()=>{if(current)setHistoryError('Could not load Key-Value Memory.');});return()=>{current=false;};},[active,memory,initialConversation.conversation.id]);
 
   const [historyError, setHistoryError] = useState("");
+  const [instructionNotice,setInstructionNotice]=useState('');
+  const [instructionSuccess,setInstructionSuccess]=useState('');
+  const [habitsProposal,setHabitsProposal]=useState<{proposal:HabitsProposal;deadline:number}>();
+  const [decisionPending,setDecisionPending]=useState(false);
+  const decisionLock=useRef(false);
+  const activeRef=useRef(active), sessionGeneration=useRef(0);
+  if(activeRef.current && !active)sessionGeneration.current++;
+  activeRef.current=active;
+  useEffect(()=>{
+    if(!active && habitsProposal){
+      setHabitsProposal(undefined);
+      onProposalDismissed?.(decisionLock.current ? 'Profile confirmation dismissed; a submitted decision may still complete.' : 'Pending profile confirmation dismissed after switching sessions.');
+    }
+  },[active,habitsProposal,onProposalDismissed]);
+  useEffect(()=>{
+    if(!habitsProposal)return;
+    return scheduleProposalExpiry(habitsProposal.deadline,()=>{
+      if(decisionLock.current)return;
+      setHabitsProposal(current=>current?.proposal.proposalId===habitsProposal.proposal.proposalId ? undefined : current);
+      setInstructionNotice('Profile confirmation expired; no decision was sent.');
+    });
+  },[habitsProposal]);
+  const [decideHabits]=useState(()=>createHabitsDecision(initialConversation.conversation.id));
   const [historyAttempt, setHistoryAttempt] = useState(0);
   const [saveFailed, setSaveFailed] = useState(false);
   const [retryingSave, setRetryingSave] = useState(false);
@@ -694,18 +726,20 @@ function SessionChatView({
       category: 'SYSTEM', status: 'failed', description,
     }]),
     onAccepted: () => {
-      setRunning(true); setInput(""); stickToBottomRef.current=true;
+      setRunning(true); setInput(""); setInstructionNotice(''); setInstructionSuccess(''); stickToBottomRef.current=true;
       const id=crypto.randomUUID(); pendingQuestionId.current=id;
       setUiEvents(events=>[...events,{kind:'message',id,runId:'ui',role:'user',text:input.trim(),createdAt:Date.now()}]);
     },
     onSettled: () => setRunning(false),
     run: async (question) => {
+      const turnGeneration=sessionGeneration.current;
       let working = conversation ? structuredClone(conversation) : createManagerConversation(title);
       working.conversation.title = title;
       let runStarted = false;
       try {
-        // Keep one immutable snapshot for the entire turn; it is not yet sent to the model.
-        const personalizationSnapshot=week3 ? await week3Api.loadPersonalizationSnapshot(working.conversation.id) : undefined;
+        const initialSnapshot=week3 ? await week3Api.loadPersonalizationSnapshot(working.conversation.id) : undefined;
+        const prepared=initialSnapshot ? await prepareProfileTurn(initialSnapshot) : undefined;
+        const personalizationSnapshot=prepared?.snapshot;
         if(!fullHistory.current){
           working = restoreHistory(initialConversation, await loadHistory(initialConversation.conversation.id));
           fullHistory.current = true;
@@ -732,6 +766,7 @@ function SessionChatView({
         const pendingResult = manager.run({
           state: working,
           ...(personalizationSnapshot ? {personalizationSnapshot} : {}),
+          ...(prepared?.ids ? {turnIds:prepared.ids} : {}),
           ...(sessionMemory ? {sessionMemory} : memory ? {keyValue:{load:async()=>{const value=await loadMemory(working.conversation.id); memoryRevision=value.revision; return value.entries;},save:async(entries:MemoryEntry[])=>{const value=await saveMemory(working.conversation.id,{revision:memoryRevision,entries});memoryRevision=value.revision;setMemoryEntries(value.entries);}}} : sliding ? {contextMode:'sliding' as const, windowSize:recentMessages} : fullContext ? {contextMode: 'full' as const} : contextStrategy === 'key-facts' ? { keyFacts: { recentMessages, load: () => loadSessionFacts(working.conversation.id), save: async (value: Parameters<typeof saveSessionFacts>[1]) => { await saveSessionFacts(working.conversation.id, value); setFactsRevision(n=>n+1); } } } : {}),
           onEvent: async (event) => {
             if(event.type==='message' && event.payload.role==='user' && pendingQuestionId.current){
@@ -753,9 +788,11 @@ function SessionChatView({
         // run() records the user message before its first provider await.
         setConversation(structuredClone(working));
         const result = await pendingResult;
+        let memoryCompleted=true;
         if (sessionMemory) {
           const messages = result.state.messages.filter(message=>message.runId===result.run.id);
-          if (messages[0]) try {await sessionMemory.finishCurrent(messages[0].id,messages.map(message=>({role:message.role,content:message.text})));} catch {setHistoryError('Could not update short-term memory. The original dialogue remains saved.');}
+          if (messages[0]) try {await sessionMemory.finishCurrent(messages[0].id,messages.map(message=>({role:message.role,content:message.text})));} catch {memoryCompleted=false;setHistoryError('Could not update short-term memory. The original dialogue remains saved.');}
+          else memoryCompleted=false;
         }
         if (sliding) {
           const events = await loadHistory(initialConversation.conversation.id);
@@ -763,6 +800,10 @@ function SessionChatView({
           setVisibleRuns(new Set(events.map(eventRunId))); setPageCursor({before:null,snapshot:events.at(-1)?.sequence ?? 0});
           setConversation(restoreHistory(initialConversation,events));
         } else setConversation(structuredClone(result.state));
+        if(prepared && result.run.status==='completed' && !result.error){
+          if(memoryCompleted){const outcome=await finishProfileTurn(prepared);if(outcome.notice)setInstructionNotice(outcome.notice);if(outcome.proposal){if(activeRef.current && turnGeneration===sessionGeneration.current)setHabitsProposal({proposal:outcome.proposal,deadline:performance.now()+outcome.proposal.expiresInMs});else onProposalDismissed?.('Pending profile confirmation dismissed after switching sessions.');}if(outcome.applied)onProfilesChanged?.();}
+          else if(prepared.ids)setInstructionNotice('Profile instruction processing was skipped because memory processing did not complete.');
+        }
         if (result.error) {
           setUiEvents((events) => [
             ...events,
@@ -811,6 +852,8 @@ function SessionChatView({
     <GlobalStyles styles={{ html: { overscrollBehaviorY: 'none' } }} />
     <Stack spacing={2} sx={{ minWidth: 0 }}>
       {historyError && <Alert severity="error" action={<Button disabled={retryingSave || running} onClick={() => { if (saveFailed) void retrySave(); else setHistoryAttempt((n) => n + 1); }}>Retry</Button>}>{historyError}</Alert>}
+      {instructionNotice && <Alert severity="warning">{instructionNotice}</Alert>}
+      {instructionSuccess && <Alert severity="success">{instructionSuccess}</Alert>}
       <Paper variant="outlined" sx={{ p: 2, pb: 3 }}>
         <Stack spacing={1.5}>
           <Stack direction="row" alignItems="flex-start" justifyContent="space-between" gap={1} sx={{ minWidth: 0 }}>
@@ -941,6 +984,19 @@ function SessionChatView({
             )}
           </Box>
           <Box sx={{ position: 'sticky', bottom: 24, zIndex: 1, bgcolor: 'background.paper' }}>
+          {habitsProposal && <HabitsConfirmationCard proposal={habitsProposal.proposal} pending={decisionPending || running} onDecision={decision=>{
+            if(decisionLock.current)return;
+            if(!proposalIsActionable(activeRef.current,habitsProposal.deadline)){setHabitsProposal(undefined);setInstructionNotice('Profile confirmation is no longer available; no decision was sent.');return;}
+            decisionLock.current=true;
+            setDecisionPending(true);setInstructionNotice('');setInstructionSuccess('');
+            void decideHabits(habitsProposal.proposal.proposalId,decision).then(result=>{
+              if(!result)return;
+              setHabitsProposal(current=>current?.proposal.proposalId===habitsProposal.proposal.proposalId ? undefined : current);
+              const message=decisionNotice(result.status);
+              if(result.status==='applied'){setInstructionSuccess(message);onProfilesChanged?.();}
+              else if(message)setInstructionNotice(message);
+            }).finally(()=>{decisionLock.current=false;setDecisionPending(false);});
+          }} />}
           <ChatComposer
             draft={input}
             onDraftChange={setInput}

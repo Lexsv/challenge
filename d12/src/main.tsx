@@ -896,7 +896,7 @@ export function App({
               />
             </Box>
             <Box role="tabpanel" aria-labelledby="labs-week3-tab" hidden={labsTab !== "week3"}>
-              <Week2AgentToolLab week3 profileRevision={profileRevision} sessionListRequests={week3SessionRequests} onSessionsChanged={()=>setSessionsRevision(current=>current+1)} toolRegistry={toolRegistry} registry={registry} openAIModel={openAIModel} onOpenAIModelChange={setOpenAIModel} openAIKey={key} openCodeKeys={openCodeKeys} />
+              <Week2AgentToolLab week3 profileRevision={profileRevision} sessionListRequests={week3SessionRequests} onSessionsChanged={()=>setSessionsRevision(current=>current+1)} onProfilesChanged={()=>setProfileRevision(current=>current+1)} toolRegistry={toolRegistry} registry={registry} openAIModel={openAIModel} onOpenAIModelChange={setOpenAIModel} openAIKey={key} openCodeKeys={openCodeKeys} />
             </Box>
             <Typography variant="caption" color="text.secondary">
               Week 2 conversation history is saved locally. Agents, Week 1 history, and built-in credentials reset on reload.
@@ -1415,7 +1415,7 @@ export function App({
           aria-labelledby="tab-users"
           hidden={tab !== "users"}
         >
-          <UsersPage sessionsRevision={sessionsRevision} onProfileMutationStart={()=>week3SessionRequests.invalidate()} onProfileMutationSettled={()=>{week3SessionRequests.invalidate();setProfileRevision(current=>current+1);setSessionsRevision(current=>current+1);}} onProfilesChanged={()=>{week3SessionRequests.invalidate();setProfileRevision(current=>current+1);setSessionsRevision(current=>current+1);}} />
+          <UsersPage sessionsRevision={sessionsRevision} profilesRevision={profileRevision} onProfileMutationStart={()=>week3SessionRequests.invalidate()} onProfileMutationSettled={()=>{week3SessionRequests.invalidate();setProfileRevision(current=>current+1);setSessionsRevision(current=>current+1);}} onProfilesChanged={()=>{week3SessionRequests.invalidate();setProfileRevision(current=>current+1);setSessionsRevision(current=>current+1);}} />
         </Box>
         <Box
           role="tabpanel"

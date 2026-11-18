@@ -5,6 +5,11 @@ import type { MemoryEntry } from './key-value-memory';
 import type { MemorySnapshot } from './session-memory';
 
 export type PersonalizationSnapshot = Readonly<{sessionId:string;profileId:string;profileRevision:number;habits:string}>;
+export type TurnIdentifiers = Readonly<{runId:string;messageId:string}>;
+export type PreparedInstructionTurn = Readonly<{token:string;snapshot:PersonalizationSnapshot}>;
+export type InstructionChange = {action:'ADD';after:string}|{action:'UPDATE';before:string;after:string}|{action:'REMOVE';before:string};
+export type InstructionTurnOutcome = {status:'confirmation_required';proposalId:string;expiresInMs:number;changes:InstructionChange[]}|{status:'applied'|'unchanged';revision:number}|{status:'general_skipped'|'invalid_token'|'mismatch'|'missing_message'|'ambiguous_message'|'incomplete_run'|'detector_failure'|'conflict'|'clarification_required'|'persistence_failure'|'unknown_commit'|'archive_failure'};
+export type InstructionDecisionOutcome = {status:'applied'|'unchanged';revision:number}|{status:'rejected'|'invalid_proposal'|'expired_proposal'|'conflict'|'clarification_required'|'persistence_failure'|'unknown_commit'|'mismatch'};
 export type PersonalizationErrorCode = 'session_not_found' | 'profile_not_found' | 'invalid_association' | 'database_error' | 'unavailable';
 export class PersonalizationError extends Error {
   constructor(readonly code:PersonalizationErrorCode) {
@@ -26,6 +31,33 @@ export async function loadPersonalizationSnapshot(sessionId:string):Promise<Pers
   const data=value.data;
   if (!data || data.sessionId!==sessionId || typeof data.profileId!=='string' || !data.profileId.trim() || data.profileId!==data.profileId.trim() || !Number.isSafeInteger(data.profileRevision) || data.profileRevision!<1 || typeof data.habits!=='string' || (data.profileId==='general' && data.habits!=='')) throw new PersonalizationError('invalid_association');
   return Object.freeze({sessionId:data.sessionId,profileId:data.profileId,profileRevision:data.profileRevision!,habits:data.habits});
+}
+
+export async function prepareInstructionTurn(sessionId:string,ids:TurnIdentifiers):Promise<PreparedInstructionTurn> {
+  const value=await request(`/${encodeURIComponent(sessionId)}/turn-context`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(ids)}) as {token?:unknown;snapshot?:Partial<PersonalizationSnapshot>};
+  const data=value?.snapshot;
+  if(typeof value?.token!=='string' || !/^[A-Za-z0-9_-]{43}$/.test(value.token) || !data || data.sessionId!==sessionId || typeof data.profileId!=='string' || !data.profileId.trim() || data.profileId!==data.profileId.trim() || !Number.isSafeInteger(data.profileRevision) || data.profileRevision!<1 || typeof data.habits!=='string' || (data.profileId==='general' && data.habits!==''))throw new Error('Invalid turn context.');
+  return Object.freeze({token:value.token,snapshot:Object.freeze({sessionId:data.sessionId,profileId:data.profileId,profileRevision:data.profileRevision!,habits:data.habits})});
+}
+
+export async function completeInstructionTurn(sessionId:string,ids:TurnIdentifiers,token:string):Promise<InstructionTurnOutcome> {
+  const value=await request(`/${encodeURIComponent(sessionId)}/turn-completion`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...ids,turnToken:token})}) as {status?:unknown;revision?:unknown;proposalId?:unknown;expiresInMs?:unknown;changes?:unknown};
+  if(value?.status==='confirmation_required'){
+    const changes=value.changes;
+    if(typeof value.proposalId!=='string' || !/^[A-Za-z0-9_-]{43}$/.test(value.proposalId) || !Number.isSafeInteger(value.expiresInMs) || (value.expiresInMs as number)<1 || !Array.isArray(changes) || !changes.length || changes.length>16 || !changes.every(change=>change && typeof change==='object' && (change.action==='ADD' ? Object.keys(change).length===2 && typeof change.after==='string' : change.action==='UPDATE' ? Object.keys(change).length===3 && typeof change.before==='string' && typeof change.after==='string' : change.action==='REMOVE' && Object.keys(change).length===2 && typeof change.before==='string')))throw new Error('Invalid confirmation response.');
+    return value as InstructionTurnOutcome;
+  }
+  const statuses=['applied','unchanged','general_skipped','invalid_token','mismatch','missing_message','ambiguous_message','incomplete_run','detector_failure','conflict','clarification_required','persistence_failure','unknown_commit','archive_failure'];
+  if(!value || typeof value.status!=='string' || !statuses.includes(value.status) || (['applied','unchanged'].includes(value.status) && (!Number.isSafeInteger(value.revision) || (value.revision as number)<1)))throw new Error('Invalid turn completion response.');
+  return value as InstructionTurnOutcome;
+}
+
+/** Explicit, proposal-specific decision; the server owns the actual change and revision. */
+export async function decideInstructionProposal(sessionId:string,proposalId:string,decision:'accept'|'reject'):Promise<InstructionDecisionOutcome> {
+  const value=await request(`/${encodeURIComponent(sessionId)}/instruction-decision`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({proposalId,decision})}) as {status?:unknown;revision?:unknown};
+  const statuses=['applied','unchanged','rejected','invalid_proposal','expired_proposal','conflict','clarification_required','persistence_failure','unknown_commit','mismatch'];
+  if(!value || typeof value.status!=='string' || !statuses.includes(value.status) || (['applied','unchanged'].includes(value.status) && (!Number.isSafeInteger(value.revision) || (value.revision as number)<1)))throw new Error('Invalid proposal decision response.');
+  return value as InstructionDecisionOutcome;
 }
 
 export async function loadSessionMemory(id: string): Promise<MemorySnapshot> {

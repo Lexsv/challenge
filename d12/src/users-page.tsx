@@ -145,7 +145,7 @@ export function UsersView({ state, counts=null, onRetry, onAdd = () => {}, onEdi
   </Stack>;
 }
 
-export function UsersPage({sessionsRevision=0,onProfilesChanged,onProfileMutationStart,onProfileMutationSettled}: {sessionsRevision?:number;onProfilesChanged?:()=>void;onProfileMutationStart?:()=>void;onProfileMutationSettled?:()=>void} = {}) {
+export function UsersPage({sessionsRevision=0,profilesRevision=0,onProfilesChanged,onProfileMutationStart,onProfileMutationSettled}: {sessionsRevision?:number;profilesRevision?:number;onProfilesChanged?:()=>void;onProfileMutationStart?:()=>void;onProfileMutationSettled?:()=>void} = {}) {
   const [state, setState] = useState<ProfilesState>({status:'loading'});
   const [attempt, setAttempt] = useState(0);
   const [draft, setDraft] = useState<ProfileDraft | null>(null);
@@ -162,7 +162,7 @@ export function UsersPage({sessionsRevision=0,onProfilesChanged,onProfileMutatio
     setState({status:'loading'});
     loadProfiles(fetch, controller.signal).then(profiles => { if (!controller.signal.aborted) setState({status:'loaded',profiles}); }).catch(() => { if (!controller.signal.aborted) setState({status:'error'}); });
     return () => controller.abort();
-  }, [attempt]);
+  }, [attempt,profilesRevision]);
   useEffect(()=>{
     let active=true;setCounts(null);
     listSessions().then(items=>{if(active)setCounts(sessionCounts(items));}).catch(()=>{if(active)setCounts(null);});
