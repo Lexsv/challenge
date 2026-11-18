@@ -1,6 +1,8 @@
 # Day 12 — Personalization
 
-Day 12 starts from the completed Day 11 lab with an independent **Labs → Week 3** workspace. Week 3 uses short-term dialogue, a compressed summary, and extracted session facts with the existing Manager, providers, tools, logs, and session statistics. Original dialogue remains in SQLite. Personalization features are not implemented yet.
+Day 12 starts from the completed Day 11 lab with an independent **Labs → Week 3** workspace. Week 3 uses short-term dialogue, a compressed summary, and extracted session facts with the existing Manager, providers, tools, logs, and session statistics. Original dialogue remains in SQLite.
+
+Users can create context profiles with persistent free-text Habits, assign a profile when creating a session, and edit its Habits in the Users tab. Profiles, Habits, and session associations are stored in SQLite; the General profile remains immutable. When the optional persistent-instruction detector is enabled, it can propose adding, updating, or removing Habits after a completed turn. A proposal is applied only after explicit **Apply** confirmation; **Discard** leaves Habits unchanged. Confirmed changes are used on subsequent turns. Detection is model-dependent and may miss an instruction; Habits can also be edited manually.
 
 Week 1 and Week 2 remain available. Week 3 sessions, history, and memory use separate `week3_sessions`, `week3_history_events`, and `week3_session_memory` SQLite tables; shared providers and tools remain available across the lab. The complete Week 3 history is loaded when a session opens.
 

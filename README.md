@@ -14,6 +14,8 @@ Each training day is maintained as an independent project directory at the repos
 | 8 | Session History and Context — paginate saved conversations and trim Manager history to fit the model | [Day 8 source](d8/) | — | — |
 | 9 | Context Management — compare token budgets and extracted key facts while preserving the full dialogue | [Day 9 source](d9/) | — | — |
 | 10 | Context Strategies — explore full context, sliding windows, sticky facts, and key-value memory | [Day 10 source](d10/) | — | — |
+| 11 | Three-Layer Memory — short-term context, compressed summaries, long-term facts, and SQLite persistence | [Day 11 source](d11/) | — | — |
+| 12 | Personalization — user profiles, persistent Habits, instruction detection, and Apply/Discard confirmation | [Day 12 source](d12/) | — | — |
 
 Historical tag links point to the original published revisions.
 
