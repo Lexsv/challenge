@@ -16,6 +16,7 @@ Each training day is maintained as an independent project directory at the repos
 | 10 | Context Strategies — explore full context, sliding windows, sticky facts, and key-value memory | [Day 10 source](d10/) | — | — |
 | 11 | Three-Layer Memory — short-term context, compressed summaries, long-term facts, and SQLite persistence | [Day 11 source](d11/) | — | — |
 | 12 | Personalization — user profiles, persistent Habits, instruction detection, and Apply/Discard confirmation | [Day 12 source](d12/) | — | — |
+| 13 | Task State Machine — formal task lifecycle, controlled state transitions, code-enforced validation, and pause/resume support (planned) | [Day 13 source](d13/) | — | — |
 
 Historical tag links point to the original published revisions.
 
