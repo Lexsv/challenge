@@ -44,7 +44,12 @@ async function fixture(run: (ctx: {
   };
   const stop = () => new Promise<void>((resolve, reject) => server!.close((error) => error ? reject(error) : resolve()));
   const api = (path: string, method = 'GET', body?: unknown, headers: Record<string, string> = {}) => fetch(`${base}/api/${path}`, { method, headers: { Origin: base, 'Content-Type': 'application/json', ...headers }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
-  const call = (provider = 'openai', action = '', method = 'GET', body?: unknown, headers?: Record<string, string>) => api(`credentials${provider ? `/${provider}` : ''}${action}`, method, body, headers);
+  let revision = 0;
+  const call = (provider = 'openai', action = '', method = 'GET', body?: unknown, headers?: Record<string, string>) => {
+    const next=++revision;
+    const value=action==='/verify' ? {clientId:'fixture',revision:next,...(body as object)} : body;
+    return api(`credentials${provider ? `/${provider}` : ''}${action}`, method, value, method==='DELETE' ? {'X-Credential-Client':'fixture','X-Credential-Revision':String(next),...headers} : headers);
+  };
   try { await start(); await run({ api, call, restart: async () => { await stop(); await start(); }, values, store, upstream }); }
   finally { if (server?.listening) await stop(); await rm(folder, { recursive: true, force: true }); }
 }
@@ -345,4 +350,19 @@ it('shows a spinner only for the provider with a saved key and a pending Verify 
   expect(markup('openai')).not.toContain('role="progressbar"');
   expect(markup('opencode-console')).toContain('Not verified');
   expect(request.mock.calls.filter(([, action]) => action === '/verify')).toHaveLength(1);
+});
+
+it('requires a fresh client revision for each credential mutation, including every member of a bulk delete',async()=>{
+  await fixture(async({api,values,store})=>{
+    for(const id of ['openai','opencode-console','opencode-go'])values.set(id,'fixture');
+    const erase=(revision?:string,provider='')=>api('credentials'+provider,'DELETE',undefined,revision===undefined?{}:{'X-Credential-Client':'scope','X-Credential-Revision':revision});
+    for(const revision of [undefined,'0','1e3','-1','1.5'])expect((await erase(revision)).status).toBe(409);
+    expect((await api('credentials/openai/verify','POST',{key:'fixture'})).status).toBe(409);
+    expect(store.forget).not.toHaveBeenCalled();expect(values.size).toBe(3);
+    expect((await erase('3','/opencode-console')).status).toBe(200);
+    expect((await erase('2')).status).toBe(409);
+    expect((await erase('2','/openai')).status).toBe(200); // failed bulk operation reserved no revisions
+    expect((await erase('4')).status).toBe(200);
+    expect((await erase('4')).status).toBe(409);expect(values.size).toBe(0);
+  });
 });

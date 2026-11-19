@@ -7,12 +7,14 @@ export function ChatComposer({
   onSend,
   disabled,
   running,
+  sendDisabled = false,
 }: {
   draft: string;
   onDraftChange: (value: string) => void;
   onSend: () => void;
   disabled: boolean;
   running: boolean;
+  sendDisabled?: boolean;
 }) {
   return (
     <Box
@@ -32,7 +34,7 @@ export function ChatComposer({
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
-              onSend();
+              if (!sendDisabled && draft.trim()) onSend();
             }
           }}
           multiline
@@ -52,7 +54,7 @@ export function ChatComposer({
         <Button
           variant="contained"
           onClick={onSend}
-          disabled={disabled || !draft.trim()}
+          disabled={disabled || sendDisabled || !draft.trim()}
           aria-label="Send message"
           aria-busy={running}
           sx={{

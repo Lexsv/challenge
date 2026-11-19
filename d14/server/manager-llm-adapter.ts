@@ -11,6 +11,7 @@ export function createServerManagerLlmAdapter(
   config:{providerId:string;model:string},
   registry:ProviderRegistry,
   transport:InternalTransport=createSavedProviderTransport(),
+  requestTokenLimit?:number,
 ):ManagerLlmAdapter {
   if (!config || Object.keys(config).some(key=>key!=='providerId' && key!=='model')) throw new Error('Invalid server provider configuration.');
   const {providerId,model}=config;
@@ -18,7 +19,7 @@ export function createServerManagerLlmAdapter(
   const provider=providerId as ProviderId;
   if (typeof model!=='string' || !model.trim() || !registry.get(provider) || !registry.modelOptionsFor(provider).includes(model)) throw new Error('Unsupported server model.');
   if(registry.endpointFor(provider)!==DEFAULT_ENDPOINTS[provider])throw new Error('Server provider requires the fixed endpoint.');
-  return createManagerLlmAdapter({providerId:provider,model,apiKey:'',registry,transport:async(id,body)=>{
+  return createManagerLlmAdapter({providerId:provider,model,apiKey:'',registry,requestTokenLimit,transport:async(id,body)=>{
     const result=await transport(id,body);
     if(result.status===200){
       const value=result.body;

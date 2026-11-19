@@ -14,6 +14,7 @@ export interface BaseMessage {
 }
 
 export interface TextMessage extends BaseMessage {
+  blocked?: true;
   type: "text";
   text: string;
 }

@@ -25,7 +25,10 @@ export function mergeFacts(existing: readonly KeyFact[], incoming: readonly KeyF
 
 /** Extraction is isolated from Manager tool dispatch and uses only the selected source. */
 export class FactExtractor {
-  constructor(private readonly adapter: ManagerLlmAdapter) {}
+  private readonly adapter: ManagerLlmAdapter;
+  constructor(adapter: ManagerLlmAdapter) {
+    this.adapter = adapter;
+  }
   async extract(source: readonly ManagerLlmMessage[], onMeter?: (meter: RequestMeter) => Promise<void>): Promise<KeyFact[]> {
     if (!this.adapter.context) throw new Error('Fact extraction requires a local model budget estimate.');
     const assess = this.adapter.context.assess;

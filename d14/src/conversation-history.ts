@@ -17,12 +17,17 @@ export function restoreHistory(initial: ManagerConversationState, events: Histor
   const state = structuredClone(initial);
   state.messages = []; state.runs = []; state.toolExecutions = [];
   delete state.requestMeters;
+  delete state.blockedQuestions;
   state.contextEvents = []; state.runLastEvent = {};
   for (const event of structuredClone(events).sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0))) {
     if (event.sessionId !== state.conversation.id) throw new Error('History belongs to another session.');
     state.runLastEvent[event.type === 'run' ? event.payload.id : event.payload.runId] = event.id;
     if (event.type === 'context') state.contextEvents.push(event.payload);
-    else if (event.type === 'message') state.messages.push(event.payload);
+    else if (event.type === 'message') {
+      if (event.payload.blocked && event.payload.role === 'user')
+        (state.blockedQuestions ??= []).push(event.payload);
+      else state.messages.push(event.payload);
+    }
     else if (event.type === 'run') {
       const index = state.runs.findIndex((run) => run.id === event.payload.id);
       if (index < 0) state.runs.push(event.payload); else state.runs[index] = event.payload;
@@ -55,7 +60,10 @@ export function restoreHistory(initial: ManagerConversationState, events: Histor
 export class HistoryWriter {
   private pending: HistoryEvent[] = [];
   private flushing: Promise<void> | null = null;
-  constructor(private readonly save: (event: HistoryEvent) => Promise<unknown>) {}
+  private readonly save: (event: HistoryEvent) => Promise<unknown>;
+  constructor(save: (event: HistoryEvent) => Promise<unknown>) {
+    this.save = save;
+  }
   async append(event: HistoryEvent) { this.pending.push(structuredClone(event)); await this.flush(); }
   flush(): Promise<void> {
     if (this.flushing) return this.flushing;

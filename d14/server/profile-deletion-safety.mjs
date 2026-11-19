@@ -32,7 +32,15 @@ export function validateProfileDeletionSchema(db) {
   const tables = db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'").all();
   const present = new Set(tables.map(row => identifier(row.name)));
   const workers = Object.keys(workerExpected).some(name => present.has(name));
-  const graph = workers ? {...expected,...workerExpected} : expected;
+  const graph = {...expected,...(workers ? workerExpected : {})};
+  if(present.has('invariant_scopes')) Object.assign(graph,{
+    invariant_scopes:[signature('sessions','cascade','chat_id:id'), signature('week3_sessions','cascade','week3_id:id')],
+    session_invariants:[signature('invariant_scopes','cascade','session_id:id')],
+    invariant_audit_log:[signature('invariant_scopes','cascade','session_id:id')],
+    invariant_security_events:[signature('invariant_scopes','cascade','session_id:id')],
+    invariant_history_policies:[signature('invariant_scopes','cascade','session_id:id')],
+    invariant_content_checks:[signature('invariant_scopes','cascade','session_id:id')],
+  });
   const protectedTables = new Set(Object.keys(graph));
   if ([...protectedTables].some(name => !present.has(name))) throw new Error('Unsupported profile deletion schema.');
   for (const {name} of tables) {

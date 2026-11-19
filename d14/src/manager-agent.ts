@@ -1,8 +1,8 @@
-import { historicalContext, type ContextEvent } from "./context-compaction";
-import { KeyFactsContext, factHistory, type FactStore } from './key-facts-context';
-import { slidingWindow } from './sliding-window';
-import { maintainMemory, memoryAnswerContext, selectMemory, type MemoryEntry } from './key-value-memory';
-import { ManagerProviderError } from "./manager-llm-adapter";
+import { historicalContext, type ContextEvent } from "./context-compaction.ts";
+import { KeyFactsContext, factHistory, type FactStore } from './key-facts-context.ts';
+import { slidingWindow } from './sliding-window.ts';
+import { maintainMemory, memoryAnswerContext, selectMemory, type MemoryEntry } from './key-value-memory.ts';
+import { ManagerProviderError } from "./manager-llm-adapter.ts";
 import type { ModelRequestMeter, RequestMeter } from "./token-meter";
 import type { HistoryEvent } from "./conversation-history";
 import type {
@@ -13,7 +13,7 @@ import type {
 } from "./agent-tool-contracts";
 import type { ToolCatalogItem, ToolRegistry } from "./tool-runtime";
 import type { SessionMemory } from './session-memory';
-import { createFactHistoryTool } from './fact-history-tool';
+import { createFactHistoryTool } from './fact-history-tool.ts';
 import type { PersonalizationSnapshot } from './week3-session-api';
 
 export type ManagerLlmMessage = {
@@ -38,7 +38,7 @@ export type ManagerLlmResponse = {
 export interface ManagerLlmAdapter {
   context?: {
     assess(messages: readonly ManagerLlmMessage[], tools: readonly ToolCatalogItem[]): Promise<{ tokens?: number; limit?: number; target?: number; modelInputBudget?: number }>;
-    summarize(text: string, onMeter?: (meter: RequestMeter) => Promise<void>, maxTokens?: number, requireComplete?: boolean): Promise<string>;
+    summarize(text: string, onMeter?: (meter: RequestMeter) => Promise<void>, maxTokens?: number, requireComplete?: boolean, policyInstruction?: string): Promise<string>;
   };
   complete(input: {
     messages: readonly ManagerLlmMessage[];
@@ -51,6 +51,8 @@ export interface ManagerLlmAdapter {
 export type ManagerConversationState = {
   conversation: Conversation;
   messages: TextMessage[];
+  /** Display-only submissions excluded from model and memory context. */
+  blockedQuestions?: TextMessage[];
   runs: AgentRun[];
   toolExecutions: ToolExecution[];
   requestMeters?: ModelRequestMeter[];
@@ -104,11 +106,14 @@ const appendTextMessage = (
 };
 
 export class ManagerAgent {
-  constructor(
-    private readonly llm: ManagerLlmAdapter,
-    private readonly tools: ToolRegistry,
-    private readonly defaults: { maxIterations?: number } = {},
-  ) {}
+  private readonly llm: ManagerLlmAdapter;
+  private readonly tools: ToolRegistry;
+  private readonly defaults: { maxIterations?: number };
+  constructor(llm: ManagerLlmAdapter, tools: ToolRegistry, defaults: { maxIterations?: number } = {}) {
+    this.llm = llm;
+    this.tools = tools;
+    this.defaults = defaults;
+  }
 
   async run(input: {
     state: ManagerConversationState;

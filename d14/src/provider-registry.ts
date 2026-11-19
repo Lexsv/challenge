@@ -115,7 +115,7 @@ export class ProviderRegistry {
 export function createProviderRegistry(
   openAI: Adapter = respond,
   overrides: Record<string, Adapter> = {},
-  options: {catalogStorage?: () => CatalogStorage | undefined} = {},
+  options: {catalogFetch?:typeof fetch; catalogStorage?: () => CatalogStorage | undefined} = {},
 ) {
   const registry = new ProviderRegistry();
   registry.register({
@@ -157,7 +157,7 @@ export function createProviderRegistry(
       catalog: () => mode === "console" ? Array.from(new Set([...catalog.map((model) => model.id), ...discovered.keys()])).filter((model) => consoleModelSelectable(model, discovered.get(model))) : Array.from(new Set([...catalog.map((model) => model.id).filter((model) => goModelIds.has(model)), ...discovered.keys()])),
       discover: async () => {
         const version = endpointVersion;
-        const models = await discoverModels(mode, fetch, discoveryEndpoint(id, registry.endpointFor(id)!));
+        const models = await discoverModels(mode, options.catalogFetch ?? fetch, discoveryEndpoint(id, registry.endpointFor(id)!));
         if (version !== endpointVersion) throw new Error("Endpoint changed during model discovery.");
         if(mode === 'console') {
           try {saveModelCatalog(registry.endpointFor(id)!, models, storage());}

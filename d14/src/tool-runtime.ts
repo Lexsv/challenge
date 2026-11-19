@@ -330,11 +330,14 @@ export interface ExchangeRateSource {
 export class HttpExchangeRateSource implements ExchangeRateSource {
   readonly sourceName = "frankfurter.app";
 
-  constructor(
-    private readonly fetcher: typeof fetch = fetch,
-    private readonly timeoutMs = 8_000,
-    private readonly baseUrl = "https://api.frankfurter.dev/v1",
-  ) {}
+  private readonly fetcher: typeof fetch;
+  private readonly timeoutMs: number;
+  private readonly baseUrl: string;
+  constructor(fetcher: typeof fetch = fetch, timeoutMs = 8_000, baseUrl = "https://api.frankfurter.dev/v1") {
+    this.fetcher = fetcher;
+    this.timeoutMs = timeoutMs;
+    this.baseUrl = baseUrl;
+  }
 
   async getRate(fromCurrency: string, toCurrency: string): Promise<number | undefined> {
     if (fromCurrency === toCurrency) return 1;

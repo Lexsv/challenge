@@ -566,10 +566,10 @@ export function App({
               <ViewInArOutlined color="primary" sx={{ fontSize: 36 }} />
               <Box>
                 <Typography variant="h6" component="h1">
-                  Day 14 — Task State Machine
+                  Day 14 — Invariants
                 </Typography>
                 <Typography variant="caption" color="text.secondary">
-                  Week 3 / Day 14
+                  Week 3 / Day 14 · День 14 — Инвариантность
                 </Typography>
               </Box>
             </Stack>

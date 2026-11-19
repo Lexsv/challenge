@@ -1,3 +1,6 @@
+import { invariantProvider } from "./invariant-provider.mjs";
+import { createInvariantRoutes } from './invariant-routes.mjs';
+import { InvariantError } from './invariant-turn.mjs';
 import { createHistoryPager } from './history-pages.mjs';
 import { createWeek3Routes } from './week3-sessions.mjs';
 import { createWorkerRepository } from './worker-repository.mjs';
@@ -183,7 +186,7 @@ export function createSessionServer(databasePath = fileURLToPath(new URL('../dat
     return createInstructionCoordinator({db,profiles,resolve:resolveSessionPersonalization,contexts:turnContexts,proposals:instructionProposals,detector}).process(input);
   };
   const decideInstructionProposal=input=>createInstructionCoordinator({db,profiles,resolve:resolveSessionPersonalization,contexts:turnContexts,proposals:instructionProposals,detector:unavailableDetector}).decide(input);
-  const week3Routes = createWeek3Routes(db, validateEvent, {topicProcess:options.topicProcess,mockModel:options.mockModel,mockSummaryFailure:options.mockSummaryFailure,turnContexts,processInstructionTurn,decideInstructionProposal});
+  const week3Routes = createWeek3Routes(db, validateEvent, {topicProcess:options.topicProcess,mockModel:options.mockModel,mockSummaryFailure:options.mockSummaryFailure,turnContexts,processInstructionTurn,decideInstructionProposal,checkChatWrite:(req,path)=>invariants.guard(req,path)});
   const workerRepository=createWorkerRepository(db),workerTransitions=createWorkerTransitionRepository(db, options.workerTransitionOptions);
   const evaluateWorker=async prepared=>{
     if(options.workerEvaluator)return options.workerEvaluator(prepared);
@@ -223,8 +226,13 @@ export function createSessionServer(databasePath = fileURLToPath(new URL('../dat
   const insertFunction = db.prepare('INSERT INTO custom_functions (id, name, description, pseudocode) VALUES (?, ?, ?, ?)');
   const updateFunction = db.prepare('UPDATE custom_functions SET name = ?, description = ?, pseudocode = ? WHERE id = ?');
   const deleteFunction = db.prepare('DELETE FROM custom_functions WHERE id = ?');
+  const policyProvider = invariantProvider(db,createSavedProviderTransport(options.credentialStore,options.fetcher),options.catalogFetch);
+  const invariants = createInvariantRoutes(db,options.invariantAdapter ?? policyProvider.adapter,
+    options.invariantAdapter ? undefined : policyProvider.compatibility);
   const server = createServer(async (req, res) => {
+    let protect;
     const reply = (status, body) => {
+      if(protect && status>=200 && status<300)body=protect(body);
       res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
       res.end(JSON.stringify(body));
     };
@@ -238,6 +246,8 @@ export function createSessionServer(databasePath = fileURLToPath(new URL('../dat
     const path = new URL(req.url, 'http://localhost').pathname;
     const match = path.match(/^\/api\/sessions\/([a-zA-Z0-9-]+)$/);
     try {
+      if (await invariants.route(req,path,reply)) return;
+      protect=invariants.guard(req,path);
       if (await profileRoutes(req, path, reply)) return;
       if (await week3Routes(req, path, reply)) return;
       if (await workerRoutes(req, path, reply)) return;
@@ -276,9 +286,10 @@ export function createSessionServer(databasePath = fileURLToPath(new URL('../dat
             const meta=part.metadata, target=ids.get(meta.id);
             insert.run(target,title,Date.now());
             db.prepare('UPDATE sessions SET requestTokenLimit=?,contextStrategy=?,recentMessages=?,fullContext=?,slidingSelected=?,stickySelected=?,memorySelected=? WHERE id=?').run(meta.requestTokenLimit,meta.contextStrategy,meta.recentMessages,meta.fullContext,meta.slidingSelected,meta.stickySelected,meta.memorySelected,target);
+            const view = invariants.historyView(meta.id);
             const eventIds = new Map(part.events.map(event=>[event.id,randomUUID()]));
             for (const event of part.events) {
-              const payload=JSON.parse(event.payload);
+              const {payload}=view({...event,payload:JSON.parse(event.payload)});
               if (payload.conversationId === meta.id) payload.conversationId=target;
               if (payload.sessionId === meta.id) payload.sessionId=target;
               if (payload.coveredEventId && eventIds.has(payload.coveredEventId)) payload.coveredEventId=eventIds.get(payload.coveredEventId);
@@ -289,10 +300,12 @@ export function createSessionServer(databasePath = fileURLToPath(new URL('../dat
             return target;
           };
           copy(snapshot.root,value.name.trim());
+          invariants.copyRules(id,newRoot);
           for (const [key,part] of Object.entries(snapshot.children)) {
             const child=copy(part,part.metadata.title);
             const table={sliding:'sliding_sessions',sticky:'sticky_sessions',memory:'memory_sessions'}[key];
             db.prepare(`INSERT INTO ${table}(parentId,childId) VALUES (?,?)`).run(newRoot,child);
+            invariants.sealCopiedHistory(child);
           }
           db.exec('COMMIT'); reply(201,get.get(newRoot)); return;
         } catch (error) { db.exec('ROLLBACK'); throw error; }
@@ -312,6 +325,7 @@ export function createSessionServer(databasePath = fileURLToPath(new URL('../dat
           if (!req.headers['content-type']?.startsWith('application/json')) {reply(415,{error:'JSON required.'});return;}
           let body=''; for await (const chunk of req) {body+=chunk;if(Buffer.byteLength(body)>1048576){reply(413,{error:'Memory too large.'});return;}}
           let value; try {value=JSON.parse(body);} catch {reply(400,{error:'Invalid JSON.'});return;}
+          invariants.guard(req,path);
           if (!value || Object.keys(value).sort().join() !== 'entries,revision' || !Number.isSafeInteger(value.revision) || value.revision<0 || !Array.isArray(value.entries) || value.entries.some(e=>!e || typeof e !== 'object' || Array.isArray(e) || Object.keys(e).sort().join() !== 'id,key,value' || typeof e.id !== 'string' || !/^[a-zA-Z0-9-]{1,100}$/.test(e.id) || typeof e.key !== 'string' || !e.key.trim() || e.key.length>300 || typeof e.value !== 'string' || !e.value.trim() || e.value.length>100000) || new Set(value.entries.map(e=>e.id)).size !== value.entries.length) {reply(400,{error:'Invalid memory.'});return;}
           db.exec('BEGIN IMMEDIATE');
           try {
@@ -334,12 +348,14 @@ export function createSessionServer(databasePath = fileURLToPath(new URL('../dat
             db.prepare("UPDATE sessions SET contextStrategy='key-facts', recentMessages=? WHERE id=?").run(parent.recentMessages,id);
             db.prepare('INSERT INTO sticky_sessions (parentId, childId) VALUES (?,?)').run(parentId,id);
             if (parent.contextStrategy === 'key-facts' || !parent.fullContext) {
+              const view = invariants.historyView(parentId);
               for (const row of history.all(parentId)) {
-                const payload=JSON.parse(row.payload);
+                const {payload} = view({...row,payload:JSON.parse(row.payload)});
                 if (payload.conversationId === parentId) payload.conversationId=id;
                 if (payload.sessionId === parentId) payload.sessionId=id;
                 addEvent.run(randomUUID(),id,id,row.type,JSON.stringify(payload));
               }
+              invariants.sealCopiedHistory(id);
               const facts=getFacts.get(parentId); if (facts) putFacts.run(id,facts.facts,facts.coveredMessageId);
             }
             child={childId:id};
@@ -410,6 +426,7 @@ export function createSessionServer(databasePath = fileURLToPath(new URL('../dat
           for await (const chunk of req) { body += chunk; if (Buffer.byteLength(body) > 1048576) { reply(413, {error:'Fact table too large.'}); return; } }
           let value; try { value=JSON.parse(body); } catch { reply(400, {error:'Invalid JSON.'}); return; }
           if (!value || Object.keys(value).sort().join() !== 'coveredMessageId,expectedCoveredMessageId,facts' || !Array.isArray(value.facts) || typeof value.coveredMessageId !== 'string' || !(value.expectedCoveredMessageId === null || typeof value.expectedCoveredMessageId === 'string') || value.facts.some(f => !f || typeof f !== 'object' || Array.isArray(f) || Object.keys(f).sort().join() !== 'attribute,subject,value' || ['subject','attribute','value'].some(k => typeof f[k] !== 'string' || !f[k].trim()))) { reply(400, {error:'Invalid fact table.'}); return; }
+          invariants.guard(req,path);
           const boundary = findEntity.get(sessionId, 'message', value.coveredMessageId);
           if (!boundary) { reply(400, {error:'Unknown coverage message.'}); return; }
           db.exec('BEGIN IMMEDIATE');
@@ -446,6 +463,7 @@ export function createSessionServer(databasePath = fileURLToPath(new URL('../dat
           if (!get.get(sessionId)) { reply(404, { error: 'Session not found.' }); return; }
           let event;
           try { event = JSON.parse(body); } catch { reply(400, { error: 'Invalid JSON.' }); return; }
+          invariants.guard(req,path);
           const payload = validateEvent(event, sessionId);
           if (!payload) { reply(400, { error: 'Invalid history event.' }); return; }
           const serialized = JSON.stringify(payload);
@@ -558,7 +576,8 @@ export function createSessionServer(databasePath = fileURLToPath(new URL('../dat
         reply(200, get.get(match[1])); return;
       }
       reply(404, { error: 'Not found.' });
-    } catch {
+    } catch (error) {
+      if(error instanceof InvariantError){reply(error.status,{error:error.message});return;}
       reply(500, { error: 'Session storage operation failed.' });
     }
   });

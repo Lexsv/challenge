@@ -1,4 +1,4 @@
-import { FactExtractor, mergeFacts, type KeyFact } from './fact-extractor';
+import { FactExtractor, mergeFacts, type KeyFact } from './fact-extractor.ts';
 import type { ManagerConversationState, ManagerLlmAdapter, ManagerLlmMessage } from './manager-agent';
 import type { ToolCatalogItem } from './tool-runtime';
 import type { RequestMeter } from './token-meter';
@@ -31,7 +31,12 @@ export type FactStore = {
 
 export class KeyFactsContext {
   private saved?: {facts: KeyFact[]; coveredMessageId: string | null};
-  constructor(private readonly adapter: ManagerLlmAdapter, private readonly store: FactStore) {}
+  private readonly adapter: ManagerLlmAdapter;
+  private readonly store: FactStore;
+  constructor(adapter: ManagerLlmAdapter, store: FactStore) {
+    this.adapter = adapter;
+    this.store = store;
+  }
   async prepare(history: readonly FactHistoryMessage[], current: readonly ManagerLlmMessage[], tools: readonly ToolCatalogItem[], onMeter?: (meter: RequestMeter) => Promise<void>): Promise<ManagerLlmMessage[]> {
     if (!this.adapter.context || !Number.isSafeInteger(this.store.recentMessages) || this.store.recentMessages < 1) throw new Error('Sticky Facts requires a positive window and model budget estimate.');
     this.saved ??= await this.store.load();

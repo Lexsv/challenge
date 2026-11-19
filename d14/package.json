@@ -1,5 +1,5 @@
 {
-  "name": "day14-task-state-machine",
+  "name": "day14-invariants",
   "version": "0.1.0",
   "private": true,
   "type": "module",

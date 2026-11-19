@@ -1,4 +1,6 @@
 import { ChatDisclosure, chatStatusColor, chatTypeColor } from "./chat-disclosure";
+import ShieldOutlined from "@mui/icons-material/ShieldOutlined";
+import type {SecurityEvent} from "./chat-invariants";
 import { Box, Stack, Typography } from "@mui/material";
 import type { TimelineEvent } from "./week2-agent-tool-lab";
 import { AnswerMarkdown } from "./answer-markdown";
@@ -7,6 +9,54 @@ import { toolExecutionTypeMeta } from "./tool-execution-type";
 
 const titleCase = (value: string) =>
   value.charAt(0).toUpperCase() + value.slice(1).toLowerCase();
+
+const marker = "████████";
+
+function redactionExplanation(event: TimelineEvent) {
+  if (event.kind === "tool") {
+    const visible = JSON.stringify([event.arguments, event.error || event.output]);
+    if (visible.includes(marker)) return "A session rule hides marked tool data.";
+  }
+  if (event.kind !== "message" || event.role !== "assistant" || !event.text.includes(marker)) return;
+  // A withheld answer can retain punctuation around one or more markers.
+  return /[\p{L}\p{N}]/u.test(event.text.replaceAll(marker, ""))
+    ? "A session rule hides the marked parts of this response."
+    : "A session rule hides this entire response.";
+}
+
+function RedactionNotice({ explanation }: { explanation: string }) {
+  return (
+    <Typography component="div" variant="body2" sx={{ display: "flex", alignItems: "center", gap: 0.75, color: "warning.dark" }}>
+      <ShieldOutlined aria-hidden="true" sx={{ fontSize: 16, flexShrink: 0 }} />
+      {explanation}
+    </Typography>
+  );
+}
+
+function SecurityLog({event}:{event:SecurityEvent}) {
+  const label={blocked:"Request blocked",redacted:"Response redacted",withheld:"Response withheld"}[event.action];
+  return <ChatDisclosure label={<Typography component="span" variant="body2" sx={{display:"flex",gap:.5,alignItems:"center",color:"warning.dark"}}><ShieldOutlined fontSize="small"/>SECURITY · {label}</Typography>}>
+    <Typography variant="body2">The {event.stage==="input"?"requested operation":"generated content"} conflicted with an enabled session invariant.</Typography>
+    <Typography component="div" variant="caption" sx={{overflowWrap:"anywhere"}}>
+      Stage: {event.stage} · Action: {event.action} · {new Date(event.timestamp).toISOString()}<br/>
+      Invariant: {event.invariantId}<br/>Session: {event.sessionId}<br/>Turn: {event.turnId}
+    </Typography>
+  </ChatDisclosure>;
+}
+function BlockedRequestLog() {
+  return <Stack spacing={0.5}>
+    <Typography variant="body2" sx={{ display: "flex", alignItems: "center", gap: 0.5, color: "warning.dark" }}>
+      <ShieldOutlined aria-hidden="true" fontSize="small" />SECURITY · Request blocked
+    </Typography>
+    <Typography variant="body2">This request was blocked because it violates a content rule for this chat.</Typography>
+  </Stack>;
+}
+function toolText(value:unknown) {
+  const text = JSON.stringify(value, null, 2);
+  if (!text?.includes(marker)) return text;
+  return text.split(/(████████)/u).map((part,index)=>part===marker
+    ? <span key={index} role="img" aria-label="Redacted content" style={{backgroundColor:'black',color:'black'}}>{marker}</span> : part);
+}
 
 function ToolStep({
   event,
@@ -64,7 +114,7 @@ function ToolStep({
             fontSize: ".76rem",
           }}
         >
-          {JSON.stringify(event.arguments, null, 2)}
+          {toolText(event.arguments)}
         </Box>
         <Typography variant="subtitle2">Result</Typography>
         <Box
@@ -76,12 +126,9 @@ function ToolStep({
             fontSize: ".76rem",
           }}
         >
-          {JSON.stringify(
-            event.error ? { error: event.error } : event.output,
-            null,
-            2,
-          )}
+          {toolText(event.error ? {error:event.error}:event.output)}
         </Box>
+
       </Stack>
     </ChatDisclosure>
   );
@@ -136,9 +183,9 @@ type ChatRow =
       event: Extract<TimelineEvent, { kind: "message" }>;
     }
   | { kind: "activity"; id: string; event: TimelineEvent }
-  | { kind: "logs"; id: string; events: TimelineEvent[] };
+  | { kind: "logs"; id: string; createdAt: number; events: TimelineEvent[]; blocked?: boolean };
 
-export function groupChatEvents(events: readonly TimelineEvent[]): ChatRow[] {
+export function groupChatEvents(events: readonly TimelineEvent[], securityRuns = new Set<string>()): ChatRow[] {
   const steps = new Map<string, TimelineEvent[]>();
   for (const event of events) {
     if (event.kind === "message" || event.runId === "ui") continue;
@@ -148,8 +195,17 @@ export function groupChatEvents(events: readonly TimelineEvent[]): ChatRow[] {
   }
   const seen = new Set<string>();
   return events.flatMap<ChatRow>((event) => {
-    if (event.kind === "message")
-      return [{ kind: "message" as const, id: event.id, event }];
+    if (event.kind === "message") {
+      const message: ChatRow = { kind: "message", id: event.id, event };
+      if (event.role === "user" && event.blocked) {
+        return [message, { kind: "logs", id: event.runId, createdAt: event.createdAt, events: [], blocked: true }];
+      }
+      if (event.role === "assistant" && securityRuns.has(event.runId) && !steps.has(event.runId) && !seen.has(event.runId)) {
+        seen.add(event.runId);
+        return [{ kind: "logs", id: event.runId, createdAt: event.createdAt, events: [] }, message];
+      }
+      return [message];
+    }
     if (event.runId === "ui")
       return [{ kind: "activity" as const, id: event.id, event }];
     if (seen.has(event.runId)) return [];
@@ -158,6 +214,7 @@ export function groupChatEvents(events: readonly TimelineEvent[]): ChatRow[] {
       {
         kind: "logs" as const,
         id: event.runId,
+        createdAt: event.createdAt,
         events: steps.get(event.runId) ?? [],
       },
     ];
@@ -168,10 +225,32 @@ export function logsFailed(events: readonly TimelineEvent[]) {
   return events.some(event=>event.kind==='metering'?event.meter.status==='failed':event.kind!=='message'&&event.status==='failed');
 }
 
-export function ChatRunLog({ events }: { events: readonly TimelineEvent[] }) {
+export function ChatRunLog({ events,security=[] }: { events: readonly TimelineEvent[]; security?:readonly SecurityEvent[] }) {
+  const explanations = new Map<string, Set<string>>();
+  const securityRuns = new Set(security.map(event => event.turnId));
+  for (const event of events) {
+    const explanation = redactionExplanation(event);
+    if (!explanation) continue;
+    const notices = explanations.get(event.runId) ?? new Set<string>();
+    notices.add(explanation);
+    explanations.set(event.runId, notices);
+    securityRuns.add(event.runId);
+  }
+  const rows = groupChatEvents(events, securityRuns);
+  const runs = new Set(rows.filter(row => row.kind === "logs").map(row => row.id));
+  // Legacy audit-only blocks have no saved question. Place those by timestamp.
+  // New blocks follow their message, including when older pages are loaded.
+  for (const event of security) {
+    if (event.recordedQuestion || runs.has(event.turnId)) continue;
+    const index = rows.findIndex(row =>
+      (row.kind === "logs" ? row.createdAt : row.event.createdAt) > event.timestamp);
+    rows.splice(index < 0 ? rows.length : index, 0, {
+      kind: "logs", id: event.turnId, createdAt: event.timestamp, events: [], blocked: event.action === "blocked",
+    });
+  }
   return (
     <>
-      {groupChatEvents(events).map((row) => (
+      {rows.map((row) => (
         <Box
           key={`${row.kind}:${row.id}`}
           sx={{
@@ -222,17 +301,24 @@ export function ChatRunLog({ events }: { events: readonly TimelineEvent[] }) {
               )}
             </Box>
           ) : row.kind === "activity" ? (
-            <Activity event={row.event} />
+            row.event.kind === "tool" && redactionExplanation(row.event) ? (
+              <ChatDisclosure label="Logs · Security">
+                <RedactionNotice explanation="A session rule hides marked tool data." />
+                <Activity event={row.event} />
+              </ChatDisclosure>
+            ) : <Activity event={row.event} />
           ) : (
             <ChatDisclosure
               failed={logsFailed(row.events)}
               label={
                 <Typography variant="body2" color={logsFailed(row.events)?"error.main":"text.secondary"}>
-                  Logs{logsFailed(row.events) ? " · Failed" : ""}
+                  {row.blocked || securityRuns.has(row.id) ? "Logs · Security" : logsFailed(row.events) ? "Logs · Failed" : "Logs"}
                 </Typography>
               }
             >
               <Stack spacing={0.5}>
+                {Array.from(explanations.get(row.id) ?? [], explanation => <RedactionNotice key={explanation} explanation={explanation} />)}
+                {row.blocked ? <BlockedRequestLog /> : security.filter(e=>e.turnId===row.id).map(e=><SecurityLog key={e.turnId} event={e}/>)}
                 {row.events.map((event) => (
                   <Box
                     key={event.id}

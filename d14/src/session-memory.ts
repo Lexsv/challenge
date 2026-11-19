@@ -1,6 +1,6 @@
 import type { ManagerLlmAdapter, ManagerLlmMessage } from './manager-agent';
 import type { RequestMeter } from './token-meter';
-import { estimateContextInput } from './token-meter';
+import { estimateContextInput } from './token-meter.ts';
 import type { KeyFact } from './fact-extractor';
 
 export type MemoryFact = KeyFact & { status: 'confirmed' | 'assumed'; sources: string[]; correction?: boolean; supersedes?: {value:string;status:'confirmed'|'assumed';sources:string[]}[] };
@@ -82,7 +82,10 @@ export const DEFAULT_SHORT_TERM_TOKEN_BUDGET = 1000;
 const empty = (): MemoryData => ({ covered: [], summary: '', facts: [], short: [], buffer: [], extracted: [] });
 
 export class MemoryProcessor {
-  constructor(private readonly adapter: ManagerLlmAdapter) {}
+  private readonly adapter: ManagerLlmAdapter;
+  constructor(adapter: ManagerLlmAdapter) {
+    this.adapter = adapter;
+  }
   // The existing summarizer allows at most 1024 output tokens. Reserve that
   // allowance before selecting a source chunk; check the actual review too.
   private readonly reviewOutputReserve = 1024;
@@ -194,7 +197,18 @@ export class ContextBuilder {
 
 /** All mutations use optimistic revisions; coverage advances only with its summary. */
 export class SessionMemory {
-  constructor(private readonly store: MemoryStore, private readonly processor: MemoryProcessor, private readonly model: string, private readonly budget = DEFAULT_SHORT_TERM_TOKEN_BUDGET, private readonly beforeCompress?: (groups:readonly MemoryGroup[])=>Promise<void>) {}
+  private readonly store: MemoryStore;
+  private readonly processor: MemoryProcessor;
+  private readonly model: string;
+  private readonly budget: number;
+  private readonly beforeCompress?: (groups:readonly MemoryGroup[])=>Promise<void>;
+  constructor(store: MemoryStore, processor: MemoryProcessor, model: string, budget = DEFAULT_SHORT_TERM_TOKEN_BUDGET, beforeCompress?: (groups:readonly MemoryGroup[])=>Promise<void>) {
+    this.store = store;
+    this.processor = processor;
+    this.model = model;
+    this.budget = budget;
+    this.beforeCompress = beforeCompress;
+  }
   private async processMessage(existing: MemoryFact[], message: ManagerLlmMessage, sourceId: string, recent: ManagerLlmMessage[], onMeter?: (meter: RequestMeter) => Promise<void>): Promise<MemoryFact[]> {
     let facts = await this.processor.extract([message], onMeter, sourceId);
     const sourceText = message.content ?? '';

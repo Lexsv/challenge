@@ -65,13 +65,13 @@ export function createCredentialRoutes(store = new MacKeychainStore(), fetcher =
   const generations = new Map();
   const queues = new Map();
   const clientRevisions = new Map();
-  const acceptClientRevision = (provider, client, revision) => {
-    if (client === undefined && revision === undefined) return true;
+  const acceptClientRevision = (providers, client, revision) => {
+    if (typeof client !== 'string' || !/^[a-zA-Z0-9-]{1,100}$/.test(client) ||
+        !['string','number'].includes(typeof revision) || !/^[1-9]\d*$/.test(String(revision))) return false;
     const number = Number(revision);
-    if (typeof client !== 'string' || !/^[a-zA-Z0-9-]{1,100}$/.test(client) || !Number.isSafeInteger(number) || number < 1) return false;
-    const id = `${client}/${provider}`;
-    if (number < (clientRevisions.get(id) ?? 0)) return false;
-    clientRevisions.set(id, number);
+    const ids = providers.map(provider => client + '/' + provider);
+    if (!Number.isSafeInteger(number) || ids.some(id => number <= (clientRevisions.get(id) ?? 0))) return false;
+    for (const id of ids) clientRevisions.set(id, number);
     return true;
   };
   const generation = (provider) => generations.get(provider) ?? 0;
@@ -106,13 +106,13 @@ export function createCredentialRoutes(store = new MacKeychainStore(), fetcher =
     }
     if (!provider) {
       if (req.method !== 'DELETE') { reply(405, { error: 'DELETE required.' }); return true; }
-      if (Object.keys(endpoints).some((id) => !acceptClientRevision(id, req.headers['x-credential-client'], req.headers['x-credential-revision']))) { reply(409, { error: 'Credential operation superseded.' }); return true; }
+      if (!acceptClientRevision(Object.keys(endpoints), req.headers['x-credential-client'], req.headers['x-credential-revision'])) { reply(409, { error: 'A fresh client revision is required.' }); return true; }
       const results = Object.fromEntries(await Promise.all(Object.keys(endpoints).map(async (id) => [id, await forget(id)])));
       reply(200, { results, failed: Object.keys(results).filter((id) => results[id].removalFailed) }); return true;
     }
     if (!Object.hasOwn(endpoints, provider)) { reply(404, { error: 'Unsupported saved-key provider.' }); return true; }
     if (!operation && req.method === 'DELETE') {
-      if (!acceptClientRevision(provider, req.headers['x-credential-client'], req.headers['x-credential-revision'])) { reply(409, { error: 'Credential operation superseded.' }); return true; }
+      if (!acceptClientRevision([provider], req.headers['x-credential-client'], req.headers['x-credential-revision'])) { reply(409, { error: 'A fresh client revision is required.' }); return true; }
       reply(200, await forget(provider)); return true;
     }
     let revision = generation(provider);
@@ -131,7 +131,7 @@ export function createCredentialRoutes(store = new MacKeychainStore(), fetcher =
         reply(400, { error: 'Invalid key input.' }); return true;
       }
       if (operation === 'verify') {
-        if (!acceptClientRevision(provider, value.clientId, value.revision)) { reply(409, { error: 'Credential operation superseded.' }); return true; }
+        if (!acceptClientRevision([provider], value.clientId, value.revision)) { reply(409, { error: 'A fresh client revision is required.' }); return true; }
         // A newer explicit verification supersedes an older pending check/save.
         generations.set(provider, generation(provider) + 1);
         revision = generation(provider);

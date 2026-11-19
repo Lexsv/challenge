@@ -1,3 +1,4 @@
+import { usePolicyStatus, ChatInvariants, invariantRequest, InvariantRequestError } from './chat-invariants';
 import { readSessionSelection, resolveWorkerSelection, writeSessionSelection, type SessionSelection } from './session-selection';
 import { eventRunId, mergeHistoryPages, prependedScrollTop, retrySavedHistory } from './history-pagination';
 import { sessionLimitOnClose } from "./session-limit";
@@ -79,6 +80,7 @@ export type TimelineEvent =
       createdAt: number;
       role: "user" | "assistant" | "system";
       text: string;
+      blocked?: true;
       runId: string;
     }
   | {
@@ -119,8 +121,9 @@ export function buildWeek2Timeline(
   toolRegistry: ToolRegistry,
 ): TimelineEvent[] {
   if (!state) return [];
-  const messages: TimelineEvent[] = state.messages.map((message) => ({
+  const messages: TimelineEvent[] = [...state.messages, ...(state.blockedQuestions ?? [])].map((message) => ({
     kind: "message",
+    blocked: message.blocked,
     id: message.id,
     createdAt: message.createdAt,
     role: message.role,
@@ -531,10 +534,11 @@ export function SessionChat(props: SessionChatProps) {
   };
   const current = sliding ? slidingState : sticky ? stickyState : memory ? memoryState : root;
   if (!current) return <Alert severity={switchError ? 'error' : 'info'}>{switchError || 'Loading context history…'}</Alert>;
-  return <Box sx={{minHeight:650}}><Box key={`${current.conversation.id}-${sliding ? 'sliding' : sticky ? 'sticky' : memory ? 'memory' : 'full'}`} sx={{animation:'contextFade 180ms ease-out','@keyframes contextFade':{from:{opacity:.72},to:{opacity:1}},'@media (prefers-reduced-motion: reduce)':{animation:'none'}}}><SessionChatView {...props} initialConversation={current} sliding={sliding} sticky={sticky} memory={memory} selection={selection} setSelection={setSelection} modelChoices={modelChoices} setModelChoices={setModelChoices} restoredSelection={restoredSelection} switchTab={switchTab} switching={switching} /></Box>{switchError && <Alert severity="error">{switchError}</Alert>}</Box>;
+  return <Box sx={{minHeight:650}}><Box key={`${current.conversation.id}-${sliding ? 'sliding' : sticky ? 'sticky' : memory ? 'memory' : 'full'}`} sx={{animation:'contextFade 180ms ease-out','@keyframes contextFade':{from:{opacity:.72},to:{opacity:1}},'@media (prefers-reduced-motion: reduce)':{animation:'none'}}}><SessionChatView {...props} policyRoot={root.conversation.id} initialConversation={current} sliding={sliding} sticky={sticky} memory={memory} selection={selection} setSelection={setSelection} modelChoices={modelChoices} setModelChoices={setModelChoices} restoredSelection={restoredSelection} switchTab={switchTab} switching={switching} /></Box>{switchError && <Alert severity="error">{switchError}</Alert>}</Box>;
 }
 
 function SessionChatView({
+  policyRoot,
   week3,
   onProfilesChanged,
   onProposalDismissed,
@@ -552,6 +556,7 @@ function SessionChatView({
   switchTab,
   switching,
 }: {
+  policyRoot:string;
   week3?: boolean;
   onProfilesChanged?:()=>void;
   onProposalDismissed?:(message:string)=>void;
@@ -646,10 +651,10 @@ function SessionChatView({
   const [topicModeReady,setTopicModeReady]=useState(false);
   const [memoryTokens,setMemoryTokens] = useState<MemoryTokenStats>();
   const memoryTokenCache=useRef<MemoryTokenCache>({});
-  useEffect(()=>{if(!week3 || !active)return;let live=true;void week3Api.loadSessionMemory(initialConversation.conversation.id).then(value=>{if(live)setSessionMemorySnapshot(value);}).catch(()=>{if(live)setHistoryError('Could not load session memory.');});return()=>{live=false;};},[week3,active,initialConversation.conversation.id]);
+  useEffect(()=>{if(!week3 || !active)return;let live=true;void week3Api.loadSessionMemory(initialConversation.conversation.id).then(value=>{if(live)setSessionMemorySnapshot(value);}).catch(()=>{if(live)setHistoryError('Could not load session memory.');});return()=>{live=false;};},[week3,active,initialConversation.conversation.id,factsRevision]);
   useEffect(()=>{setDevMockModel(false);setTopicModeReady(false);if(!week3 || !active)return;let live=true;void week3Api.topicProcessingMode(initialConversation.conversation.id).then(value=>{if(live){setDevMockModel(value.mockModel);setTopicModeReady(true);}}).catch(()=>{if(live)setHistoryError('Could not load topic processing configuration.');});return()=>{live=false;};},[week3,active,initialConversation.conversation.id]);
   useEffect(()=>{if(!week3 || !sessionMemorySnapshot){setMemoryTokens(undefined);return;}let live=true;setMemoryTokens(undefined);void estimateMemoryTokenStats(sessionMemorySnapshot.data,selectedModel,memoryTokenCache.current).then(value=>{if(live)setMemoryTokens(value);});return()=>{live=false;};},[week3,selectedModel,sessionMemorySnapshot]);
-  useEffect(()=>{if(!active || !memory)return;let current=true;void loadMemory(initialConversation.conversation.id).then(value=>{if(current)setMemoryEntries(value.entries);}).catch(()=>{if(current)setHistoryError('Could not load Key-Value Memory.');});return()=>{current=false;};},[active,memory,initialConversation.conversation.id]);
+  useEffect(()=>{if(!active || !memory)return;let current=true;void loadMemory(initialConversation.conversation.id).then(value=>{if(current)setMemoryEntries(value.entries);}).catch(()=>{if(current)setHistoryError('Could not load Key-Value Memory.');});return()=>{current=false;};},[active,memory,initialConversation.conversation.id,factsRevision]);
 
   const [historyError, setHistoryError] = useState("");
   const [instructionNotice,setInstructionNotice]=useState('');
@@ -679,6 +684,7 @@ function SessionChatView({
   const [saveFailed, setSaveFailed] = useState(false);
   const [retryingSave, setRetryingSave] = useState(false);
   const sendLock = useRef(false);
+  const uncertainTurn = useRef<{question:string;provider:string;model:string;id:string} | null>(null);
   const pendingQuestionId = useRef<string | null>(null);
   const [writer] = useState(() => new HistoryWriter(saveHistoryEvent));
   useEffect(() => {
@@ -750,7 +756,7 @@ function SessionChatView({
     return () => { current = false; };
   }, [active, provider, selectedModel, registry, week3, topicModeReady, devMockModel]);
   const providerModels = registry.modelOptionsFor(provider);
-  const modelProblem = selectedModel && !providerModels.includes(selectedModel) ? 'The selected model is unavailable for this provider. Select an available model.' : '';
+  const selectionProblem = selectedModel && !providerModels.includes(selectedModel) ? 'The selected model is unavailable for this provider. Select an available model.' : '';
   const selectedKey = provider === "openai" ? openAIKey : openCodeKeys[provider];
   const providerLabel =
     provider === "openai"
@@ -796,16 +802,36 @@ function SessionChatView({
     } else if (active && stickToBottomRef.current)container.scrollTop = container.scrollHeight;
   }, [timeline, running, active]);
 
+  const chatBase=(week3 ? '/api/week3/sessions/' : '/api/sessions/')+encodeURIComponent(initialConversation.conversation.id);
+  const [invariantNotice,setInvariantNotice]=useState('');
+  const refreshProtectedHistory=()=>{
+    pageGeneration.current++;setVisibleRuns(null);setConversation(null);setUiEvents([]);
+    setAccountingState(undefined);setMemoryEntries([]);setSessionMemorySnapshot(undefined);
+    pageEvents.current=[];fullHistory.current=false;setHistoryLoaded(false);
+    setHistoryAttempt(n=>n+1);setFactsRevision(n=>n+1);
+  };
+  const policy=usePolicyStatus(chatBase,provider,selectedModel,active);
+  const budgetWarning=policy.status?.budget;
+  const modelProblem=selectionProblem || (budgetWarning && (!budgetWarning.maintenanceOnly || !/[?？]/u.test(input)) ? budgetWarning.message : "");
+  const policyChannel=useRef<BroadcastChannel | null>(null);
+  useEffect(()=>{
+    if(typeof BroadcastChannel==='undefined')return;
+    const channel=new BroadcastChannel('day14-invariants:'+policyRoot);
+    policyChannel.current=channel;channel.onmessage=()=>{policy.refresh();};
+    return ()=>{channel.close();policyChannel.current=null;};
+  },[policyRoot]);
   const send = () => submitSession({
     lock: sendLock, draft: input, ready: !running && historyLoaded && !saveFailed && !limitSaving && !contextSaving,
-    model: selectedModel, provider, hasCredential, modelProblem,
+    model: selectedModel, provider, hasCredential:true, modelProblem,
     onBlocked: (description) => setUiEvents((events) => [...events, {
       kind: 'manager', id: crypto.randomUUID(), createdAt: Date.now(), runId: 'ui',
       category: 'SYSTEM', status: 'failed', description,
     }]),
     onAccepted: () => {
       setRunning(true); setInput(""); setInstructionNotice(''); setInstructionSuccess(''); stickToBottomRef.current=true;
-      const id=crypto.randomUUID(); pendingQuestionId.current=id;
+      const previous=uncertainTurn.current;
+      const id=previous?.question===input.trim() && previous.provider===provider && previous.model===selectedModel ? previous.id : crypto.randomUUID();
+      uncertainTurn.current=null; pendingQuestionId.current=id;
       setUiEvents(events=>[...events,{kind:'message',id,runId:'ui',role:'user',text:input.trim(),createdAt:Date.now()}]);
     },
     onSettled: () => setRunning(false),
@@ -814,7 +840,22 @@ function SessionChatView({
       let working = conversation ? structuredClone(conversation) : createManagerConversation(title);
       working.conversation.title = title;
       let runStarted = false;
+      let lease:string|undefined;
+      let renewal:ReturnType<typeof setInterval>|undefined;
       try {
+        setInvariantNotice('');
+        const id=pendingQuestionId.current!;
+        const turn=await invariantRequest(chatBase+'/invariant-turn','POST',{provider,model:selectedModel,question,turnId:id}).catch(error=>{
+          if(error instanceof InvariantRequestError && error.uncertain)uncertainTurn.current={question,provider,model:selectedModel,id};
+          throw error;
+        });
+        if(turn.status==='completed'){
+          pendingQuestionId.current=null;refreshProtectedHistory();return;
+        }
+        if(turn.status!=='unrestricted' || typeof turn.token!=='string' || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(turn.token))throw new InvariantRequestError('Could not verify session invariants.');
+        lease=turn.token;
+        renewal=setInterval(()=>{void invariantRequest(chatBase+'/invariant-turn/'+lease,'PATCH').catch(()=>{});},60000);
+        if(!hasCredential)throw new InvariantRequestError('No credentials found for this provider. Configure it in Providers.');
         const initialSnapshot=week3 ? await week3Api.loadPersonalizationSnapshot(working.conversation.id) : undefined;
         const prepared=initialSnapshot ? await prepareProfileTurn(initialSnapshot) : undefined;
         const personalizationSnapshot=prepared?.snapshot;
@@ -897,11 +938,18 @@ function SessionChatView({
           ]);
         }
       } catch (error) {
+        if (error instanceof InvariantRequestError && error.blocked) {
+          pendingQuestionId.current = null;
+          setInvariantNotice(error.message);
+          refreshProtectedHistory();
+          return;
+        }
         if(!runStarted){
           setInput(current=>current || question);
           const id=pendingQuestionId.current; pendingQuestionId.current=null;
           setUiEvents(events=>events.filter(event=>event.id!==id));
         }
+        if(error instanceof InvariantRequestError){setInvariantNotice(error.message);return;}
         const activeRun = runStarted ? working.runs.at(-1) : undefined;
         if (activeRun?.status === "running") {
           activeRun.status = "incomplete";
@@ -921,6 +969,10 @@ function SessionChatView({
               "Manager execution failed. Check provider, model, key, and tool compatibility.",
           },
         ]);
+      } finally {
+        policy.refresh();
+        if(renewal)clearInterval(renewal);
+        if(lease)await invariantRequest(chatBase+'/invariant-turn/'+lease,'DELETE').catch(()=>{});
       }
     },
   });
@@ -930,6 +982,7 @@ function SessionChatView({
     <GlobalStyles styles={{ html: { overscrollBehaviorY: 'none' } }} />
     <Stack spacing={2} sx={{ minWidth: 0 }}>
       {historyError && <Alert severity="error" action={<Button disabled={retryingSave || running} onClick={() => { if (saveFailed) void retrySave(); else setHistoryAttempt((n) => n + 1); }}>Retry</Button>}>{historyError}</Alert>}
+      {invariantNotice && <Alert severity="warning">{invariantNotice}</Alert>}
       {instructionNotice && <Alert severity="warning">{instructionNotice}</Alert>}
       {instructionSuccess && <Alert severity="success">{instructionSuccess}</Alert>}
       <Paper variant="outlined" sx={{ p: 2, pb: 3 }}>
@@ -1006,11 +1059,12 @@ function SessionChatView({
               >
                 {!providerModels.length && <MenuItem value="">No models available</MenuItem>}
                 {providerModels.map((entry) => (
-                  <MenuItem key={entry} value={entry}>
+                  <MenuItem key={entry} value={entry} disabled={entry===selectedModel && !!budgetWarning && !budgetWarning.maintenanceOnly}>
                     {entry}
                   </MenuItem>
                 ))}
               </TextField>
+              <ChatInvariants key={chatBase} revision={policy.status?.revision} base={chatBase} disabled={running} onChange={()=>{setInvariantNotice('');policy.refresh();policyChannel.current?.postMessage('changed');}}/>
               {!fullContext && !sliding && !sticky && !memory && <><FormControl disabled={contextSaving || running}>
                 <FormLabel>Context strategy</FormLabel>
                 <RadioGroup value={contextStrategy} onChange={e => { const next=e.target.value as 'token-budget'|'key-facts'; void (async () => { if (contextStrategy === 'key-facts') await saveRecent(); await saveContextSetting({contextStrategy:next}); })(); }}>
@@ -1054,7 +1108,7 @@ function SessionChatView({
             {!historyLoaded && !historyError && <Typography role="status">Loading history…</Typography>}
             {pageCursor?.before != null && <Button size="small" disabled={olderLoading || running || saveFailed || retryingSave} onClick={()=>void loadOlder()}>{olderLoading?'Loading older messages…':'Load older messages'}</Button>}
             {olderError && <Alert severity="error">{olderError}</Alert>}
-            <ChatRunLog events={timeline} />
+            <ChatRunLog events={timeline} security={policy.status?.events.filter(event => event.sessionId === initialConversation.conversation.id)} />
             {running && (
               <Typography variant="caption" color="text.secondary">
                 Manager is processing…
@@ -1080,6 +1134,7 @@ function SessionChatView({
             onDraftChange={setInput}
             onSend={() => void send()}
             disabled={running || !historyLoaded || saveFailed}
+            sendDisabled={!!modelProblem}
             running={running}
           />
           </Box>
@@ -1090,6 +1145,9 @@ function SessionChatView({
       request={{ providerId: provider, model: selectedModel, registry, requestTokenLimit }} tools={toolRegistry}
       active={active} loaded={historyLoaded} running={running} accountingState={accountingState} dialogueCounts={dialogueCounts}
       contextStrategy={fullContext || sliding || memory ? undefined : contextStrategy} recentMessages={recentMessages} factsRevision={factsRevision} fullContext={fullContext || sliding || memory} >
+      {policy.status && <Box component="dl" sx={{display:"grid",gridTemplateColumns:"1fr auto",gap:.5,m:0,mt:1}}>
+        {(["blocked","redacted","withheld"] as const).map(action=><Box key={action} sx={{display:"contents"}}><Typography component="dt" variant="body2">Security {action[0].toUpperCase()+action.slice(1)}</Typography><Typography component="dd" variant="body2" sx={{m:0}}>{policy.status!.counts[action]}</Typography></Box>)}
+      </Box>}
       {memory && <KeyValueDetails entries={memoryEntries} />}
       </SessionStatsPanel>
       {week3 && <SessionMemoryCard snapshot={sessionMemorySnapshot} shortTokens={memoryTokens?.shortTermTokens ?? undefined} summaryTokens={memoryTokens?.mediumTermTokens ?? undefined} factTokens={memoryTokens?.longTermTokens ?? undefined} storedFactTokens={memoryTokens?.storedLongTermTokens ?? undefined} shortLimit={DEFAULT_SHORT_TERM_TOKEN_BUDGET} />}

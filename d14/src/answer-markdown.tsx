@@ -202,7 +202,24 @@ const allowedElements = [
   "hr",
   "br",
   "sup",
+  "span",
 ];
+
+// Replace only server-issued placeholders in Markdown text nodes, preserving the
+// surrounding paragraph, emphasis, list or code structure.
+type MarkdownNode = {type:string; value?:string; tagName?:string; properties?:Record<string,string>; children?:MarkdownNode[]};
+function accessibleRedactions() {
+  function visit(node:MarkdownNode) {
+    if(!node.children)return;
+    node.children=node.children.flatMap(child=>{
+      if(child.type!=='text' || !child.value?.includes('████████')){visit(child);return [child];}
+      return child.value.split(/(████████)/).filter(Boolean).map(value=>value==='████████'
+        ? {type:'element',tagName:'span',properties:{role:'img',ariaLabel:'Redacted content',className:'invariant-redaction'},children:[{type:'text',value}]}
+        : {type:'text',value});
+    });
+  }
+  return visit;
+}
 
 export function AnswerMarkdown({ text }: { text: string }) {
   return (
@@ -211,6 +228,7 @@ export function AnswerMarkdown({ text }: { text: string }) {
         minWidth: 0,
         maxWidth: "100%",
         overflowWrap: "anywhere",
+        "& .invariant-redaction": { bgcolor: "#000", color: "#000", borderRadius: "1px" },
         "& > :first-of-type": { mt: 0 },
         "& > :last-of-type": { mb: 0 },
         "& ul, & ol": { pl: 3, my: 1 },
@@ -228,6 +246,7 @@ export function AnswerMarkdown({ text }: { text: string }) {
         skipHtml
         allowedElements={allowedElements}
         remarkPlugins={[remarkGfm]}
+        rehypePlugins={[accessibleRedactions]}
         urlTransform={(url, key) =>
           key === "href" ? safeMarkdownLink(url) : undefined
         }

@@ -9,7 +9,7 @@ describe("Day 11 application shell", () => {
       html.indexOf('aria-label="Primary navigation"'),
       html.indexOf('id="panel-lab"'),
     );
-    expect(html).toContain("Day 14 — Task State Machine");
+    expect(html).toContain("Day 14 — Invariants");
     expect(html).toContain("Week 3 / Day 14");
     expect(
       Array.from(

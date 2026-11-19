@@ -92,6 +92,7 @@ export function createWeek3Routes(db, validateEvent, options = {}) {
     if (resource==='memory' && req.method==='PUT') {
       let body='';for await (const chunk of req) {body+=chunk;if(Buffer.byteLength(body)>1048576){reply(413,{error:'Request too large.'});return true;}}
       let value;try{value=JSON.parse(body);}catch{reply(400,{error:'Invalid JSON.'});return true;}
+      options.checkChatWrite?.(req,path);
       if (!Number.isSafeInteger(value?.revision) || value.revision<0 || !value.data || typeof value.data!=='object' || Array.isArray(value.data)) {reply(400,{error:'Invalid memory.'});return true;}
       db.exec('BEGIN IMMEDIATE');try {
         const row=db.prepare('SELECT revision FROM week3_session_memory WHERE sessionId=?').get(id);
@@ -110,6 +111,7 @@ export function createWeek3Routes(db, validateEvent, options = {}) {
       let body='';for await (const chunk of req) {body+=chunk;if(Buffer.byteLength(body)>1048576){reply(413,{error:'Request too large.'});return true;}}
       let value;try{value=JSON.parse(body);}catch{reply(400,{error:'Invalid JSON.'});return true;}
       if (resource==='events') {
+        options.checkChatWrite?.(req,path);
         const payload=validateEvent(value,id);if(!payload){reply(400,{error:'Invalid history event.'});return true;}
         const prior=db.prepare('SELECT * FROM week3_history_events WHERE id=?').get(value.id), serialized=JSON.stringify(payload);
         if(prior){if(prior.sessionId!==id || prior.type!==value.type || prior.payload!==serialized){reply(409,{error:'Event ID conflict.'});return true;}reply(200,{...prior,payload});return true;}
