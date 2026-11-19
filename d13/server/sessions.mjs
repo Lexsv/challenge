@@ -1,5 +1,9 @@
 import { createHistoryPager } from './history-pages.mjs';
 import { createWeek3Routes } from './week3-sessions.mjs';
+import { createWorkerRepository } from './worker-repository.mjs';
+import { createWorkerRoutes } from './worker-routes.mjs';
+import { createWorkerTransitionRepository } from './worker-transition-repository.mjs';
+import { createWorkerAiValidator } from './worker-ai-validator.ts';
 import { createContextProfileRepository } from './context-profile-repository.mjs';
 import { createContextProfileRoutes } from './context-profile-routes.mjs';
 import { createContextWorkspaceStore } from './context-workspaces.mjs';
@@ -180,6 +184,28 @@ export function createSessionServer(databasePath = fileURLToPath(new URL('../dat
   };
   const decideInstructionProposal=input=>createInstructionCoordinator({db,profiles,resolve:resolveSessionPersonalization,contexts:turnContexts,proposals:instructionProposals,detector:unavailableDetector}).decide(input);
   const week3Routes = createWeek3Routes(db, validateEvent, {topicProcess:options.topicProcess,mockModel:options.mockModel,mockSummaryFailure:options.mockSummaryFailure,turnContexts,processInstructionTurn,decideInstructionProposal});
+  const workerRepository=createWorkerRepository(db),workerTransitions=createWorkerTransitionRepository(db, options.workerTransitionOptions);
+  const evaluateWorker=async prepared=>{
+    if(options.workerEvaluator)return options.workerEvaluator(prepared);
+    const providerId=process.env.DAY13_WORKER_VALIDATOR_PROVIDER ?? options.instructionDetector?.providerId;
+    const model=process.env.DAY13_WORKER_VALIDATOR_MODEL ?? options.instructionDetector?.model;
+    if(!providerId||!model)return {ok:false,error:'configuration_error'};
+    const {snapshot,state,revision,binding}=prepared;
+    const steps=snapshot.document.steps;
+    const sanitizedSteps=steps.map(({evaluation,...step})=>step);
+    const input={sessionId:state.sessionId,revision,snapshot:{...snapshot,document:{schemaVersion:1,steps:sanitizedSteps}},results:state.results.map((entry,index)=>{
+      const step=steps[index],value=entry.result;
+      const result=value.type==='question'?`Selected option ${value.optionId}: ${step.options.find(option=>option.id===value.optionId).text}`:value.status==='problem'?`Problem: ${value.reason}`:'Completed';
+      const criteria=step.evaluation.kind==='correct_option'?`${step.evaluation.criteria} Correct option ID: ${step.evaluation.optionId}.`:step.evaluation.criteria;
+      return {stepId:step.id,result,criteria};
+    })};
+    const validator=createWorkerAiValidator({providerId,model},createProviderRegistry(),{transport:options.workerValidatorTransport ?? createSavedProviderTransport(options.credentialStore,options.fetcher),isCurrent:async()=>{
+      const latest=workerTransitions.load(state.sessionId);
+      return latest.ok && latest.data.revision===binding.sourceRevision;
+    }});
+    return validator.evaluate(input);
+  };
+  const workerRoutes = createWorkerRoutes(workerRepository,workerTransitions,evaluateWorker);
   const workspaces = createContextWorkspaceStore(db);
   const existingEvent = db.prepare('SELECT * FROM history_events WHERE id = ?');
   const findEntity = db.prepare("SELECT payload FROM history_events WHERE sessionId = ? AND type = ? AND json_extract(payload, '$.id') = ? ORDER BY sequence LIMIT 1");
@@ -214,6 +240,7 @@ export function createSessionServer(databasePath = fileURLToPath(new URL('../dat
     try {
       if (await profileRoutes(req, path, reply)) return;
       if (await week3Routes(req, path, reply)) return;
+      if (await workerRoutes(req, path, reply)) return;
       if (await credentialRoutes(req, path, reply)) return;
       const workspaceRoute = path.match(/^\/api\/sessions\/([a-zA-Z0-9-]+)\/(checkpoints|branches)$/);
       if (workspaceRoute) {

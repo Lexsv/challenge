@@ -45,6 +45,13 @@ describe('Habits Markdown editor',()=>{
 });
 
 describe('Users profiles', () => {
+  it('shows separate relationship-derived Chat and Worker counts',()=>{
+    const html=renderToStaticMarkup(<UsersView state={{status:'loaded',profiles}} counts={{'profile-1':2}} workerCounts={{'profile-1':3}} onRetry={()=>{}} />);
+    expect(html).toContain('Chat Sessions');expect(html).toContain('Worker Sessions');
+    expect(html).toContain('aria-label="Sessions for Taylor">2</td>');
+    expect(html).toContain('aria-label="Worker sessions for Taylor">3</td>');
+    expect(html).toContain('aria-label="Worker sessions for General">0</td>');
+  });
   it('loads and validates actual profile data from the API', async () => {
     const fetcher=vi.fn().mockResolvedValue(new Response(JSON.stringify(profiles),{status:200}));
     await expect(loadProfiles(fetcher)).resolves.toEqual(profiles);
@@ -109,7 +116,7 @@ describe('profile deletion', () => {
     actions[1].props.onClick();expect(confirm).toHaveBeenCalledOnce();
     const clear=DeletionDialog({target:{kind:'clear'},pending:false,error:'',onCancel:cancel,onConfirm:confirm});
     const clearParts=React.Children.toArray(clear.props.children) as React.ReactElement<{children?:React.ReactNode}>[];
-    expect(renderToStaticMarkup(clearParts[1])).toContain('The General profile will remain');
+    expect(renderToStaticMarkup(clearParts[1])).toContain('The General profile and shared Worker Templates will remain');
     const busy=DeletionDialog({target:{kind:'clear'},pending:true,error:'',onCancel:cancel,onConfirm:confirm});
     busy.props.onClose();expect(cancel).toHaveBeenCalledOnce();
   });

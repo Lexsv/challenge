@@ -1,4 +1,4 @@
-import { vintagePalette as p } from "./vintage-palette";
+import { palette } from "./theme";
 import { useState } from "react";
 import {
   Alert,
@@ -41,10 +41,10 @@ function JsonValue({ value }: { value: string }) {
       {pieces.map((piece, index) => {
         const color = /^"/.test(piece)
           ? pieces[index + 1]?.trimStart().startsWith(":")
-            ? p.pinkInk
-            : p.warning
+            ? palette.primary.dark
+            : palette.warning.main
           : /^(?:true|false|null|-?\d)/.test(piece)
-            ? p.blueInk
+            ? palette.primary.main
             : undefined;
         return (
           <span key={index} style={color ? { color } : undefined}>

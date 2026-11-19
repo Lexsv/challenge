@@ -22,7 +22,7 @@ export function KeyValueDetails({ entries }: { entries: MemoryEntry[] }) {
             {entries.map(entry => {
               const isExpanded = expanded === entry.id;
               const cell = { height: isExpanded ? '7.5em' : '1.5em', lineHeight: 1.5, overflowY: isExpanded ? 'auto' : 'hidden', overflowX: 'hidden', whiteSpace: isExpanded ? 'pre-wrap' : 'nowrap', textOverflow: isExpanded ? 'clip' : 'ellipsis', overflowWrap: 'anywhere', transition: 'height 200ms ease', '@media (prefers-reduced-motion: reduce)': { transition: 'none' } } as const;
-              return <Box component="tr" key={entry.id} tabIndex={0} aria-expanded={isExpanded} onClick={() => toggle(entry.id)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggle(entry.id); } }} sx={{ cursor: 'pointer', borderBottom: 1, borderColor: 'divider', '&:hover': { bgcolor: '#FFF6D8' }, '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.dark', outlineOffset: -2 } }}>
+              return <Box component="tr" key={entry.id} tabIndex={0} aria-expanded={isExpanded} onClick={() => toggle(entry.id)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggle(entry.id); } }} sx={{ cursor: 'pointer', borderBottom: 1, borderColor: 'divider', '&:hover': { bgcolor: 'action.hover' }, '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.dark', outlineOffset: -2 } }}>
                 <Box component="td" sx={{ p: 1.25, verticalAlign: 'top', color: 'primary.dark' }}><Box sx={cell}>{entry.key}</Box></Box>
                 <Box component="td" sx={{ p: 1.25, verticalAlign: 'top' }}><Box sx={cell}>{entry.value}</Box></Box>
               </Box>;

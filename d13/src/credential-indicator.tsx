@@ -44,9 +44,9 @@ export function CredentialIndicator({ status, provider, showProvider = !!provide
         color={status.verification === 'not-authorized' ? 'error' : status.verification === 'verified' ? 'success' : 'default'}
         variant={status.verification === 'verified' || status.verification === 'not-authorized' ? 'filled' : 'outlined'}
         sx={status.verification === 'verified'
-          ? { bgcolor: '#2e7d32', color: '#fff' }
+          ? { bgcolor: 'success.main', color: 'success.contrastText' }
           : status.verification !== 'not-authorized'
-            ? { bgcolor: 'transparent', color: '#1F2937', borderColor: 'rgba(0, 0, 0, 0.23)' }
+            ? { bgcolor: 'transparent', color: 'text.secondary', borderColor: 'divider' }
             : undefined} />}
     </Box>
   </Tooltip>;

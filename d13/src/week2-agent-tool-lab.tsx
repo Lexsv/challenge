@@ -1,3 +1,4 @@
+import { readSessionSelection, resolveWorkerSelection, writeSessionSelection, type SessionSelection } from './session-selection';
 import { eventRunId, mergeHistoryPages, prependedScrollTop, retrySavedHistory } from './history-pagination';
 import { sessionLimitOnClose } from "./session-limit";
 import { SessionStatsPanel, SessionStatsContent, SessionStatsFrame, sessionChatColumns } from "./session-stats-panel";
@@ -9,6 +10,8 @@ import { contextPhaseLabel } from "./context-compaction";
 import { createAndSelectSession } from "./session-creation";
 import { EmptySessionChat, SessionCreateButton } from "./session-empty-state";
 import { NewSessionDialog } from "./new-session-dialog";
+import { WorkerSessionPreview, workerStateLabels, type WorkerTemplate } from './worker-ui';
+import { createWorkerSession, deleteWorkerSession, renameWorkerSession, listWorkerSessions, type WorkerSession } from './worker-api';
 import { loadProfiles, sampleUsers, type MockUser, type ContextProfile } from "./users-page";
 import { profileName } from './profile-session-utils';
 import { SessionListRequests } from './session-list-requests';
@@ -213,8 +216,10 @@ export function buildWeek2Timeline(
 
 type LabProps = {
   week3?: boolean;
+  workers?: readonly WorkerTemplate[];
   mockUsers?: readonly MockUser[];
   profileRevision?: number;
+  sessionsRevision?: number;
   onSessionsChanged?: () => void;
   onProfilesChanged?: () => void;
   sessionListRequests?: SessionListRequests;
@@ -241,9 +246,31 @@ export function Week2AgentToolLab(props: LabProps) {
   const [localListRequests] = useState(() => new SessionListRequests());
   const listRequests = props.sessionListRequests ?? localListRequests;
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [workerSessions, setWorkerSessions] = useState<WorkerSession[]>([]);
+  const [workerListError,setWorkerListError] = useState('');
+  const [workerListLoading,setWorkerListLoading] = useState(true);
+  const [workerListAttempt,setWorkerListAttempt] = useState(0);
+  const [selectedWorkerId, setSelectedWorkerId] = useState<string | null>(null);
+  const [workerListResolved, setWorkerListResolved] = useState(false);
+  const selectedIntent = useRef<SessionSelection | null | undefined>(undefined);
+  if (selectedIntent.current === undefined) {
+    try { selectedIntent.current = props.week3 ? readSessionSelection(localStorage) : null; }
+    catch { selectedIntent.current = null; }
+  }
+  const recordSelection = (selection: SessionSelection | null) => {
+    selectedIntent.current = selection;
+    if (props.week3) { try { writeSessionSelection(localStorage, selection); } catch { /* storage unavailable */ } }
+  };
+  const workerListGeneration=useRef(0);
+  useEffect(()=>{let active=true;const generation=++workerListGeneration.current;setWorkerListLoading(true);setWorkerListError('');listWorkerSessions().then(items=>{if(active && generation===workerListGeneration.current){setWorkerSessions(items);
+    const resolution = props.week3 ? resolveWorkerSelection(selectedIntent.current, items.map(item=>item.id)) : {kind:'unchanged' as const};
+    if (resolution.kind === 'select') setSelectedWorkerId(resolution.id);
+    else if (resolution.kind === 'missing') { recordSelection(null); setSelectedWorkerId(null); }
+    else setSelectedWorkerId(current=>current && items.some(item=>item.id===current)?current:null);
+    setWorkerListResolved(true);}}).catch(()=>{if(active && generation===workerListGeneration.current)setWorkerListError('Could not load Worker sessions.');}).finally(()=>{if(active && generation===workerListGeneration.current)setWorkerListLoading(false);});return()=>{active=false;};},[props.week3,props.profileRevision,props.sessionsRevision,workerListAttempt]);
   const [proposalSwitchNotice,setProposalSwitchNotice]=useState('');
-  const [context, setContext] = useState<{ id: string; x: number; y: number } | null>(null);
-  const [renameId, setRenameId] = useState<string | null>(null);
+  const [context, setContext] = useState<{ id: string; x: number; y: number; worker?: boolean } | null>(null);
+  const [renameTarget, setRenameTarget] = useState<SessionSelection | null>(null);
   const [title, setTitle] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -253,7 +280,7 @@ export function Week2AgentToolLab(props: LabProps) {
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [loaded, setLoaded] = useState(false);
   const saveLock = useRef(false);
-  const [deletion] = useState(() => new SessionDeletion(async id=>{
+  const [chatDeletion] = useState(() => new SessionDeletion(async id=>{
     listRequests.invalidate();
     try { await deleteSession(id); }
     finally { listRequests.invalidate(); setLoadAttempt(n=>n+1); }
@@ -264,7 +291,18 @@ export function Week2AgentToolLab(props: LabProps) {
     if(props.week3) props.onSessionsChanged?.();
     setSelectedId(current=>current===id ? null : current);
   }));
-  const deleteState = useSyncExternalStore(deletion.subscribe, deletion.getSnapshot, deletion.getSnapshot);
+  const [workerDeletion] = useState(() => new SessionDeletion(deleteWorkerSession, id => {
+    workerListGeneration.current++;
+    setWorkerListLoading(false);
+    setWorkerSessions(current => current.filter(item => item.id !== id));
+    setSelectedWorkerId(current => current === id ? null : current);
+    if (selectedIntent.current?.type === 'worker' && selectedIntent.current.id === id) recordSelection(null);
+    props.onSessionsChanged?.();
+  }));
+  const chatDeleteState = useSyncExternalStore(chatDeletion.subscribe, chatDeletion.getSnapshot, chatDeletion.getSnapshot);
+  const workerDeleteState = useSyncExternalStore(workerDeletion.subscribe, workerDeletion.getSnapshot, workerDeletion.getSnapshot);
+  const deletion = workerDeleteState.target ? workerDeletion : chatDeletion;
+  const deleteState = workerDeleteState.target ? workerDeleteState : chatDeleteState;
   useEffect(() => {
     let active = true;
     if(!loaded)setLoading(true);
@@ -276,7 +314,8 @@ export function Week2AgentToolLab(props: LabProps) {
       setLoaded(true);
       let last:string|null=null;
       try {last=localStorage.getItem((props.week3 ? 'expert-lab:d11:week3:last-session' : 'expert-lab:d8:last-session'));} catch { /* storage may be unavailable */ }
-      const selected=items.find(item=>item.id===last) ?? [...items].sort((a,b)=>(b.updatedAt || b.createdAt)-(a.updatedAt || a.createdAt))[0];
+      const preferred = props.week3 && selectedIntent.current?.type === 'chat' ? selectedIntent.current.id : last;
+      const selected=items.find(item=>item.id===preferred) ?? [...items].sort((a,b)=>(b.updatedAt || b.createdAt)-(a.updatedAt || a.createdAt))[0];
       setSelectedId(current=>items.some(item=>item.id===current) ? current : selected?.id ?? null);
       setLoading(false);
     }, () => {
@@ -285,15 +324,26 @@ export function Week2AgentToolLab(props: LabProps) {
     return () => { active = false; listRequests.invalidate(); };
   }, [loadAttempt,props.week3 ? props.profileRevision : undefined]);
   useEffect(()=>{
-    if(!props.week3)return;
     let active=true;setProfiles([]);setProfilesError(false);
     loadProfiles().then(items=>{if(active)setProfiles(items);}).catch(()=>{if(active)setProfilesError(true);});
     return ()=>{active=false;};
   },[props.week3,props.profileRevision,profilesAttempt]);
-  useEffect(()=>{if(!loaded)return;try {if(selectedId)localStorage.setItem((props.week3 ? 'expert-lab:d11:week3:last-session' : 'expert-lab:d8:last-session'),selectedId);else localStorage.removeItem((props.week3 ? 'expert-lab:d11:week3:last-session' : 'expert-lab:d8:last-session'));} catch {/* storage may be unavailable */}},[selectedId,loaded]);
+  useEffect(()=>{
+    if(!loaded)return;
+    try {if(selectedId)localStorage.setItem((props.week3 ? 'expert-lab:d11:week3:last-session' : 'expert-lab:d8:last-session'),selectedId);else localStorage.removeItem((props.week3 ? 'expert-lab:d11:week3:last-session' : 'expert-lab:d8:last-session'));} catch {/* storage may be unavailable */}
+    if (props.week3 && workerListResolved) recordSelection(selectedWorkerId ? {type:'worker',id:selectedWorkerId} : selectedId ? {type:'chat',id:selectedId} : null);
+  },[selectedId,selectedWorkerId,loaded,workerListResolved,props.week3]);
   const createDisabled = loading || !loaded || saving || deleteState.pending;
   const openNewSession = () => { setError(""); setNewSessionOpen(true); };
-  const createSession = (name: string, userId: string) => { void createAndSelectSession({
+  const createSession = (name: string, userId: string, worker?: WorkerTemplate) => {
+    if (worker) {
+      if(saveLock.current)return;
+      saveLock.current=true;workerListGeneration.current++;setWorkerListLoading(false);setSaving(true);setError('');
+      void createWorkerSession(name,userId,worker.id).then(session=>{setWorkerListError('');setWorkerSessions(current=>[...current,session]);recordSelection({type:'worker',id:session.id});setSelectedWorkerId(session.id);setNewSessionOpen(false);props.onSessionsChanged?.();}).catch(()=>setError('Could not create Worker session. Please retry.')).finally(()=>{saveLock.current=false;setSaving(false);});
+      return;
+    }
+    setSelectedWorkerId(null);
+    void createAndSelectSession({
     lock: saveLock, ready: loaded && !loading && !deleteState.pending, create: async () => {
       const created = props.week3 ? await week3Api.createSession(userId) : await persistSession();
       try { return await renameSession(created.id, name); }
@@ -305,49 +355,69 @@ export function Week2AgentToolLab(props: LabProps) {
       setSessions((current) => [...current, session]);
       if(props.week3){setSessionProfiles(current=>({...current,[session.conversation.id]:(saved as week3Api.SessionMetadata).profileId}));props.onSessionsChanged?.();}
       else setSessionOwners(current=>({...current,[session.conversation.id]:(props.mockUsers ?? sampleUsers).find(user=>user.id===userId)?.name ?? 'General'}));
+      recordSelection({type:'chat',id:session.conversation.id});
       setSelectedId(session.conversation.id);
       setNewSessionOpen(false);
     },
   }); };
   const rename = async () => {
-    if (!title.trim() || !renameId || saveLock.current) return;
+    if (!title.trim() || !renameTarget || saveLock.current) return;
     saveLock.current = true;
     setSaving(true);
     setError("");
     try {
-      const saved = await renameSession(renameId, title.trim());
+      if (renameTarget.type === 'worker') {
+        const saved = await renameWorkerSession(renameTarget.id, title.trim());
+        workerListGeneration.current++;
+        setWorkerListLoading(false);
+        setWorkerSessions(current => current.map(item => item.id === saved.id
+          ? { ...item, name: saved.name, updatedAt: Math.max(item.updatedAt ?? 0, saved.updatedAt ?? 0) } : item));
+        setRenameTarget(null);
+        props.onSessionsChanged?.();
+        return;
+      }
+      const saved = await renameSession(renameTarget.id, title.trim());
       setSessions((current) => current.map((session) =>
         session.conversation.id === saved.id
           ? { ...session, conversation: { ...session.conversation, title: saved.title } }
           : session,
       ));
-      setRenameId(null);
+      setRenameTarget(null);
     } catch {
-      setError("Could not rename session. The saved title is unchanged. Please retry.");
+      setError(renameTarget.type === "worker" ? "Could not rename the Worker session. Check the name and retry." : "Could not rename session. The saved title is unchanged. Please retry.");
     } finally { saveLock.current = false; setSaving(false); }
   };
-  return (
-    <Box sx={{ display: "grid", gridTemplateColumns: { xs: "minmax(0, 1fr)", md: "220px minmax(0, 1fr)" }, gap: 2, alignItems: "start" }}>
-      <Paper component="aside" variant="outlined" aria-label="Sessions" sx={{ p: 1, minWidth: 0 }}>
+  const sessionSidebar = (
+      <Paper component="aside" variant="outlined" aria-label="Sessions" sx={{ p: 1.25, minWidth: 0, bgcolor:"white" }}>
         <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ px: 1 }}>
-          <Typography variant="subtitle2" color="text.secondary">Sessions</Typography>
+          <Typography variant="h6" component="h2">Sessions</Typography>
           <SessionCreateButton compact onCreate={openNewSession} pending={saving} disabled={createDisabled} />
         </Stack>
         {loading && <Typography variant="caption" role="status">Loading sessions…</Typography>}
+        {workerListLoading && <Typography variant="caption" role="status">Loading Worker sessions…</Typography>}
         {listError && <SessionListErrorNotice message={listError} onRetry={() => setLoadAttempt(n=>n+1)} />}
+        {workerListError && <SessionListErrorNotice message={workerListError} onRetry={() => setWorkerListAttempt(n=>n+1)} />}
         {error && <Alert severity="error">{error}</Alert>}
         <List disablePadding aria-label="Session list">
           {sessions.map((session) => (
             <SessionRow key={session.conversation.id} id={session.conversation.id} title={session.conversation.title ?? 'New session'} owner={props.week3 ? profileName(sessionProfiles[session.conversation.id],profiles) : sessionOwners[session.conversation.id] ?? 'General'}
-              selected={selectedId === session.conversation.id} menuOpen={context?.id === session.conversation.id}
-              disabled={saving || deleteState.pending} onSelect={() => setSelectedId(session.conversation.id)}
+              selected={!selectedWorkerId && selectedId === session.conversation.id} menuOpen={!context?.worker && context?.id === session.conversation.id}
+              disabled={saving || deleteState.pending} onSelect={() => { recordSelection({type:'chat',id:session.conversation.id}); setSelectedWorkerId(null); setSelectedId(session.conversation.id); }}
               onActions={(position) => setContext({ id: session.conversation.id, ...position })} />
           ))}
+          {workerSessions.map(session=><SessionRow key={session.id} id={`worker-${session.id}`} title={session.name} owner={`Worker · ${profileName(session.profileId,profiles)}`}
+            status={workerStateLabels[session.state]} selected={selectedWorkerId===session.id} menuOpen={context?.worker===true && context.id===session.id} disabled={saving||deleteState.pending}
+            onSelect={()=>{recordSelection({type:'worker',id:session.id});setSelectedWorkerId(session.id);}}
+            onActions={position=>setContext({id:session.id,worker:true,...position})}/>)}
         </List>
       </Paper>
+  );
+  return (
+    <Box sx={{ display: "grid", gridTemplateColumns: { xs: "minmax(0, 1fr)", md: selectedWorkerId ? "minmax(0,1fr)" : "220px minmax(0, 1fr)" }, gap: 1.5, alignItems: selectedWorkerId ? "stretch" : "start" }}>
+      {!selectedWorkerId && sessionSidebar}
       <Box sx={{ minWidth: 0 }}>
         {proposalSwitchNotice && <Alert severity="warning" onClose={()=>setProposalSwitchNotice('')}>{proposalSwitchNotice}</Alert>}
-        {!selectedId && (
+        {!selectedWorkerId && !selectedId && (
           <Box sx={{ display: "grid", gridTemplateColumns: sessionChatColumns, gap: 2, alignItems: "start", minWidth: 0 }}>
             <EmptySessionChat showEmptyState={loaded && !loading && sessions.length === 0}
               onCreate={openNewSession} pending={saving} disabled={createDisabled} />
@@ -356,39 +426,47 @@ export function Week2AgentToolLab(props: LabProps) {
         )}
         {/* Keep each keyed chat mounted: its draft, timeline and pending run belong to that session. */}
         {sessions.map((session) => (
-          <Box key={session.conversation.id} hidden={selectedId !== session.conversation.id}>
-            <SessionChat {...props} onProposalDismissed={setProposalSwitchNotice} active={selectedId === session.conversation.id} initialConversation={session} title={session.conversation.title ?? "New session"} />
+          <Box key={session.conversation.id} hidden={!!selectedWorkerId || selectedId !== session.conversation.id}>
+            <SessionChat {...props} onProposalDismissed={setProposalSwitchNotice} active={!selectedWorkerId && selectedId === session.conversation.id} initialConversation={session} title={session.conversation.title ?? "New session"} />
           </Box>
         ))}
+        {workerSessions.map(session => <Box key={session.id} hidden={selectedWorkerId!==session.id}><WorkerSessionPreview session={session} sidebar={selectedWorkerId===session.id ? sessionSidebar : undefined} active={selectedWorkerId===session.id} onAttempt={attempt=>{
+          setWorkerSessions(current=>[...current.filter(item=>item.id!==attempt.id),attempt]);
+          if(selectedIntent.current?.type==='worker' && selectedIntent.current.id===session.id){recordSelection({type:'worker',id:attempt.id});setSelectedWorkerId(attempt.id);}
+          props.onSessionsChanged?.();
+        }} onRefresh={updated=>setWorkerSessions(current=>current.map(item=>item.id===updated.id && updated.revision>=item.revision?{...updated,name:(updated.updatedAt ?? 0)<(item.updatedAt ?? 0)?item.name:updated.name}:item))}/></Box>)}
       </Box>
-      <NewSessionDialog open={newSessionOpen} users={props.week3 ? profiles : props.mockUsers ?? sampleUsers} pending={saving} error={error} persisted={props.week3} profilesError={props.week3 && profilesError} onRetryProfiles={()=>setProfilesAttempt(current=>current+1)} onClose={()=>setNewSessionOpen(false)} onCreate={createSession} />
-      <Menu id="session-actions-menu" slotProps={{ list: { "aria-labelledby": context ? `session-actions-${context.id}` : undefined } }} open={!!context} onClose={() => setContext(null)} anchorReference="anchorPosition"
+      <NewSessionDialog open={newSessionOpen} workers={props.workers} users={props.week3 ? profiles : props.mockUsers ?? sampleUsers} workerUsers={profiles} pending={saving} error={error} persisted={props.week3} profilesError={profilesError} onRetryProfiles={()=>setProfilesAttempt(current=>current+1)} onClose={()=>setNewSessionOpen(false)} onCreate={createSession} />
+      <Menu id="session-actions-menu" slotProps={{ list: { "aria-labelledby": context ? `session-actions-${context.worker?"worker-":""}${context.id}` : undefined } }} open={!!context} onClose={() => setContext(null)} anchorReference="anchorPosition"
         anchorPosition={context ? { top: context.y, left: context.x } : undefined}>
         <MenuItem disabled={saving || deleteState.pending} onClick={() => {
           if (!context) return;
-          setRenameId(context.id);
-          setTitle(sessions.find((session) => session.conversation.id === context.id)?.conversation.title ?? "");
+          setError("");
+          setRenameTarget({type: context.worker ? 'worker' : 'chat', id: context.id});
+          setTitle(context.worker ? workerSessions.find(item => item.id === context.id)?.name ?? "" : sessions.find((session) => session.conversation.id === context.id)?.conversation.title ?? "");
           setContext(null);
         }}>Rename</MenuItem>
         <MenuItem disabled={saving || deleteState.pending} onClick={() => {
-          const session = sessions.find((entry) => entry.conversation.id === context?.id);
-          if (session) deletion.request({ id: session.conversation.id, title: session.conversation.title ?? 'New session' });
+          const worker = context?.worker && workerSessions.find(item => item.id === context.id);
+          if (worker) workerDeletion.request({id: worker.id, title: worker.name});
+          const session = !context?.worker && sessions.find((entry) => entry.conversation.id === context?.id);
+          if (session) chatDeletion.request({ id: session.conversation.id, title: session.conversation.title ?? 'New session' });
           setContext(null);
         }}>Delete</MenuItem>
       </Menu>
       <Dialog open={!!deleteState.target} onClose={() => deletion.cancel()} aria-labelledby="delete-session-title" aria-describedby="delete-session-description" fullWidth maxWidth="xs">
         <DialogTitle id="delete-session-title">Delete session “{deleteState.target?.title}”?</DialogTitle>
         <DialogContent>
-          <Typography id="delete-session-description">This session and its entire history, including messages, tool calls, results, and Timeline entries, will be permanently deleted.</Typography>
+          <Typography id="delete-session-description">{workerDeleteState.target ? "This Worker session and its entire history, including saved answers and evaluations, will be permanently deleted." : "This session and its entire history, including messages, tool calls, results, and Timeline entries, will be permanently deleted."}</Typography>
           {deleteState.error && <Alert severity="error" sx={{ mt: 1 }}>{deleteState.error}</Alert>}
         </DialogContent>
         <DialogActions><Button autoFocus disabled={deleteState.pending} onClick={() => deletion.cancel()}>Cancel</Button><Button color="error" disabled={deleteState.pending} onClick={() => void deletion.confirm()}>{deleteState.pending ? 'Deleting…' : 'Delete'}</Button></DialogActions>
       </Dialog>
-      <Dialog open={!!renameId} onClose={() => { if (!saving) setRenameId(null); }} fullWidth maxWidth="xs">
+      <Dialog open={!!renameTarget} onClose={() => { if (!saving) setRenameTarget(null); }} fullWidth maxWidth="xs">
         <Box component="form" onSubmit={(event) => { event.preventDefault(); void rename(); }}>
           <DialogTitle>Rename session</DialogTitle>
           <DialogContent>{error && <Alert severity="error">{error}</Alert>}<TextField autoFocus fullWidth margin="dense" label="Session title" inputProps={{ maxLength: 200 }} disabled={saving} value={title} onChange={(event) => setTitle(event.target.value)} /></DialogContent>
-          <DialogActions><Button disabled={saving} onClick={() => setRenameId(null)}>Cancel</Button><Button type="submit" disabled={saving || !title.trim()}>Save</Button></DialogActions>
+          <DialogActions><Button disabled={saving} onClick={() => setRenameTarget(null)}>Cancel</Button><Button type="submit" disabled={saving || !title.trim()}>Save</Button></DialogActions>
         </Box>
       </Dialog>
     </Box>
@@ -873,7 +951,7 @@ function SessionChatView({
           {!week3 && <Box role="group" aria-label="Context strategy" sx={{display:'flex',flexWrap:'wrap',gap:1,minHeight:40,alignItems:'center'}}>
             {([['full','Full Context'],['sliding','Sliding Window'],['sticky','Sticky Facts'],['memory','Key-Value Memory']] as const).map(([value,label]) => {
               const selected = (sliding ? 'sliding' : sticky ? 'sticky' : memory ? 'memory' : 'full') === value;
-              return <Chip key={value} label={label} clickable disabled={running || contextSaving || switching} onClick={()=>void switchTab(value)} aria-pressed={selected} color={selected?'primary':'default'} variant={selected?'filled':'outlined'} sx={{transition:'background-color 180ms ease, border-color 180ms ease', ...(selected ? {border:'1px solid',borderColor:'primary.main',bgcolor:'primary.main',color:'primary.dark','&&:hover':{bgcolor:'primary.main',color:'primary.dark',borderColor:'primary.main'}} : {}), '&.Mui-focusVisible':{outline:'2px solid',outlineColor:'primary.dark',outlineOffset:2},'@media (prefers-reduced-motion: reduce)':{transition:'none'}}} />;
+              return <Chip key={value} label={label} clickable disabled={running || contextSaving || switching} onClick={()=>void switchTab(value)} aria-pressed={selected} color={selected?'primary':'default'} variant={selected?'filled':'outlined'} sx={{transition:'background-color 180ms ease, border-color 180ms ease', ...(selected ? {border:'1px solid',borderColor:'primary.main',bgcolor:'action.selected',color:'primary.dark','&&:hover':{bgcolor:'primary.light'}} : {}), '&.Mui-focusVisible':{outline:'2px solid',outlineColor:'primary.dark',outlineOffset:2},'@media (prefers-reduced-motion: reduce)':{transition:'none'}}} />;
             })}
           </Box>
           }

@@ -1,4 +1,4 @@
-import { vintagePalette as p } from "./vintage-palette";
+import { palette } from "./theme";
 import { Chip, CircularProgress, Tooltip } from "@mui/material";
 import { alpha } from "@mui/material/styles";
 import { statusLabel } from "./labels";
@@ -17,14 +17,12 @@ export function ResultBadge({
   const label = statusLabel(value);
   const tone =
     value === "correct" || value === "succeeded"
-      ? p.success
+      ? palette.success.main
       : value === "incorrect" || value === "failed"
-        ? p.error
+        ? palette.error.main
         : ["incomplete", "timed-out", "unable_to_assess"].includes(value)
-          ? p.warning
-          : value === "running"
-            ? p.muted
-            : p.muted;
+          ? palette.warning.main
+          : palette.text.secondary;
   const description = manual
     ? `Manual verdict: ${label}`
     : automated

@@ -49,7 +49,6 @@ export function ProviderModelTable({
         aria-label={`Provider ${view}`}
         sx={{
           minWidth: 450,
-          "& thead": { bgcolor: "secondary.main" },
           "& th": { fontWeight: 700 },
         }}
       >

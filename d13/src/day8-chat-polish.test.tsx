@@ -45,27 +45,27 @@ it('renders the entire unbroken header title separately from the fixed icon grou
     expect(html).toContain('minmax(0, 1fr) 430px');
 });
 
-it('uses pale yellow for user bubbles and leaves agent replies plain', () => {
+it('uses the selected surface for user bubbles and leaves agent replies plain', () => {
   const message = { kind: 'message' as const, id: 'user', runId: 'run', createdAt: 1,
     role: 'user' as const, text: 'Question' };
   const render = (role: 'user' | 'assistant') => renderToStaticMarkup(<ThemeProvider theme={theme}>
     <ChatRunLog events={[{ ...message, role }]} />
   </ThemeProvider>);
-  expect(render('user')).toContain('background-color:#FFF6D8');
+  expect(render('user')).toContain(`background-color:${theme.palette.action.selected}`);
   expect(render('user')).toContain('border:1px solid');
   expect(render('user')).toContain('text-align:left');
-  expect(render('assistant')).not.toContain('background-color:#FFF6D8');
+  expect(render('assistant')).not.toContain(`background-color:${theme.palette.action.selected}`);
   expect(render('assistant')).not.toContain('border:1px solid');
 });
 
-it('restores Day 7 green and neutral credential colors in both status renderers', () => {
+it('uses shared success and neutral credential colors in both status renderers', () => {
   for (const verified of [true, false]) {
     const status = { saved: verified, verification: verified ? 'verified' as const : 'unchecked' as const };
     for (const content of [<ProviderStatus verification="unverified" savedStatus={status} />,
       <CredentialIndicator status={status} showProvider={false} />]) {
       const html = renderToStaticMarkup(<ThemeProvider theme={theme}>{content}</ThemeProvider>);
-      expect(html).toContain(verified ? 'background-color:#2e7d32' : 'background-color:transparent');
-      expect(html).toContain(verified ? 'color:#fff' : 'color:#1F2937');
+      expect(html).toContain(verified ? `background-color:${theme.palette.success.main}` : 'background-color:transparent');
+      expect(html).toContain(verified ? 'color:#fff' : `color:${theme.palette.text.secondary}`);
     }
   }
 });

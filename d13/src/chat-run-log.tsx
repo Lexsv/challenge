@@ -196,7 +196,7 @@ export function ChatRunLog({ events }: { events: readonly TimelineEvent[] }) {
                       border: "1px solid",
                       borderColor: "divider",
                       borderRadius: "8px",
-                      bgcolor: "#FFF6D8",
+                      bgcolor: "action.selected",
                       color: "text.primary",
                     }
                   : {}),

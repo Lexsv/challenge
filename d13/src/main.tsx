@@ -89,12 +89,15 @@ import { Week2AgentToolLab } from "./week2-agent-tool-lab";
 import { createBuiltInToolRegistry } from "./tool-runtime";
 import { UsersPage, sampleUsers, type MockUser } from "./users-page";
 import { SessionListRequests } from './session-list-requests';
+import { WorkerTemplates, type WorkerTemplate } from './worker-ui';
+import { listWorkerRecords, workerFromRecord } from './worker-api';
 
 const navigation = [
   { id: "lab", label: "Labs", icon: ScienceOutlined },
   { id: "agents", label: "Agents", icon: SmartToyOutlined },
   { id: "users", label: "Users", icon: PeopleOutline },
   { id: "tools", label: "Tools", icon: BuildOutlined },
+  { id: "worker", label: "Worker", icon: ViewInArOutlined },
   { id: "settings", label: "Providers", icon: StorageOutlined },
 ] as const;
 
@@ -302,6 +305,13 @@ export function App({
   const [tab, navigate] = useState<Page>(() =>
     initialLabTab(credential(providerId), generationSettings, registry),
   );
+  const [workers, setWorkers] = useState<WorkerTemplate[]>([]);
+  const [workerLoadError,setWorkerLoadError] = useState('');
+  const [workerLoading,setWorkerLoading] = useState(true);
+  const [workerLoadAttempt,setWorkerLoadAttempt] = useState(0);
+  const editorOpen=tab==="worker";
+  const [loadedEditor,setLoadedEditor]=useState(false);
+  useEffect(()=>{let active=true;setWorkerLoading(true);setWorkerLoadError('');listWorkerRecords(editorOpen).then(items=>{if(active){setWorkers(items.map(workerFromRecord));setLoadedEditor(editorOpen);}}).catch(()=>{if(active)setWorkerLoadError('Could not load Worker templates.');}).finally(()=>{if(active)setWorkerLoading(false);});return()=>{active=false;};},[workerLoadAttempt,editorOpen]);
   const [consoleHeaderStatus, setConsoleHeaderStatus] = useState<{
     kind: VerificationKind;
     unsaved: boolean;
@@ -596,10 +606,6 @@ export function App({
                     "& .MuiTab-icon": {
                       display: { xs: "none", sm: "inline-flex" },
                     },
-                    "&.Mui-selected": {
-                      bgcolor: "primary.main",
-                      color: "primary.contrastText",
-                    },
                   }}
                 />
               ))}
@@ -628,8 +634,8 @@ export function App({
           hidden={tab !== "lab"}
         >
           <Stack spacing={2}>
-            <Box>
-              <Typography variant="h4" component="h2">
+            <Box sx={{display:"flex",alignItems:"center",flexWrap:"wrap",gap:2}}>
+              <Typography variant="h6" component="h2">
                 Labs
               </Typography>
               <Tabs
@@ -887,6 +893,9 @@ export function App({
             >
               <Week2AgentToolLab
                 mockUsers={mockUsers}
+                workers={workers}
+                profileRevision={profileRevision}
+                sessionsRevision={sessionsRevision} onSessionsChanged={()=>setSessionsRevision(current=>current+1)}
                 toolRegistry={toolRegistry}
                 registry={registry}
                 openAIModel={openAIModel}
@@ -896,7 +905,7 @@ export function App({
               />
             </Box>
             <Box role="tabpanel" aria-labelledby="labs-week3-tab" hidden={labsTab !== "week3"}>
-              <Week2AgentToolLab week3 profileRevision={profileRevision} sessionListRequests={week3SessionRequests} onSessionsChanged={()=>setSessionsRevision(current=>current+1)} onProfilesChanged={()=>setProfileRevision(current=>current+1)} toolRegistry={toolRegistry} registry={registry} openAIModel={openAIModel} onOpenAIModelChange={setOpenAIModel} openAIKey={key} openCodeKeys={openCodeKeys} />
+              <Week2AgentToolLab week3 workers={workers} profileRevision={profileRevision} sessionListRequests={week3SessionRequests} sessionsRevision={sessionsRevision} onSessionsChanged={()=>setSessionsRevision(current=>current+1)} onProfilesChanged={()=>setProfileRevision(current=>current+1)} toolRegistry={toolRegistry} registry={registry} openAIModel={openAIModel} onOpenAIModelChange={setOpenAIModel} openAIKey={key} openCodeKeys={openCodeKeys} />
             </Box>
             <Typography variant="caption" color="text.secondary">
               Week 2 conversation history is saved locally. Agents, Week 1 history, and built-in credentials reset on reload.
@@ -1424,6 +1433,14 @@ export function App({
           hidden={tab !== "tools"}
         >
           <ToolsPage agents={experts} toolRegistry={toolRegistry} />
+        </Box>
+        <Box
+          role="tabpanel"
+          id="panel-worker"
+          aria-labelledby="tab-worker"
+          hidden={tab !== "worker"}
+        >
+          {!editorOpen ? null : workerLoading ? <Typography role="status">Loading Worker templates…</Typography> : workerLoadError ? <Alert severity="error" action={<Button onClick={()=>setWorkerLoadAttempt(n=>n+1)}>Retry</Button>}>{workerLoadError}</Alert> : !loadedEditor ? null : <WorkerTemplates workers={workers} onChange={setWorkers} />}
         </Box>
         <Box
           role="tabpanel"

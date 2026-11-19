@@ -16,7 +16,7 @@ describe("Day 11 application shell", () => {
         primaryTabs.matchAll(/aria-controls="panel-([^"]+)"/g),
         (match) => match[1],
       ),
-    ).toEqual(["lab", "agents", "users", "tools", "settings"]);
+    ).toEqual(["lab", "agents", "users", "tools", "worker", "settings"]);
     expect(primaryTabs).toContain(">Labs<");
     expect(html).toContain(">Week 1<");
     expect(html).toContain(">Week 2<");

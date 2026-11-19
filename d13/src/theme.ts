@@ -1,215 +1,140 @@
 import { createTheme } from "@mui/material/styles";
-import { vintagePalette as p } from "./vintage-palette";
 
-const focusRing = { outline: `2px solid ${p.blueInk}`, outlineOffset: 2 };
 export const theme = createTheme({
   palette: {
     primary: {
-      main: p.blue,
-      light: p.bluePale,
-      dark: p.blueInk,
-      contrastText: p.blueInk,
+      main: "#1553d3",
+      dark: "#103d9f",
+      light: "#dfebff",
+      contrastText: "#fff",
     },
     secondary: {
-      main: p.pink,
-      light: "#F8EEE6",
-      dark: p.pinkInk,
-      contrastText: p.text,
+      main: "#415878",
+      light: "#edf2f9",
+      dark: "#2e4260",
+      contrastText: "#fff",
     },
-    info: {
-      main: p.blueInk,
-      light: p.bluePale,
-      dark: p.blueInk,
-      contrastText: p.paper,
-    },
-    success: { main: p.success, light: "#E5F0E8", contrastText: p.paper },
-    error: { main: p.error, light: "#F9E6E9", contrastText: p.paper },
-    warning: { main: p.warning, light: "#FFF0DF", contrastText: p.paper },
-    background: { default: p.surface, paper: p.paper },
-    text: { primary: p.text, secondary: p.muted, disabled: p.disabled },
-    divider: p.divider,
-    action: {
-      active: p.blueInk,
-      hover: "#F8F0E7",
-      selected: p.blueSelected,
-      focus: p.bluePale,
-      disabled: p.disabled,
-      disabledBackground: p.disabledSurface,
-    },
+    info: { main: "#206988", light: "#e4f2f9" },
+    success: { main: "#187342", light: "#e1f6e8", contrastText: "#fff" },
+    warning: { main: "#87520c", light: "#fff2d9" },
+    error: { main: "#ab333d", light: "#fbeaec" },
+    text: { primary: "#102448", secondary: "#4f6079" },
+    background: { default: "#f5f8fd", paper: "#fff" },
+    divider: "#d7e1ef",
+    action: { selected: "#e4eeff", hover: "#f2f6ff", focus: "#d8e7ff" },
   },
-  shape: { borderRadius: 16 },
+  shape: { borderRadius: 8 },
   typography: {
     fontFamily: "Inter, system-ui, sans-serif",
-    h4: { fontSize: "2rem", fontWeight: 780 },
-    h5: { fontWeight: 750 },
-    h6: { fontWeight: 750 },
+    h4: { fontSize: "1.75rem", fontWeight: 750 },
+    h5: { fontSize: "1.35rem", fontWeight: 750 },
+    h6: { fontSize: "1.05rem", fontWeight: 700 },
     button: { textTransform: "none", fontWeight: 650 },
   },
   components: {
-    MuiButton: {
-      defaultProps: { disableElevation: true },
+    MuiButtonBase: {
       styleOverrides: {
-        root: {
-          borderRadius: 10,
-          "&.MuiButton-containedPrimary:hover": {
-            backgroundColor: p.blueHover,
+        root: ({ theme }) => ({
+          "&.Mui-focusVisible": {
+            outline: `2px solid ${theme.palette.primary.main}`,
+            outlineOffset: -2,
           },
-          "&.MuiButton-containedSecondary:hover": {
-            backgroundColor: p.pinkHover,
-          },
-          "&.MuiButton-textPrimary:not(.Mui-disabled), &.MuiButton-outlinedPrimary:not(.Mui-disabled)":
-            { color: p.blueInk },
-          "&.MuiButton-textSecondary:not(.Mui-disabled), &.MuiButton-outlinedSecondary:not(.Mui-disabled)":
-            { color: p.pinkInk },
-          "&.MuiButton-outlinedPrimary:not(.Mui-disabled)": {
-            borderColor: p.blueInk,
-          },
-          "&.MuiButton-outlinedSecondary:not(.Mui-disabled)": {
-            borderColor: p.pinkInk,
-          },
-          "&.Mui-focusVisible": focusRing,
-          "&.Mui-disabled": { color: p.disabled },
-          "&.MuiButton-contained.Mui-disabled": {
-            backgroundColor: p.disabledSurface,
-          },
-        },
+        }),
       },
     },
-    MuiIconButton: {
-      styleOverrides: {
-        root: {
-          "&.MuiIconButton-colorPrimary:not(.Mui-disabled)": {
-            color: p.blueInk,
-          },
-          "&.MuiIconButton-colorSecondary:not(.Mui-disabled)": {
-            color: p.pinkInk,
-          },
-          "&:hover": { backgroundColor: p.bluePale },
-          "&.Mui-focusVisible": focusRing,
-        },
-      },
+    MuiButton: { defaultProps: { disableElevation: true } },
+    MuiTextField: {
+      defaultProps: { size: "small", fullWidth: true, variant: "outlined" },
     },
     MuiTab: {
       styleOverrides: {
-        root: {
-          "&:hover": { backgroundColor: "#F8F0E7" },
-          "&.Mui-selected": { color: p.blueInk, backgroundColor: p.bluePale },
-          "&.Mui-focusVisible": { ...focusRing, outlineOffset: -2 },
-        },
-      },
-    },
-    MuiTabs: { styleOverrides: { indicator: { backgroundColor: p.blueInk } } },
-    MuiListItemButton: {
-      styleOverrides: {
-        root: {
-          "&.Mui-selected": { backgroundColor: p.blueSelected, color: p.text },
-          "&.Mui-selected:hover": { backgroundColor: p.blueHover },
-          "&.Mui-focusVisible": {
-            ...focusRing,
-            outlineOffset: -2,
-            backgroundColor: p.bluePale,
+        root: ({ theme }) => ({
+          textTransform: "none",
+          "&.Mui-selected": {
+            color: theme.palette.primary.dark,
+            backgroundColor: theme.palette.action.selected,
           },
-        },
-      },
-    },
-    MuiMenuItem: {
-      styleOverrides: {
-        root: {
-          "&.Mui-selected": { backgroundColor: p.blueSelected },
-          "&.Mui-selected:hover": { backgroundColor: p.blueHover },
-          "&.Mui-focusVisible": { ...focusRing, outlineOffset: -2 },
-        },
+        }),
       },
     },
     MuiToggleButton: {
       styleOverrides: {
-        root: {
+        root: ({ theme }) => ({
+          textTransform: "none",
+          gap: theme.spacing(1),
+          fontWeight: 650,
           "&.Mui-selected": {
-            backgroundColor: p.blueSelected,
-            color: p.blueInk,
+            color: theme.palette.primary.dark,
+            backgroundColor: theme.palette.action.selected,
+            borderColor: theme.palette.primary.main,
           },
-          "&.Mui-selected:hover": { backgroundColor: p.blueHover },
-          "&.Mui-focusVisible": focusRing,
-        },
+        }),
       },
     },
-    MuiCheckbox: {
+    MuiMenuItem: {
       styleOverrides: {
-        root: {
-          "&.Mui-checked, &.MuiCheckbox-indeterminate": { color: p.blueInk },
-          "&.Mui-focusVisible": focusRing,
-          "&.Mui-disabled": { color: p.disabled },
-        },
+        root: ({ theme }) => ({
+          "&.Mui-selected": {
+            color: theme.palette.primary.dark,
+            backgroundColor: theme.palette.action.selected,
+          },
+        }),
       },
     },
-    MuiRadio: {
+    MuiListItemButton: {
       styleOverrides: {
-        root: {
-          "&.Mui-checked": { color: p.blueInk },
-          "&.Mui-focusVisible": focusRing,
-          "&.Mui-disabled": { color: p.disabled },
-        },
+        root: ({ theme }) => ({
+          "&.Mui-selected": {
+            color: theme.palette.primary.dark,
+            backgroundColor: theme.palette.action.selected,
+          },
+        }),
       },
     },
-    MuiSwitch: {
+    MuiTableCell: {
       styleOverrides: {
-        switchBase: {
-          "&.Mui-checked": { color: p.blueInk },
-          "&.Mui-checked + .MuiSwitch-track": { backgroundColor: p.blueInk },
-          "&.Mui-focusVisible": focusRing,
-        },
+        head: ({ theme }) => ({
+          color: theme.palette.text.primary,
+          backgroundColor: theme.palette.background.default,
+          fontWeight: 700,
+        }),
       },
-    },
-    MuiSlider: { styleOverrides: { root: { color: p.blueInk } } },
-    MuiCircularProgress: {
-      styleOverrides: { colorPrimary: { color: p.blueInk } },
     },
     MuiLinearProgress: {
       styleOverrides: {
-        colorPrimary: { backgroundColor: p.bluePale },
-        barColorPrimary: { backgroundColor: p.blueInk },
+        root: ({ theme }) => ({
+          height: 8,
+          borderRadius: theme.shape.borderRadius,
+          backgroundColor: theme.palette.secondary.light,
+        }),
+        bar: ({ theme }) => ({ borderRadius: theme.shape.borderRadius }),
       },
     },
-    MuiInputLabel: {
+    MuiDialog: {
       styleOverrides: {
-        root: { "&.Mui-focused:not(.Mui-error)": { color: p.blueInk } },
-      },
-    },
-    MuiOutlinedInput: {
-      styleOverrides: {
+        paper: ({ theme }) => ({
+          border: `1px solid ${theme.palette.divider}`,
+          borderRadius: 12,
+        }),
         root: {
-          "&:hover:not(.Mui-disabled):not(.Mui-error) .MuiOutlinedInput-notchedOutline":
-            { borderColor: p.blueInk },
-          "&.Mui-focused:not(.Mui-error) .MuiOutlinedInput-notchedOutline": {
-            borderColor: p.blueInk,
-          },
-          "&.Mui-disabled": { backgroundColor: p.disabledSurface },
+          "& .MuiBackdrop-root": { backgroundColor: "rgba(20,39,68,.30)" },
         },
       },
     },
+    MuiCard: { defaultProps: { variant: "outlined" } },
     MuiChip: {
       styleOverrides: {
-        colorDefault: { backgroundColor: p.bluePale, color: p.text },
-      },
-    },
-    MuiTooltip: {
-      styleOverrides: {
-        tooltip: { backgroundColor: p.blueInk, color: p.paper },
-        arrow: { color: p.blueInk },
-      },
-    },
-    MuiDialog: { styleOverrides: { paper: { borderRadius: 20 } } },
-    MuiPaper: { styleOverrides: { root: { backgroundImage: "none" } } },
-    MuiTextField: {
-      defaultProps: { fullWidth: true, size: "small", variant: "outlined" },
-    },
-    MuiCard: {
-      styleOverrides: {
-        root: {
-          border: `1px solid ${p.divider}`,
-          boxShadow: "0 3px 12px #60453210",
-        },
+        filled: ({ theme, ownerState }) =>
+          !ownerState.color || ownerState.color === "default"
+            ? {
+                backgroundColor: theme.palette.secondary.light,
+                color: theme.palette.text.primary,
+              }
+            : {},
       },
     },
   },
 });
+
+// Non-MUI renderers (such as highlighted code) need resolved color values.
+export const palette = theme.palette;

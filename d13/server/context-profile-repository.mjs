@@ -39,6 +39,7 @@ export function createContextProfileRepository(db) {
   // The profile and its Week 3 sessions are removed together; topic tables use
   // ON DELETE CASCADE, while archive and snapshot rows require explicit deletion.
   const removeSessions = id => {
+    if (db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='worker_sessions'").get()) db.prepare('DELETE FROM worker_sessions WHERE profile_id = ?').run(id);
     db.prepare('DELETE FROM week3_session_memory WHERE sessionId IN (SELECT id FROM week3_sessions WHERE profile_id = ?)').run(id);
     db.prepare('DELETE FROM week3_history_events WHERE sessionId IN (SELECT id FROM week3_sessions WHERE profile_id = ?)').run(id);
     return db.prepare('DELETE FROM week3_sessions WHERE profile_id = ?').run(id).changes;

@@ -12,6 +12,8 @@ export default defineConfig({
       },
       "/api/credentials": { target: "http://127.0.0.1:3013" },
       "/api/users": { target: "http://127.0.0.1:3013" },
+      "/api/worker-templates": { target: "http://127.0.0.1:3013" },
+      "/api/worker-sessions": { target: "http://127.0.0.1:3013" },
       "/api/week3/sessions": { target: "http://127.0.0.1:3013" },
       "/api/sessions": { target: "http://127.0.0.1:3013" },
       "/api/functions": { target: "http://127.0.0.1:3013" },

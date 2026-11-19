@@ -6,9 +6,15 @@ Users can create context profiles with persistent free-text Habits, assign a pro
 
 Week 1 and Week 2 remain available. Week 3 sessions, history, and memory use separate `week3_sessions`, `week3_history_events`, and `week3_session_memory` SQLite tables; shared providers and tools remain available across the lab. The complete Week 3 history is loaded when a session opens.
 
-## Task State Machine — planned
+## Worker quizzes
 
-This assignment will model task lifecycle states, the current task step, and the expected next action. It will define allowed state transitions, enforce transition validation in code, support pause and resume, and reject forbidden transitions. These capabilities are planned and are not implemented yet.
+In **Labs → Week 3**, create a Worker session and select a quiz. Start the session, select one answer per question, and use Back or Next to review your choices. Validate on the final question to evaluate the full attempt. Finish preserves the report. Try Again opens a separate attempt with the original question order. The catalog includes Programming Quiz and two Russian road-rules quizzes with five and ten questions.
+
+## Docker deployment
+
+From the extracted `day13/` directory, run `docker compose up --build -d` and open <http://127.0.0.1:8080>. Optional settings are listed in `.env.example`. The server initializes SQLite on its first start. The named volume stores subsequent sessions, templates, and any provider credentials saved through the Providers screen. Docker stores those keys in permission-restricted files in that volume. Treat volume backups as private.
+
+Set up a provider through the local Providers screen before using final AI validation. Set `DAY13_WORKER_VALIDATOR_PROVIDER` and `DAY13_WORKER_VALIDATOR_MODEL` to select the validator. To stop the local deployment and retain saved data, run `docker compose down`.
 
 ## Three-layer session memory
 
@@ -64,3 +70,58 @@ The Week 3 integration check exercises session isolation and restart persistence
 ## Independent QA
 
 Day 11's focused reconciliation retest covered the formerly failing extractor identity in a mocked Manager-to-SQLite regression; that exact identity was not observed in the final live samples. Prior QA reports and local captures are not part of this project copy.
+
+
+## Worker persistence
+
+Worker data uses the existing SQLite connection and profile IDs. Startup adds
+`worker_templates`, `worker_sessions`, and `worker_events` with idempotent,
+transactional initialization. Existing Chat and profile data is preserved. The
+Programming Quiz and Chocolate Production templates are seeded only on first
+initialization; intentional template deletions are not undone on restart.
+
+Template documents support schema versions 1 and 2, with 1–100 ordered steps and a 100,000
+byte JSON limit. Step and option IDs must be unique within their respective
+lists. Prompts have a 2,000-character limit; question steps require 2–4 options
+(500 characters each); action steps have no options. Names, descriptions, and
+rules are limited to 200, 5,000, and 20,000 characters respectively. The visual
+Steps editor accepts one step per line, with `A) ... B) ...` (up to `D)`) for
+questions. Users do not edit JSON. Unchanged steps retain their original
+structured IDs and contents during metadata edits.
+
+API routes:
+
+- `GET/POST /api/worker-templates`
+- `GET/PATCH/DELETE /api/worker-templates/:id`
+- `GET/POST /api/worker-sessions`
+- `GET /api/worker-sessions/:id`
+- `GET /api/worker-sessions/:id/events`
+
+Template PATCH requires `expectedVersion` and a complete editable template;
+success increments the version, while stale edits return 409. Session creation
+requires `name`, `profileId`, and `templateId`. In one transaction it copies the
+complete template record into an immutable snapshot and saves `not_started`,
+step 0, attempt 1, revision 1. Deleting a template only clears the live reference;
+existing snapshots remain available. Stored documents and snapshots are
+validated before use. API storage failures return sanitized errors.
+
+Worker Templates and sessions load through the API, including sidebar owners
+and the pre-start description. The status endpoint reports the current revision and available actions. The actions endpoint persists accepted changes alongside their command receipts.
+
+Users shows separate Chat and Worker session counts derived from the session
+lists. Profile deletion and General clearing atomically remove owned Chat and
+Worker data, including Worker events, while preserving shared templates and
+other profiles. Existing dependency/trigger safety checks include all three
+Worker tables and fail closed for unexpected dependencies.
+
+Focused persistence and regression checks (all databases are disposable):
+
+```sh
+node --test server/worker-repository.node-test.mjs server/worker-http.node-test.mjs server/profile-session-deletion.node-test.mjs
+pnpm test src/worker-ui.test.tsx src/new-session-dialog.test.tsx src/users-page.test.tsx src/users-vite-proxy.test.ts
+pnpm typecheck
+pnpm build
+git diff --check
+```
+
+The Worker state machine authorizes transitions. The backend checks the saved revision and evidence before recording a whole-quiz evaluation.

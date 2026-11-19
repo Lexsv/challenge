@@ -45,14 +45,14 @@ export async function estimateContextBreakdown(state: ManagerConversationState, 
 
 export function ContextBreakdownPanel({value}: {value?: ContextBreakdown}) {
   const ratio = value ? value.bufferCount / value.window : 0;
-  const color = ratio >= 1 ? '#c54c4c' : ratio >= .7 ? '#cf9b2d' : '#4d9a79';
+  const color = ratio >= 1 ? 'error.main' : ratio >= .7 ? 'warning.main' : 'success.main';
   const status = ratio >= 1 ? 'Full' : ratio >= .7 ? 'Near threshold' : 'Below threshold';
   const compression = value && value.dialogue > 0 && value.facts > 0 ? Math.round(value.facts/value.dialogue*100) : undefined;
-  const rows = [ ['Dialogue',value?.dialogue,'#65858e'], ['Fact context',value?.facts,'#5d9b9d'], ['Buffer',value?.buffer,color], ['Compression',compression,'#5d9b9d'] ] as const;
+  const rows = [ ['Dialogue',value?.dialogue,'primary.main'], ['Fact context',value?.facts,'info.main'], ['Buffer',value?.buffer,color], ['Compression',compression,'info.main'] ] as const;
   return <Box component="section" aria-label="Context breakdown" sx={{gridColumn:'1 / -1',borderTop:1,borderColor:'divider',pt:1,mt:.25}}>
     {rows.map(([label,tokens,fill])=><Box key={label} sx={{mt:1}}>
       <Box sx={{display:'flex',justifyContent:'space-between',gap:1,fontSize:14,fontVariantNumeric:'tabular-nums'}}><span>{label}</span><span>{tokens===undefined?'—':label==='Compression'?`${tokens}%`:`≈${number(tokens)}`}</span></Box>
-      <Box aria-hidden="true" sx={{height:7,bgcolor:'#edf5f5',borderRadius:2,mt:.5,overflow:'hidden'}}>
+      <Box aria-hidden="true" sx={{height:7,bgcolor:'secondary.light',borderRadius:2,mt:.5,overflow:'hidden'}}>
         <Box sx={{height:'100%',borderRadius:2,bgcolor:fill,width:`${label==='Buffer' ? Math.min(100,ratio*100) : label==='Compression' ? Math.max(0,Math.min(100,compression ?? 0)) : value && value.dialogue>0 && tokens!==undefined ? Math.min(100,tokens/value.dialogue*100) : 0}%`,transition:'width 300ms ease, background-color 300ms ease','@media (prefers-reduced-motion: reduce)':{transition:'none'}}} />
       </Box>
       {label==='Buffer' && <Box sx={{display:'flex',justifyContent:'space-between',gap:1,color:'text.secondary',fontSize:12,mt:.5}}><span>{value?`${value.bufferCount} / ${value.window} messages`:'Updating…'}</span><span>{value?status:''}</span></Box>}

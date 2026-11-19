@@ -11,9 +11,8 @@ dist/
 .DS_Store
 work/
 
-# Local container files
-/Dockerfile
-/.dockerignore
+# Local container archives
+/day13-docker.tar.gz
 /expert-lab-d3.tar
 /ai-advent-d4.tar
 /challenge-d6.tar

@@ -1,4 +1,4 @@
-import { vintagePalette as p } from "./vintage-palette";
+import { palette } from "./theme";
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { loadFunctions, saveFunction, deleteFunction } from './custom-functions-api';
 import { parseFunction } from './custom-function-runtime';
@@ -144,11 +144,11 @@ export function pseudocodePreviewHtml(source: string): string {
     token,
     (match, comment: string, keyword: string, number: string, operator: string) => {
       if (comment)
-        return `<span style="color:${p.muted};font-style:italic">${match}</span>`;
+        return `<span style="color:${palette.text.secondary};font-style:italic">${match}</span>`;
       if (keyword)
-        return `<span style="color:${p.pinkInk};font-weight:600">${match}</span>`;
-      if (number) return `<span style="color:${p.blueInk}">${match}</span>`;
-      if (operator) return `<span style="color:${p.warning}">${match}</span>`;
+        return `<span style="color:${palette.primary.dark};font-weight:600">${match}</span>`;
+      if (number) return `<span style="color:${palette.primary.main}">${match}</span>`;
+      if (operator) return `<span style="color:${palette.warning.main}">${match}</span>`;
       return match;
     },
   );
@@ -277,7 +277,7 @@ function ToolDialog({
   return (
     <Dialog open onClose={onClose} fullWidth maxWidth="lg" aria-labelledby="tool-dialog-title">
       <DialogTitle id="tool-dialog-title" sx={{ pr: 7 }}>
-        {title} <Chip label={type} sx={{ ml: 1, bgcolor: "secondary.main" }} />
+        {title} <Chip label={type} sx={{ ml: 1, bgcolor: "secondary.light" }} />
         <IconButton
           aria-label={`Close ${title}`}
           onClick={onClose}
@@ -552,7 +552,7 @@ function ToolDialog({
             variant="outlined"
             sx={{
               p: 2.5,
-              bgcolor: "secondary.main",
+              bgcolor: "background.paper",
               alignSelf: "start",
               minWidth: 0,
             }}
@@ -620,7 +620,7 @@ function ToolDetailsDialog({
   return (
     <Dialog open onClose={onClose} fullWidth maxWidth="md" aria-labelledby="tool-details-title">
       <DialogTitle id="tool-details-title" sx={{ pr: 7 }}>
-        {tool.name} <Chip label={tool.type} sx={{ ml: 1, bgcolor: "secondary.main" }} />
+        {tool.name} <Chip label={tool.type} sx={{ ml: 1, bgcolor: "secondary.light" }} />
         <IconButton
           aria-label="Close Tool Details"
           onClick={onClose}
@@ -716,7 +716,7 @@ function TypeSelectionDialog({
                   aria-label={`Select tool type ${type}`}
                 >
                   <Stack direction="row" spacing={1.5} alignItems="flex-start">
-                    <Box sx={{ display: "flex", p: 1, borderRadius: 1.5, bgcolor: "secondary.main", color: "primary.dark" }}>
+                    <Box sx={{ display: "flex", p: 1, borderRadius: 1.5, bgcolor: "secondary.light", color: "primary.dark" }}>
                       <Icon fontSize="small" />
                     </Box>
                     <Box>
