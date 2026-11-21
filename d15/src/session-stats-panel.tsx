@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
 import { historicalContext } from "./context-compaction";
 import { factHistory, factMessage, selectFactLayers } from './key-facts-context';
 import { loadHistory, loadSessionFacts } from './session-api';
 import { restoreHistory } from './conversation-history';
 import { verifiedEncoding, DEFAULT_CONTEXT_ENCODING, estimateContextInput } from "./token-meter";
-import { Box, Paper, Typography } from "@mui/material";
+import ExpandMore from "@mui/icons-material/ExpandMore";
+import { Accordion, AccordionDetails, AccordionSummary, Box, Paper, Typography } from "@mui/material";
 import type { ManagerConversationState } from "./manager-agent";
 import {
   managerContextBudget,
@@ -76,6 +77,34 @@ export function SessionStatsFrame({ children }: { children: ReactNode }) {
   );
 }
 
+type StatRow = [string, ReactNode];
+type SecurityCounts = Record<"blocked" | "redacted" | "withheld", number>;
+type CompactStats = { model?: string; security?: SecurityCounts };
+
+function StatSection({ title, summary, rows, children }: {
+  title: string; summary: string; rows: StatRow[]; children?: ReactNode;
+}) {
+  const id = useId();
+  return <Accordion defaultExpanded={title === "Tokens"} disableGutters elevation={0}
+    sx={{ borderTop: 1, borderColor: "divider", "&::before": { display: "none" } }}>
+    <AccordionSummary id={id} aria-controls={id+"-content"} expandIcon={<ExpandMore fontSize="small" />}
+      sx={{ px: 0, minHeight: 40, "& .MuiAccordionSummary-content": { alignItems: "baseline", flexWrap: "wrap", gap: .5, mr: 1, my: 1 } }}>
+      <Typography component="span" variant="subtitle2" sx={{ flexGrow: 1 }}>{title}</Typography>
+      <Typography component="span" variant="caption" color="text.secondary">{summary}</Typography>
+    </AccordionSummary>
+    <AccordionDetails sx={{ px: 0, pt: 0, pb: 1.25 }}>
+      <Box component="dl" sx={{ m: 0, px: 1.25, py: 1, borderRadius: 1, bgcolor: "action.hover", display: "grid",
+        gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1.4fr)", columnGap: 1, rowGap: .5, overflowWrap: "anywhere" }}>
+        {rows.map(([label,value])=><Box key={label} sx={{ display: "contents" }}>
+          <Typography component="dt" variant="body2" color="text.secondary">{label}</Typography>
+          <Typography component="dd" variant="body2" sx={{ m: 0, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{value}</Typography>
+        </Box>)}
+      </Box>
+      {children}
+    </AccordionDetails>
+  </Accordion>;
+}
+
 export function SessionStatsContent({
   stats,
   context,
@@ -83,6 +112,7 @@ export function SessionStatsContent({
   breakdown,
   showBreakdown = false,
   fullContext = false,
+  compact,
 }: {
   stats?: SessionStats;
   context?: NextSessionContext;
@@ -90,20 +120,19 @@ export function SessionStatsContent({
   breakdown?: ContextBreakdown;
   showBreakdown?: boolean;
   fullContext?: boolean;
+  compact?: CompactStats;
 }) {
   const usage = (value: SessionStats["input"] | undefined) =>
     value?.reportedRequests ? number(value.knownTokens) : "Not reported";
-  const rows: [string, ReactNode][] = [
-    [
+  const modelsUsed: StatRow = [
       "Models used",
       stats?.models.length
         ? [...new Set(stats.models.map((model) => model.model))].map(
             (model) => <Box key={model}>{model}</Box>,
           )
         : "—",
-    ],
-    ["Requests", number(stats?.requestCount ?? 0)],
-    ["Tokens", ""],
+    ];
+  const tokens: StatRow[] = [
     ["Input", usage(stats?.input)],
     ["Output", usage(stats?.output)],
     [
@@ -112,12 +141,15 @@ export function SessionStatsContent({
         ? number(stats.total.knownTokens)
         : "Not reported",
     ],
+  ];
+  const requests: StatRow = ["Requests", compact && !stats ? "Unavailable" : number(stats?.requestCount ?? 0)];
+  const usageRows: StatRow[] = [
     [
       "Active time",
-      `${duration(stats?.activeTime.milliseconds ?? 0)}${stats?.activeTime.missingDurations ? " · Partial" : ""}`,
+      compact && !stats ? "Unavailable" : `${duration(stats?.activeTime.milliseconds ?? 0)}${stats?.activeTime.missingDurations ? " · Partial" : ""}`,
     ],
     [
-      "Cost (≈)",
+      compact ? "Estimated cost" : "Cost (≈)",
       stats?.cost.subtotals.length ? (
         <>
           {stats.cost.subtotals.map((cost) => (
@@ -131,17 +163,33 @@ export function SessionStatsContent({
       ),
     ],
   ];
-  rows.push(
-    ["Context", ""],
+  const contextRows: StatRow[] = [
     ["Model window", context?.contextWindow === undefined ? "Unavailable" : number(context.contextWindow)],
     ["Dialogue", context?.dialogueTokens === undefined ? (contextPending ? "Updating…" : "Unavailable") : number(context.dialogueTokens)],
     ["Last request", stats?.lastAnswer
       ? (stats.lastAnswer.sentInputTokens ?? stats.lastAnswer.estimatedInputTokens) !== undefined
         ? `≈${number((stats.lastAnswer.sentInputTokens ?? stats.lastAnswer.estimatedInputTokens)!)}` : "Unavailable"
       : "—"],
-  );
-  if (!fullContext) rows.splice(rows.length - 1, 0, ["Compaction target", context?.requestTokenLimit === undefined ? "Unavailable" : context.requestTokenLimit === 0 ? (context.contextWindow === undefined ? "Auto" : `${number(context.contextWindow)} (Auto)`) : number(context.requestTokenLimit)]);
-  if (showBreakdown) rows.push(['Recent messages', breakdown?.recent === undefined ? '—' : `≈${number(breakdown.recent)}`]);
+  ];
+  if (!fullContext) contextRows.splice(contextRows.length - 1, 0, ["Compaction target", context?.requestTokenLimit === undefined ? "Unavailable" : context.requestTokenLimit === 0 ? (context.contextWindow === undefined ? "Auto" : `${number(context.contextWindow)} (Auto)`) : number(context.requestTokenLimit)]);
+  if (showBreakdown) contextRows.push(['Recent messages', breakdown?.recent === undefined ? '—' : `≈${number(breakdown.recent)}`]);
+  if (compact) {
+    const counts = compact.security;
+    const securityRows: StatRow[] = (["blocked","redacted","withheld"] as const).map(key =>
+      [key[0].toUpperCase()+key.slice(1), counts ? number(counts[key]) : "Unavailable"]);
+    const total = stats?.total;
+    return <Box sx={{ minWidth: 0 }}>
+      <Typography variant="caption" component="div" color="text.secondary">Selected model</Typography>
+      <Typography variant="subtitle2" sx={{ mb: 1.25, overflowWrap: "anywhere" }}>{compact.model || "Unavailable"}</Typography>
+      <StatSection title="Tokens" summary={total?.reportedValues ? number(total.knownTokens)+" reported" : "Not reported"} rows={tokens}/>
+      <StatSection title="Context" summary={context?.contextWindow === undefined ? "Window unavailable" : number(context.contextWindow)+" window"} rows={contextRows}>
+        {showBreakdown && <ContextBreakdownPanel value={breakdown}/>}
+      </StatSection>
+      <StatSection title="Security" summary={counts ? number(counts.blocked)+" blocked · "+number(counts.redacted)+" redacted · "+number(counts.withheld)+" withheld" : "Counts unavailable"} rows={securityRows}/>
+      <StatSection title="Usage" summary={stats ? number(stats.requestCount)+(stats.requestCount===1?" request":" requests") : "Requests unavailable"} rows={[requests,...usageRows,modelsUsed]}/>
+    </Box>;
+  }
+  const rows: StatRow[] = [modelsUsed, requests, ["Tokens",""], ...tokens, ...usageRows, ["Context",""], ...contextRows];
   return (
     <Box
       component="dl"
@@ -215,6 +263,7 @@ export function SessionStatsPanel({
   recentMessages,
   factsRevision,
   fullContext,
+  compact,
   children,
 }: {
   state: ManagerConversationState;
@@ -230,6 +279,7 @@ export function SessionStatsPanel({
   recentMessages?: number;
   factsRevision?: number;
   fullContext?: boolean;
+  compact?: CompactStats;
   children?: ReactNode;
 }) {
   const stats = useMemo(() => aggregateSessionStats(accountingState ?? state), [state, accountingState]);
@@ -259,7 +309,7 @@ export function SessionStatsPanel({
   const pending = dialogue?.state !== state || dialogue?.model !== request.model;
   return (
     <SessionStatsFrame>
-      <SessionStatsContent stats={loaded ? stats : undefined}
+      <SessionStatsContent compact={compact} stats={loaded ? stats : undefined}
         context={{ ...budget, dialogueTokens: pending ? undefined : dialogue?.tokens }} contextPending={pending}
         showBreakdown={contextStrategy==='key-facts'} breakdown={breakdown} fullContext={fullContext} />
       {children}

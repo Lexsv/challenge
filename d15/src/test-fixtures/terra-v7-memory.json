@@ -1,0 +1,208 @@
+{
+  "13": {
+    "message": "Катя не едет на озеро, вместо неё едет Вера.",
+    "proposal": {
+      "version": 1,
+      "facts": [],
+      "topic": {
+        "kind": "write",
+        "updates": [
+          {
+            "target": {
+              "kind": "existing",
+              "card": "user-4cff1e34-872b-4068-a40a-805ea322cb9a",
+              "mention": {
+                "source": "current",
+                "quote": "Катя не едет на озеро, вместо неё едет Вера."
+              }
+            },
+            "edits": [
+              {
+                "kind": "set_roster",
+                "names": [
+                  "Сергей",
+                  "Лена",
+                  "Вера"
+                ],
+                "evidence": {
+                  "source": "current",
+                  "quote": "Катя не едет на озеро, вместо неё едет Вера."
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "15": {
+    "message": "Катя не едет на озеро, вместо неё едет Вера.",
+    "proposal": {
+      "version": 1,
+      "facts": [],
+      "topic": {
+        "kind": "write",
+        "updates": [
+          {
+            "target": {
+              "kind": "existing",
+              "card": "user-4cff1e34-872b-4068-a40a-805ea322cb9a",
+              "mention": {
+                "source": "current",
+                "quote": "на озеро"
+              }
+            },
+            "edits": [
+              {
+                "kind": "set_roster",
+                "names": [
+                  "Сергей",
+                  "Лена",
+                  "Вера"
+                ],
+                "evidence": {
+                  "source": "current",
+                  "quote": "Катя не едет на озеро, вместо неё едет Вера."
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "17": {
+    "message": "На озеро едут Сергей, Лена и Вера. Катя не едет.",
+    "proposal": {
+      "version": 1,
+      "facts": [],
+      "topic": {
+        "kind": "write",
+        "updates": [
+          {
+            "target": {
+              "kind": "existing",
+              "card": "user-4cff1e34-872b-4068-a40a-805ea322cb9a",
+              "mention": {
+                "source": "current",
+                "quote": "На озеро"
+              }
+            },
+            "edits": [
+              {
+                "kind": "set_roster",
+                "names": [
+                  "Сергей",
+                  "Лена",
+                  "Вера"
+                ],
+                "evidence": {
+                  "source": "current",
+                  "quote": "На озеро едут Сергей, Лена и Вера. Катя не едет."
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "18": {
+    "message": "На озеро едут Сергей, Лена и Вера. Катя не едет.",
+    "proposal": {
+      "version": 1,
+      "facts": [],
+      "topic": {
+        "kind": "write",
+        "updates": [
+          {
+            "target": {
+              "kind": "existing",
+              "card": "user-4cff1e34-872b-4068-a40a-805ea322cb9a",
+              "mention": {
+                "source": "current",
+                "quote": "На озеро"
+              }
+            },
+            "edits": [
+              {
+                "kind": "set_roster",
+                "names": [
+                  "Сергей",
+                  "Лена",
+                  "Вера"
+                ],
+                "evidence": {
+                  "source": "current",
+                  "quote": "На озеро едут Сергей, Лена и Вера."
+                }
+              },
+              {
+                "kind": "withdraw",
+                "person": "Катя",
+                "evidence": {
+                  "source": "current",
+                  "quote": "Катя не едет."
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "50": {
+    "message": "Для рассказа запомни: на пристани у озера висел «янтарный фонарь», это просто атмосферная деталь, не для плана.",
+    "proposal": {
+      "version": 1,
+      "facts": [],
+      "topic": {
+        "kind": "write",
+        "updates": [
+          {
+            "target": {
+              "kind": "new",
+              "description": "Рассказ",
+              "tags": [
+                "writing"
+              ],
+              "mention": {
+                "source": "current",
+                "quote": "Для рассказа запомни"
+              }
+            },
+            "edits": [
+              {
+                "kind": "append_note",
+                "evidence": {
+                  "source": "current",
+                  "quote": "на пристани у озера висел «янтарный фонарь», это просто атмосферная деталь, не для плана."
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "63": {
+    "message": "Какой фонарь висел на пристани у озера?",
+    "proposal": {
+      "version": 1,
+      "facts": [],
+      "topic": {
+        "kind": "read",
+        "purpose": "answer",
+        "queries": [
+          {
+            "card": "user-ef0702a8-11da-4b66-b8ac-af1faf9bda25",
+            "field": "notes",
+            "selector": {
+              "kind": "current"
+            }
+          }
+        ]
+      }
+    }
+  }
+}

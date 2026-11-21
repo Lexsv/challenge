@@ -16,4 +16,5 @@
 !docker/start.mjs
 **/*.test.*
 **/*.node-test.*
+src/test-fixtures/
 server/*integration.mjs

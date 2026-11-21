@@ -33,6 +33,7 @@ export function validateProfileDeletionSchema(db) {
   const present = new Set(tables.map(row => identifier(row.name)));
   const workers = Object.keys(workerExpected).some(name => present.has(name));
   const graph = {...expected,...(workers ? workerExpected : {})};
+  if(present.has('week3_proposal_receipts')) graph.week3_proposal_receipts=[signature('week3_sessions','cascade','session_id:id')];
   if(present.has('invariant_scopes')) Object.assign(graph,{
     invariant_scopes:[signature('sessions','cascade','chat_id:id'), signature('week3_sessions','cascade','week3_id:id')],
     session_invariants:[signature('invariant_scopes','cascade','session_id:id')],

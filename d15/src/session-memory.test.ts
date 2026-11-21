@@ -1,4 +1,4 @@
-import { expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { DEFAULT_SHORT_TERM_TOKEN_BUDGET, ContextBuilder, SessionMemory, MemoryProcessor, mergeMemoryFacts, type MemorySnapshot, type MemoryStore } from './session-memory';
 import { estimateMemoryTokenStats } from './memory-token-stats';
 import type { ManagerLlmMessage } from './manager-agent';
@@ -222,4 +222,259 @@ it('supplies honesty instructions to the Manager when a mocked answer acknowledg
   const result=await new ManagerAgent({complete},createBuiltInToolRegistry()).run({state:createManagerConversation(),userText:'What is my passport number?',sessionMemory:new SessionMemory(f.store,f.processor,'gpt-4o-mini')});
   expect(result.finalResponse).toContain("don't have that information");
   expect(calls[0].some(message=>message.role==='system' && message.content.includes('If information is missing'))).toBe(true);
+});
+
+const cite=(quote:string)=>({source:"current",quote});
+const wire=(topic:unknown)=>({text:JSON.stringify({version:1,facts:[],topic})});
+const createTopic=(description:string,tags:string[],quote:string,edits:unknown[]=[])=>({
+  kind:"write",updates:[{target:{kind:"new",description,tags,mention:cite(quote)},edits}]});
+const dateEdit=(value:string,quote:string)=>({kind:"set",field:"date",value,evidence:cite(quote)});
+const readTopic=(card:string,field:string|null=null)=>({kind:"read",purpose:"answer",queries:[{card,field,selector:{kind:"current"}}]});
+
+it('rejects an unversioned action on the first turn and retries a malformed decision without partial writes', async()=>{
+  const f=fixture();
+  const message='Давай спланируем отдых на озере с друзьями';
+  const write={action:'write',id:'new',description:'Озеро с друзьями',tags:['озеро','друзья'],changes:[]};
+  const complete=vi.fn()
+    .mockResolvedValueOnce({text:JSON.stringify({...write,changes:[{field:'date',value:'Tomorrow',evidence:'unmentioned'}]})})
+    .mockResolvedValueOnce({text:'{"evidence":[]}'})
+    .mockResolvedValue(wire(createTopic(write.description,write.tags,"озере")));
+  const memory=new SessionMemory(f.store,new MemoryProcessor({complete,context:{assess:async()=>({tokens:1,limit:5000}),summarize:async()=>''}}),'gpt-4o-mini');
+  const attempt=()=>memory.prepare([],[user(message)],'one',undefined,{id:'one',at:1,order:1});
+  await expect(attempt()).rejects.toThrow(/proposal/);
+  expect(f.read()).toEqual({revision:0,data:null});
+  await attempt();await attempt();
+  expect(f.read().data?.catalog?.cards).toEqual([{id:'one',description:write.description,tags:write.tags,changes:[]}]);
+  expect(f.read().data?.covered).toEqual([]);
+});
+
+it('retries failed dialogue compression on a card turn and keeps superseded dialogue out of its answer',async()=>{
+  const f=fixture(), detail='Оператор произнёс «янтарный фонарь».';
+  const catalog={active:'lake',cards:[{id:'lake',description:'Lake',tags:[],changes:[{field:'roster',value:['Lena'],evidence:'Lena',id:'one',at:1,order:1}]}]};
+  await f.store.save({revision:0,data:{catalog,buffer:[],short:[],summary:'',covered:[],facts:[],extracted:['one']}});
+  const processor=new MemoryProcessor({context:{assess:async()=>({tokens:1,limit:5000}),summarize:async()=>detail},complete:async({messages})=>({text:messages[0].content.startsWith('Review')?'{"preserved":true}':wire(readTopic('lake','roster')).text})});
+  const compress=vi.spyOn(processor,'compress').mockRejectedValueOnce(Error('summary unavailable'));
+  const memory=new SessionMemory(f.store,processor,'gpt-4o-mini',30);
+  const groups=[{id:'run1',sourceIds:['one'],messages:[user(detail+' Katya '.repeat(90))]}];
+  const prepare=()=>memory.prepare(groups,[user('Кто сейчас едет?')],'q',undefined,{id:'q',at:2,order:2});
+  await expect(prepare()).rejects.toThrow('summary unavailable');expect(f.read().data?.covered).toEqual([]);
+  const answer=await prepare();
+  expect(compress).toHaveBeenCalledTimes(2);
+  expect(f.read().data).toMatchObject({summary:detail,covered:['run1']});
+  expect(JSON.stringify(answer)).toContain('Lena');
+  expect(JSON.stringify(answer)).not.toContain('Katya');
+});
+
+it('resolves a misrouted dialogue reply through a targeted selection without writing advice as a fact',async()=>{
+  const f=fixture();
+  const pending={intent:'read' as const, source:{id:'ask',at:1,order:1},question:'Which trip?',text:'How should we divide the work?'};
+  const card={id:'mountains',description:'Горы',tags:['trip'],changes:[]};
+  await f.store.save({revision:0,data:{catalog:{pending,cards:[card]},summary:'',facts:[],short:[],buffer:[],covered:[],extracted:[]}});
+  const complete=vi.fn().mockResolvedValueOnce(wire({kind:'dialogue'}))
+    .mockResolvedValueOnce(wire(readTopic('mountains')));
+  const memory=new SessionMemory(f.store,new MemoryProcessor({complete,context:{assess:async()=>({tokens:50,limit:10000}),summarize:async()=>''}}),'gpt-4o-mini');
+  const answer=await memory.prepare([],[user('Давай для гор')],'reply',undefined,{id:'reply',at:2,order:2});
+  expect(f.read().data?.catalog).toMatchObject({active:'mountains',cards:[card]});
+  expect(f.read().data?.catalog?.pending).toBeUndefined();
+  expect(JSON.stringify(answer)).toContain(pending.text);
+});
+
+it('grounds recall in a reviewed summary and an original covered turn after reopening memory',async()=>{
+  const f=fixture(), original='Слова для ведущего: «Серебряный маяк».';
+  const group={id:'source-run',messages:[user(original)],sourceIds:['source-msg']};
+  await f.store.save({revision:0,data:{catalog:{cards:[]},short:[],facts:[],summary:'Просили запомнить слова «Серебряный маяк».',buffer:[],covered:[group.id],extracted:['source-msg']}});
+  const complete=vi.fn().mockResolvedValue({text:wire({kind:'recall',quote:'Серебряный маяк'}).text});
+  const memory=new SessionMemory(f.store,new MemoryProcessor({complete,context:{assess:async()=>({tokens:50,limit:10000}),summarize:async()=>''}}),'gpt-4o-mini');
+  const request=await memory.prepare([group],[user('Что я просил запомнить?')],'q',undefined,{at:2,order:2,id:'q'});
+  const evidence=JSON.parse(request.find(m=>m.content.startsWith('Selected task records:'))!.content.slice('Selected task records: '.length));
+  expect(evidence.original).toEqual({runId:group.id,role:'user',excerpt:original});
+  expect(evidence.dialogueSummaryExcerpt).toContain('Серебряный маяк');
+  expect(f.read().data?.short.flatMap(g=>g.messages)).not.toContainEqual(user(original));
+});
+
+it.each([false,true])("repairs an omitted creation changes array once; explicit fields=%s",async(explicit)=>{
+  const f=fixture(), text=explicit ? 'Планируем поездку на озеро 20 июля.' : 'Давай спланируем отдых на озере с друзьями';
+  const plan={action:'write',id:'new',description:'Отдых на озере с друзьями',tags:['озеро','друзья']};
+  const complete=vi.fn().mockResolvedValueOnce({text:JSON.stringify({facts:[],topic:plan})})
+    .mockResolvedValueOnce(wire(createTopic(plan.description,plan.tags,explicit?'озеро':'озере',explicit?[dateEdit('20 июля','20 июля')]:[])));
+  const memory=new SessionMemory(f.store,new MemoryProcessor({complete,context:{assess:async()=>({tokens:10,limit:2000}),summarize:async()=>''}}),'gpt-4o-mini');
+  await memory.prepare([],[user(text)],'m',undefined,{id:'m',at:1,order:1});
+  expect(complete).toHaveBeenCalledTimes(2);
+  expect(f.read().data?.catalog?.cards).toHaveLength(1);
+  expect(f.read().data?.catalog?.cards[0].changes.length).toBe(explicit?1:0);
+});
+
+it("rejects a malformed repair before writing and permits retry from the original turn",async()=>{
+  const f=fixture(),plan={action:'write',id:'new',description:'Озеро',tags:['озеро']};
+  const complete=vi.fn().mockResolvedValueOnce({text:JSON.stringify({facts:[],topic:plan})})
+    .mockResolvedValueOnce({text:'{"changes":null}'}).mockResolvedValue(wire(createTopic(plan.description,plan.tags,'озеро')));
+  const memory=new SessionMemory(f.store,new MemoryProcessor({complete,context:{assess:async()=>({tokens:10,limit:2000}),summarize:async()=>''}}),'gpt-4o-mini');
+  const attempt=()=>memory.prepare([],[user('Создай поездку на озеро')],'m',undefined,{id:'m',at:1,order:1});
+  await expect(attempt()).rejects.toThrow(/proposal/);
+  expect(complete).toHaveBeenCalledTimes(2);expect(f.read().revision).toBe(0);
+  await attempt();await attempt();
+  expect(f.read().data?.catalog?.cards).toHaveLength(1);
+});
+
+it("opens the finished catalog for an explicit lookup without putting it into the initial extraction", async()=>{
+  const f=fixture(), card={id:'old',description:'Archived summer trip',tags:['summer'],changes:[]};
+  await f.store.save({revision:0,data:{catalog:{boundary:'finished',cards:[card]},short:[],buffer:[],covered:[],extracted:[],summary:'',facts:[]}});
+  const complete=vi.fn()
+    .mockResolvedValueOnce(wire({kind:'lookup_catalog'}))
+    .mockResolvedValueOnce(wire(readTopic('old')));
+  const processor=new MemoryProcessor({complete,context:{assess:async()=>({tokens:50,limit:5000}),summarize:async()=>''}});
+  const result=await new SessionMemory(f.store,processor,'gpt-4o-mini').prepare([],[user("Reopen last summer's trip")],'q',undefined,{id:'q',at:2,order:2});
+  expect(JSON.stringify(complete.mock.calls[0])).not.toContain(card.description);
+  expect(JSON.stringify(complete.mock.calls[1])).toContain(card.description);
+  expect(JSON.stringify(result)).toContain(card.description);
+  expect(f.read().data?.catalog?.active).toBe(card.id);
+});
+
+it("creates an explicitly new task after Finish without sending old cards to the model",async()=>{
+  const f=fixture(), old={id:'old',description:'Old lake holiday',tags:['lake'],changes:[]};
+  await f.store.save({revision:0,data:{catalog:{boundary:'finished',cards:[old]},short:[],buffer:[],covered:[],extracted:[],summary:'',facts:[]}});
+  const plan={action:'write',id:'new',description:'House repairs',tags:['repairs'],changes:[]};
+  const complete=vi.fn().mockResolvedValue(wire(createTopic(plan.description,plan.tags,"house repairs")));
+  const processor=new MemoryProcessor({complete,context:{assess:async()=>({tokens:50,limit:5000}),summarize:async()=>''}});
+  const result=await new SessionMemory(f.store,processor,'gpt-4o-mini').prepare([],[user('Start a new plan for house repairs.')],'q',undefined,{id:'q',at:2,order:2});
+  expect(complete).toHaveBeenCalledTimes(1);
+  expect(JSON.stringify([complete.mock.calls,result])).not.toContain(old.description);
+  expect(f.read().data?.catalog?.cards.map(c=>c.id)).toEqual(['old','q']);
+});
+
+it('confirms saved transitions and repeats from receipts despite a contradictory provider answer',async()=>{
+  const f=fixture();
+  const card={id:'lake',description:'Отдых на озере с друзьями',tags:['озеро'],changes:[
+    {id:'lake',at:1,order:1,field:'date',value:'2027-08-04',evidence:'4 августа'}]};
+  await f.store.save({revision:0,data:{catalog:{cards:[card],active:card.id},summary:'',facts:[],buffer:[],short:[],extracted:[],covered:[]}});
+  const llm=new MemoryProcessor({complete:async({messages})=>{
+    const text=JSON.parse(messages[1].content)[0].content;
+    return wire({kind:"write",updates:[{target:{kind:"existing",card:card.id,mention:cite("озеро")},edits:[dateEdit('2027-08-08','8 августа 2027 года')]}]});
+  },context:{assess:async()=>({tokens:100,limit:5000}),summarize:async()=>''}});
+  const memory=new SessionMemory(f.store,llm,'gpt-4o-mini');
+  const complete=vi.fn().mockResolvedValue({text:'Дата отдыха на озере уже была указана как **8 августа 2027 года**; новое изменение не потребовалось. ПЕРСОНАЛЬНО'});
+  const manager=new ManagerAgent({complete},createBuiltInToolRegistry()), state=createManagerConversation();
+  const run=(userText:string)=>manager.run({state,userText,sessionMemory:memory, receiptRequiredLiterals:['ПРОВЕРЕНО'],
+    personalizationSnapshot:{sessionId:state.conversation.id,profileId:'test',profileRevision:1,habits:'В конце каждого ответа добавляй слово ПЕРСОНАЛЬНО.'}});
+  const changed=await run('Ещё переносим озеро на 8 августа 2027 года.');
+  expect(changed.finalResponse).toContain('изменено с «2027-08-04» на «2027-08-08»');
+  const repeated=await run('Дата поездки на озеро остаётся 8 августа 2027 года.');
+  expect(repeated.finalResponse).toContain('Это значение уже сохранено');
+  for(const result of [changed,repeated]) expect(result.finalResponse).toMatch(/ПРОВЕРЕНО ПЕРСОНАЛЬНО\.$|ПРОВЕРЕНО ПЕРСОНАЛЬНО$/);
+  expect(f.read().data?.catalog?.cards[0].changes).toHaveLength(2);
+  expect(f.read().data?.catalog?.cards[0].confirmations).toHaveLength(1);
+  expect(complete).not.toHaveBeenCalled();
+  vi.spyOn(f.store,'save').mockRejectedValueOnce(Error('revision conflict'));
+  const rejected=await run('Дата поездки на озеро остаётся 8 августа 2027 года.');
+  expect(rejected.error).toContain('revision conflict');
+  expect(rejected.finalResponse).toBeUndefined();
+  expect(memory.writeReceipts).toEqual([]);
+});
+
+it('permits one citation-only repair against the current user message before saving',async()=>{
+  const f=fixture(),message='Озеро: 4 августа 2027 года. Идут Ира и Лена.';
+  const write={action:'write',id:'new',description:'Озеро',tags:['озеро'],changes:[
+    {field:'date',value:'2027-08-04',evidence:'The lake moved to August 4.'},
+    {field:'participants',value:['Ира','Лена'],evidence:'Идут Ира и Лена.'}]};
+  const proposal=(date:string)=>wire(createTopic(write.description,write.tags,"Озеро",[
+    dateEdit("2027-08-04",date),{kind:"set_roster",names:["Ира","Лена"],evidence:cite("Идут Ира и Лена.")}]));
+  const complete=vi.fn().mockResolvedValueOnce(proposal("The lake moved to August 4.")).mockResolvedValueOnce(proposal("Озеро: 4 августа 2027 года."));
+  const processor=new MemoryProcessor({complete,context:{assess:async()=>({tokens:30,limit:5000}),summarize:async()=>''}});
+  await new SessionMemory(f.store,processor,'gpt-4o-mini').prepare([],[user(message)],'m',undefined,{id:'m',at:1,order:1});
+  expect(complete).toHaveBeenCalledTimes(2);
+  expect(f.read().revision).toBe(1);
+  expect(f.read().data?.catalog?.cards[0].changes.map(v=>[v.field,v.value,v.evidenceStart])).toEqual([
+    ['date','2027-08-04',0],['participants',['Ира','Лена'],message.indexOf('Идут')]
+  ]);
+});
+
+it.each(['unsupported value','different target','malformed repair','ambiguous citation'])('rejects %s atomically after one repair, then retries cleanly',async(kind)=>{
+  const f=fixture(), message='Озеро: 4 августа 2027 года. Море: 5 августа 2027 года.';
+  const write={action:'write',id:'new',description:'Озеро',tags:['озеро'],changes:[
+    {field:'date',value:kind==='unsupported value'?'2027-08-05':'2027-08-04',evidence:'unsupported paraphrase'}]};
+  const quote='Озеро: 4 августа 2027 года.';
+  const fixed={...write,changes:[{field:'date',value:'2027-08-04',evidence:quote}]};
+  const proposal=(value:string,evidence:string)=>wire(createTopic(write.description,write.tags,"Озеро",[dateEdit(value,evidence)]));
+  const value=write.changes[0].value;
+  const complete=vi.fn().mockResolvedValueOnce(proposal(value,"unsupported paraphrase"))
+    .mockResolvedValueOnce(kind==='malformed repair'?{text:'{"evidence":[]}'}:proposal(value,kind==='different target'?'Море: 5 августа 2027 года.':kind==='ambiguous citation'?'августа 2027 года.':quote))
+    .mockResolvedValue(proposal(fixed.changes[0].value,quote));
+  const processor=new MemoryProcessor({complete,context:{assess:async()=>({tokens:30,limit:5000}),summarize:async()=>''}});
+  const memory=new SessionMemory(f.store,processor,'gpt-4o-mini');
+  const run=()=>memory.prepare([],[user(message)],'m',undefined,{id:'m',at:1,order:1});
+  await expect(run()).rejects.toThrow(/evidence|proposal|ambiguous/);
+  expect(complete).toHaveBeenCalledTimes(2);
+  expect(f.read()).toEqual({revision:0,data:null});
+  await run();await run();
+  expect(f.read().data?.catalog?.cards).toHaveLength(1);
+  expect(f.read().data?.catalog?.cards[0].changes).toHaveLength(1);
+});
+
+it("requires catalog lookup before an archived handle can enter an answer after Finish",async()=>{
+  const f=fixture(),card={id:"archived",description:"Private trip",tags:["lake"],changes:[]};
+  await f.store.save({revision:0,data:{catalog:{boundary:"finished",cards:[card]},summary:"",buffer:[],short:[],facts:[],covered:[],extracted:[]}});
+  const complete=vi.fn().mockResolvedValue(wire(readTopic("archived")));
+  const processor=new MemoryProcessor({complete,context:{assess:async()=>({tokens:10,limit:5000}),summarize:async()=>""}});
+  await expect(new SessionMemory(f.store,processor,"gpt-4o-mini").prepare([],[user("Explain chess.")],"next",undefined,{id:"next",at:10,order:3})).rejects.toThrow(/archived catalog/);
+  expect(complete).toHaveBeenCalledTimes(2);
+  expect(JSON.stringify(complete.mock.calls)).not.toContain(card.description);
+  expect(f.read().revision).toBe(1);
+});
+
+it("permits a repaired existing handle only for the same resolved topic and field claim", async () => {
+  const f = fixture();
+  const card = {id:"lake", description:"Отдых на озере", tags:[], changes:[]};
+  await f.store.save({revision:0,data:{catalog:{cards:[card]},covered:[],summary:"",facts:[],short:[],buffer:[],extracted:[]}});
+  const complete = vi.fn()
+    .mockResolvedValueOnce(wire(createTopic("Поездка на озеро",[],"Поездка на озеро",[dateEdit("2027-07-20","invalid quote")])))
+    .mockResolvedValueOnce(wire({kind:"write",updates:[{target:{kind:"existing",card:"lake",mention:cite("Поездка на озеро")},edits:[dateEdit("2027-07-20","20 июля 2027 года")]}]}));
+  const processor = new MemoryProcessor({complete,context:{assess:async()=>({tokens:50,limit:5000}),summarize:async()=>""}});
+  await new SessionMemory(f.store,processor,"gpt-4o-mini").prepare([],[user("Поездка на озеро: 20 июля 2027 года.")],"m",undefined,{id:"m",at:2,order:2});
+  expect(complete).toHaveBeenCalledTimes(2);
+  expect(f.read().data?.catalog?.cards).toMatchObject([{id:"lake",changes:[{field:"date",value:"2027-07-20"}]}]);
+});
+
+it("v6 asks for repair of a nonexistent pending source and requires fresh grounding for the same edits", async () => {
+  const {followup:q} = (await import("./test-fixtures/terra-v6-memory.json")).default;
+  const f=fixture(), card={id:"lake",description:"Планирование отдыха на озере с друзьями",tags:["отдых","друзья"],changes:[]};
+  await f.store.save({revision:0,data:{catalog:{cards:[card],active:card.id},covered:[],summary:"",facts:[],short:[],buffer:[],extracted:[]}});
+  const complete=vi.fn().mockResolvedValueOnce({text:JSON.stringify(q.wrongSource)}).mockResolvedValueOnce({text:JSON.stringify(q.sourceRepair)});
+  const processor=new MemoryProcessor({complete,context:{assess:async()=>({tokens:50,limit:5000}),summarize:async()=>""}});
+  await new SessionMemory(f.store,processor,"gpt-5.6-terra").prepare([],[user(q.message)],"m",undefined,{id:"m",at:2,order:2});
+  expect(complete).toHaveBeenCalledTimes(2);
+  expect(f.read().data?.catalog?.cards).toMatchObject([{id:"lake",changes:[{value:"2027-07-20"},{value:["Сергей","Лена","Катя"]},{value:["Лена берёт термос."]}]}]);
+});
+
+describe("v8 abstentions",()=>{
+  const abstain={kind:"abstain",reason:"No grounded changes."};
+  async function replay(text:string, proposals:unknown[], pending=false) {
+    const f=fixture();
+    const catalog={cards:[{id:"lake",description:"Lake trip",tags:["lake"],changes:[]}],active:"lake",
+      ...(pending?{pending:{text:"Move the date.",question:"Which trip?",intent:"write" as const,source:{id:"prior",at:1,order:1}}}:{})};
+    await f.store.save({revision:0,data:{catalog,summary:"",covered:[],facts:[],buffer:[],short:[],extracted:[]}});
+    const complete=vi.fn();
+    for(const p of proposals) complete.mockResolvedValueOnce(wire(p));
+    const memory=new SessionMemory(f.store,new MemoryProcessor({complete,context:{assess:async()=>({tokens:50,limit:5000}),summarize:async()=>""}}),"gpt-4o-mini");
+    const before=f.read();
+    return { f,before,run:()=>memory.prepare([],[user(text)],"msg",undefined,{id:"msg",at:2,order:2}) };
+  }
+  it("handles a standalone text exercise with an active card",async()=>{
+    const r=await replay("Translate the passage: «Le ciel est bleu.»",[abstain]);
+    const answer=await r.run();
+    expect(answer.at(-1)?.content).toContain("Le ciel est bleu");
+    expect(r.f.read().data?.catalog).toEqual(r.before.data?.catalog);
+    expect(r.f.read().data?.facts).toEqual([]);
+  });
+  it.each([
+    ["unsupported change","Move the lake trip tomorrow.",[abstain,abstain],false],
+    ["mixed instructions","Read this passage. Now change the lake date.",[abstain,abstain],false],
+    ["instruction after a quoted passage","Read the passage: «A clear sky.» Then change the trip.",[abstain,abstain],false],
+    ["pending clarification","Read this passage: a clear sky.",[abstain,abstain],true],
+    ["unverified write repaired to abstention","Read this passage: a clear sky.",[createTopic("Lake",[],"lake",[dateEdit("2027-08-01","fabricated")]),abstain],false],
+    ["malformed write repaired to dialogue","Read this passage: a clear sky.",[{kind:"write",updates:"invalid"},{kind:"dialogue"}],false],
+  ] as const)("rejects %s without a snapshot",async(_case,text,proposals,pending)=>{
+    const r=await replay(text,[...proposals],pending);
+    await expect(r.run()).rejects.toThrow();
+    expect(r.f.read()).toEqual(r.before);
+  });
 });

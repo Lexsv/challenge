@@ -1,9 +1,11 @@
+import {proposalReceipt} from "./week3-memory-proposals.mjs";
 import { randomUUID, createHash } from "node:crypto";
 import { createInvariantStore } from "./session-invariants.mjs";
-import { protectedTurn, InvariantError } from "./invariant-turn.mjs";
+import { executeChatTurn, InvariantError } from "./invariant-turn.mjs";
 import {
   redactLiterals,
   contextualRules,
+  memoryRules,
   redactMemory,
   policyIssue,
 } from "./invariant-validator.mjs";
@@ -28,6 +30,7 @@ export function createInvariantRoutes(
   db,
   makeAdapter,
   compatibility = async () => null,
+  week3Options = {},
 ) {
   const store = createInvariantStore(db);
   // Unrestricted browser turns hold a short renewable lease. Settings changes
@@ -45,7 +48,7 @@ export function createInvariantRoutes(
     );
     if (!match) return false;
     const [, week, id, resource, item] = match;
-    let s;
+    let s, trace;
     try {
       s = store.scope(!!week, id);
       if (!s) throw new InvariantError(404, "Chat session not found.");
@@ -134,8 +137,9 @@ export function createInvariantRoutes(
       const input = await readBody(req);
       if (
         Object.keys(input).some(
-          (k) => !["model", "provider", "question", "turnId"].includes(k),
+          (k) => !["model", "provider", "question", "turnId", ...(s.week3 ? ["execute"] : [])].includes(k),
         ) ||
+        (input.execute !== undefined && input.execute !== true) ||
         (input.turnId !== undefined &&
           (typeof input.turnId !== "string" ||
             !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(
@@ -159,6 +163,13 @@ export function createInvariantRoutes(
           JSON.stringify([s.id, input.provider, input.model, input.question]),
         )
         .digest("hex");
+      if (s.week3) trace = {turnId:input.turnId,stage:"session_initialization"};
+      const receipt = s.week3 && proposalReceipt(db,s.id,input.turnId);
+      if (receipt) {
+        if (receipt.fingerprint!==input.fingerprint) throw new InvariantError(409,"Turn identifier already used.");
+        reply(200,{status:"completed",redacted:!!receipt.redacted});
+        return true;
+      }
       const prior = store.securityEvent(s, input.turnId);
       if (prior) {
         if (prior.fingerprint !== input.fingerprint)
@@ -174,7 +185,7 @@ export function createInvariantRoutes(
       }
       const issue = policyIssue(rules);
       if (issue) throw new InvariantError(409, issue);
-      if (!rules.length) {
+      if (!rules.length && !input.execute) {
         pending(s.key);
         const token = randomUUID();
         leases.set(token, { key: s.key, expires: Date.now() + 300000 });
@@ -187,7 +198,7 @@ export function createInvariantRoutes(
       try {
         reply(
           200,
-          await protectedTurn(
+          await executeChatTurn(
             db,
             store,
             s,
@@ -195,17 +206,23 @@ export function createInvariantRoutes(
             input,
             makeAdapter,
             compatibility,
+            week3Options,
+            trace,
           ),
         );
       } finally {
         busy.delete(s.key);
       }
     } catch (e) {
-      reply(e instanceof InvariantError ? e.status : 503, {
+      const status = e instanceof InvariantError ? e.status : 503;
+      reply(status, {
+        ...(trace && status === 503 ? trace : {}),
         error:
           e instanceof InvariantError
             ? e.message
-            : "Mandatory validation is unavailable. Check the configured provider and retry.",
+            : trace?.stage === "provider_setup"
+              ? "The selected provider or model could not be prepared for this turn."
+              : "Mandatory validation is unavailable. Check the configured provider and retry.",
         ...(e instanceof InvariantError && e.rule ? { rule: redactLiterals(e.rule, store.active(s)), invariantId: e.ruleId } : {}),
       });
     }
@@ -251,7 +268,7 @@ export function createInvariantRoutes(
         })
       )
         return value;
-      const safe = contextualRules(rules).length
+      const safe = contextualRules(s.week3 && m[3] === "memory" ? memoryRules(rules) : rules).length
         ? undefined
         : redactMemory(value, rules);
       return (

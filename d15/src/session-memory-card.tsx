@@ -29,7 +29,7 @@ export function MemoryDetailsContent({category,data}:{category:Category;data:Mem
   return <LongTermMemoryDetails facts={data?.facts ?? []} />;
 }
 
-export function SessionMemoryCard({snapshot,shortTokens,shortLimit,summaryTokens,factTokens,storedFactTokens}:{snapshot?:MemorySnapshot;shortTokens?:number;shortLimit?:number;summaryTokens?:number;factTokens?:number;storedFactTokens?:number}) {
+export function SessionMemoryCard({snapshot,shortTokens,shortLimit,summaryTokens,factTokens}:{snapshot?:MemorySnapshot;shortTokens?:number;shortLimit?:number;summaryTokens?:number;factTokens?:number}) {
   const [selected,setSelected] = useState<Category | null>(null);
   const [info,setInfo] = useState<Category | null>(null);
   const titleId=useId();
@@ -62,7 +62,6 @@ export function SessionMemoryCard({snapshot,shortTokens,shortLimit,summaryTokens
       <Typography component="span" variant="body2" color="text.secondary" sx={{whiteSpace:'nowrap'}}>{format(item.tokens)}{item.id==='short' && shortLimit!==undefined ? ` / ${format(shortLimit)}` : ''} tokens</Typography>
       <ChevronRight aria-hidden="true" fontSize="small" sx={{ml:.5,color:'text.secondary'}} />
     </Button><Tooltip title={item.description} placement="top" slotProps={{tooltip:{sx:{maxWidth:260,whiteSpace:'normal',overflowWrap:'anywhere'}}}} open={info===item.id} onOpen={()=>setInfo(item.id)} onClose={()=>setInfo(null)} describeChild><IconButton size="small" aria-label={`About ${item.label}`} onClick={event=>{event.stopPropagation();setInfo(item.id);}} sx={{'&:focus-visible':{outline:'2px solid',outlineColor:'primary.main',outlineOffset:2}}}><InfoOutlined fontSize="small" /></IconButton></Tooltip></Stack>)}</Stack>
-    <Typography variant="caption" color="text.secondary" sx={{display:'block',px:1}}>Long-term sent to model: {format(items[2].tokens)}; full stored facts: {format(snapshot ? (storedFactTokens ?? (!data?.facts.length ? 0 : undefined)) : undefined)} estimated tokens</Typography>
     {!!data?.buffer.length && <Typography variant="caption" color="text.secondary">{data.buffer.length} conversation groups await compression.</Typography>}
     <Dialog open={selected!==null} onClose={()=>setSelected(null)} aria-labelledby={titleId} fullWidth maxWidth="sm" scroll="paper">
       <DialogTitle id={titleId}>{chosen?.label}</DialogTitle>

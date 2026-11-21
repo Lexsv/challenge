@@ -438,6 +438,10 @@ export function contextualRules(rules) {
     (rule) => classifyRule(rule.text).type !== "forbidden_literal",
   );
 }
+// Required literals constrain the assistant's delivered answer. They are
+// not a formatting requirement on SQLite records or internal JSON protocols.
+export const memoryRules = rules => rules.filter(rule => classifyRule(rule.text).type !== "required_literal");
+
 // An explicit request to reconstruct a protected expression warrants an
 // independent intent check. A general question about an encoding does not.
 export function responseReviewRules(rules, question) {

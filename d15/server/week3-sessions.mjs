@@ -1,3 +1,5 @@
+import { initializeProposalReceipts } from "./week3-memory-proposals.mjs";
+import { isDeepStrictEqual } from "node:util";
 import { randomUUID } from 'node:crypto';
 import { createTopicRepository } from './topic-repository.mjs';
 import { initializeWeek3ProfileReference } from './week3-profile-migration.mjs';
@@ -20,12 +22,13 @@ export function createWeek3Routes(db, validateEvent, options = {}) {
     data TEXT NOT NULL CHECK(json_valid(data))
   );`);
   initializeWeek3ProfileReference(db);
+  initializeProposalReceipts(db);
   const topicRepository=createTopicRepository(db);
   const get=db.prepare('SELECT id,title,createdAt,updatedAt,requestTokenLimit,profile_id AS profileId, 1 AS fullContext FROM week3_sessions WHERE id=?');
   const list=db.prepare('SELECT id,title,createdAt,updatedAt,requestTokenLimit,profile_id AS profileId, 1 AS fullContext FROM week3_sessions ORDER BY createdAt, rowid');
   const events=db.prepare('SELECT id,sessionId,sequence,type,payload FROM week3_history_events WHERE sessionId=? ORDER BY sequence');
   return async (req,path,reply) => {
-    const match=path.match(/^\/api\/week3\/sessions(?:\/([a-zA-Z0-9-]+))?(?:\/(events|memory|topic-mode|segments|profile|turn-context|turn-completion|instruction-decision))?$/);
+    const match=path.match(/^\/api\/week3\/sessions(?:\/([a-zA-Z0-9-]+))?(?:\/(events|memory|finish-task|topic-mode|segments|profile|turn-context|turn-completion|instruction-decision))?$/);
     if (!match) return false;
     const [,id,resource]=match;
     if (!id && req.method==='GET') {reply(200,list.all());return true;}
@@ -85,6 +88,26 @@ export function createWeek3Routes(db, validateEvent, options = {}) {
       }catch{reply(500,{error:'Topic processing failed. Please retry.'});}
       return true;
     }
+    if(resource==='finish-task' && req.method==='POST'){
+      // Synchronous CAS against the revision displayed by this chat panel.
+      const expected=req.headers['if-match'];
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        const row=db.prepare('SELECT revision,data FROM week3_session_memory WHERE sessionId=?').get(id);
+        if(!row || expected!==String(row.revision)){
+          db.exec('ROLLBACK');reply(409,{error:'Chat memory changed. Refresh before finishing.'});return true;
+        }
+        const data=JSON.parse(row.data);
+        const last=db.prepare("SELECT json_extract(payload,'$.runId') AS run FROM week3_history_events WHERE sessionId=? AND type='message' AND json_extract(payload,'$.role')='user' AND json_extract(payload,'$.blocked') IS NULL ORDER BY sequence DESC LIMIT 1").get(id);
+        if(!data.catalog?.active || !last){db.exec('ROLLBACK');reply(409,{error:'No active task.'});return true;}
+        delete data.catalog.active;delete data.catalog.pending;
+        data.catalog.boundary=last.run;
+        Object.assign(data,{summary:'',short:[],buffer:[],covered:[],extracted:[]});
+        db.prepare('UPDATE week3_session_memory SET revision=revision+1,data=? WHERE sessionId=?').run(JSON.stringify(data),id);
+        db.exec('COMMIT');reply(200,{ok:true});
+      }catch(error){db.exec('ROLLBACK');throw error;}
+      return true;
+    }
     if (resource==='memory' && req.method==='GET') {
       const row=db.prepare('SELECT revision,data FROM week3_session_memory WHERE sessionId=?').get(id);
       reply(200,row ? {revision:row.revision,data:JSON.parse(row.data)} : {revision:0,data:null});return true;
@@ -95,8 +118,16 @@ export function createWeek3Routes(db, validateEvent, options = {}) {
       options.checkChatWrite?.(req,path);
       if (!Number.isSafeInteger(value?.revision) || value.revision<0 || !value.data || typeof value.data!=='object' || Array.isArray(value.data)) {reply(400,{error:'Invalid memory.'});return true;}
       db.exec('BEGIN IMMEDIATE');try {
-        const row=db.prepare('SELECT revision FROM week3_session_memory WHERE sessionId=?').get(id);
+        const row=db.prepare('SELECT revision,data FROM week3_session_memory WHERE sessionId=?').get(id);
         if ((row?.revision ?? 0)!==value.revision) {db.exec('ROLLBACK');reply(409,{error:'Memory revision conflict.'});return true;}
+        if (db.prepare("SELECT 1 FROM week3_proposal_receipts WHERE session_id=? LIMIT 1").get(id)) {
+          db.exec('ROLLBACK');reply(409,{error:'Chat memory is managed by the server. Reload the session.'});return true;
+        }
+        const previous=row ? JSON.parse(row.data) : {};
+        if (!isDeepStrictEqual(value.data.catalog,previous.catalog) ||
+            (previous.catalog && !isDeepStrictEqual(value.data.facts,previous.facts))) {
+          db.exec('ROLLBACK');reply(400,{error:'Catalog changes require a server-executed chat turn.'});return true;
+        }
         const revision=value.revision+1;
         db.prepare('INSERT INTO week3_session_memory(sessionId,revision,data) VALUES(?,?,?) ON CONFLICT(sessionId) DO UPDATE SET revision=excluded.revision,data=excluded.data').run(id,revision,JSON.stringify(value.data));
         db.exec('COMMIT');reply(200,{revision,data:value.data});return true;

@@ -1,3 +1,4 @@
+import {DatabaseSync} from 'node:sqlite';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,rm} from 'node:fs/promises';
@@ -21,6 +22,7 @@ test('V2 HTTP sessions collect, evaluate, complete, and survive restart',async()
   const post=async(path,value)=>{const response=await fetch(base+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(value)});return {status:response.status,body:await response.json()};};
   for(const templateId of ['quiz-v2','chocolate-v2']){
    const created=await post('/api/worker-sessions',{name:templateId,profileId:'general',templateId});assert.equal(created.status,201);const sid=created.body.id;
+   assert.equal((await get('/api/week3/sessions/'+sid+'/memory')).status,404);
    assert.equal(JSON.stringify(created.body).includes('correct_option'),false);assert.equal(JSON.stringify(created.body).includes('acceptance_criteria'),false);
    const url=`/api/worker-sessions/${sid}`, status=()=>get(`${url}/status`);let rev=1,n=0;
    assert.equal((await post(`${url}/actions`,{requestId:'forged',expectedRevision:1,action:'validate',payload:{success:true}})).status,400);
@@ -48,6 +50,11 @@ test('V2 HTTP sessions collect, evaluate, complete, and survive restart',async()
    await new Promise(resolve=>server.close(resolve));base=await boot();
    const restored=await status();assert.equal(restored.body.session.state,'completed');assert.deepEqual(restored.body.evaluation,done.body.evaluation);
   }
+  const check=new DatabaseSync(path,{readOnly:true});
+  try {
+   assert.equal(check.prepare('SELECT count(*) AS n FROM week3_session_memory').get().n,0);
+   assert.equal(check.prepare('SELECT count(*) AS n FROM week3_topics').get().n,0);
+  } finally {check.close();}
  }finally{if(server?.listening)await new Promise(resolve=>server.close(resolve));await rm(dir,{recursive:true,force:true});}
 });
 

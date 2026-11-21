@@ -24,7 +24,7 @@ it('persists the live-QA extractor identity only once through the Manager and SQ
       if(messages[0].content.startsWith('Compare the current')){calls.push('reconcile');const input=JSON.parse(messages[1].content) as {current:string;existing:{subject:string;attribute:string}[]};const index=input.existing.findIndex(fact=>fact.subject==='Mark' && fact.attribute==='project deadline');return {text:JSON.stringify({action:'update',target:index,value:'December 2, 2026',evidence:input.current})};}
       calls.push('extract');const [source]=JSON.parse(messages[1].content) as ManagerLlmMessage[];const text=source.content;
       const updated=text.includes('revised');const subject=updated?"Mark's project deadline":text.startsWith('Alex')?'Alex':'Mark';const attribute=updated?'deadline':text.includes('release')?'release deadline':'project deadline';const value=updated?'December 2, 2026':text.includes('release')?'January 10, 2027':text.startsWith('Alex')?'November 20, 2026':'November 28, 2026';
-      return {text:JSON.stringify({facts:[{subject,attribute,value,evidence:text,status:'confirmed',correction:updated}]})};
+      return {text:JSON.stringify({version:1,topic:{kind:"dialogue"},facts:[{subject,attribute,value,evidence:text,status:'confirmed',correction:updated}]})};
     })};
     const memory=new SessionMemory(store,new MemoryProcessor(adapter),'gpt-4o-mini');
     const manager=new ManagerAgent({complete:async()=>({text:'Noted.'})},createBuiltInToolRegistry());const state=emptySession(session);

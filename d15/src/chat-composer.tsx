@@ -8,6 +8,7 @@ export function ChatComposer({
   disabled,
   running,
   sendDisabled = false,
+  floating = false,
 }: {
   draft: string;
   onDraftChange: (value: string) => void;
@@ -15,10 +16,11 @@ export function ChatComposer({
   disabled: boolean;
   running: boolean;
   sendDisabled?: boolean;
+  floating?: boolean;
 }) {
   return (
     <Box
-      sx={{
+      sx={floating ? { minWidth: 0 } : {
         position: "sticky",
         bottom: 0,
         bgcolor: "background.paper",
@@ -43,6 +45,7 @@ export function ChatComposer({
           disabled={disabled}
           sx={{
             "& .MuiOutlinedInput-root": {
+              ...(floating && { bgcolor: "background.paper", boxShadow: 2 }),
               borderRadius: "8px",
               minHeight: 56,
               // The textarea's content and scrollbar end before the anchored button.

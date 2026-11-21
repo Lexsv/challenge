@@ -1,3 +1,4 @@
+import {verifyProposalFormat,strictProposalFormat} from "./memory-proposal-provider.ts";
 import { createSavedProviderTransport } from './credentials.mjs';
 import { createManagerLlmAdapter, parseOpenAIResponses, parseOpenAIChatCompletions, type ProviderId } from '../src/manager-llm-adapter.ts';
 import { DEFAULT_ENDPOINTS } from '../src/provider-endpoints.ts';
@@ -19,7 +20,7 @@ export function createServerManagerLlmAdapter(
   const provider=providerId as ProviderId;
   if (typeof model!=='string' || !model.trim() || !registry.get(provider) || !registry.modelOptionsFor(provider).includes(model)) throw new Error('Unsupported server model.');
   if(registry.endpointFor(provider)!==DEFAULT_ENDPOINTS[provider])throw new Error('Server provider requires the fixed endpoint.');
-  return createManagerLlmAdapter({providerId:provider,model,apiKey:'',registry,requestTokenLimit,transport:async(id,body)=>{
+  return createManagerLlmAdapter({proposalFormat:async()=>await verifyProposalFormat(provider,model,transport) ? strictProposalFormat(provider) : {},providerId:provider,model,apiKey:'',registry,requestTokenLimit,transport:async(id,body)=>{
     const result=await transport(id,body);
     if(result.status===200){
       const value=result.body;

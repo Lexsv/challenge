@@ -3,9 +3,9 @@ import { completeInstructionTurn, prepareInstructionTurn, PersonalizationError, 
 export type InstructionTurnPreparation = {snapshot:PersonalizationSnapshot;ids?:TurnIdentifiers;token?:string;notice?:string};
 
 /** Preparation failure never substitutes a different profile or prevents an otherwise valid answer. */
-export async function prepareProfileTurn(snapshot:PersonalizationSnapshot):Promise<InstructionTurnPreparation> {
+export async function prepareProfileTurn(snapshot:PersonalizationSnapshot, turnIds?:TurnIdentifiers):Promise<InstructionTurnPreparation> {
   if(snapshot.profileId==='general')return {snapshot};
-  const ids={runId:crypto.randomUUID(),messageId:crypto.randomUUID()};
+  const ids=turnIds ?? {runId:crypto.randomUUID(),messageId:crypto.randomUUID()};
   let context;
   try {
     context=await prepareInstructionTurn(snapshot.sessionId,ids);

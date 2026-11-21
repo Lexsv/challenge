@@ -1,3 +1,5 @@
+import {createTopicRepository} from "./topic-repository.mjs";
+import {createDevManagerMock} from "../src/dev-manager-mock.ts";
 import { invariantProvider } from "./invariant-provider.mjs";
 import { createInvariantRoutes } from './invariant-routes.mjs';
 import { InvariantError } from './invariant-turn.mjs';
@@ -228,7 +230,10 @@ export function createSessionServer(databasePath = fileURLToPath(new URL('../dat
   const deleteFunction = db.prepare('DELETE FROM custom_functions WHERE id = ?');
   const policyProvider = invariantProvider(db,createSavedProviderTransport(options.credentialStore,options.fetcher),options.catalogFetch);
   const invariants = createInvariantRoutes(db,options.invariantAdapter ?? policyProvider.adapter,
-    options.invariantAdapter ? undefined : policyProvider.compatibility);
+    options.invariantAdapter ? undefined : policyProvider.compatibility, {
+      mockAdapter:options.mockModel ? model=>createDevManagerMock(model,async()=>!!options.mockSummaryFailure?.()) : undefined,
+      processSegments:options.topicProcess ? (id,run)=>options.topicProcess(createTopicRepository(db),id,run) : undefined,
+    });
   const server = createServer(async (req, res) => {
     let protect;
     const reply = (status, body) => {

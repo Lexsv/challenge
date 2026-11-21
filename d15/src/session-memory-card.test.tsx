@@ -35,7 +35,7 @@ it('attaches descriptions to information controls, not rows or chart segments',(
 });
 it('shows an empty neutral chart when all three layers are empty',()=>{
   const html=renderToStaticMarkup(<SessionMemoryCard snapshot={{revision:0,data:null}} shortTokens={0} />);
-  expect(html).toContain('context estimates');expect(html).toContain('Long-term sent to model:');expect(html).toContain('full stored facts:');expect(html).not.toContain('Distribution unavailable');expect(html).not.toContain('stroke-dasharray');
+  expect(html).toContain('context estimates');expect(html).not.toContain('Distribution unavailable');expect(html).not.toContain('stroke-dasharray');
 });
 it('renders each stored category in order without changing the snapshot',()=>{
   const original=structuredClone(snapshot);
@@ -65,4 +65,11 @@ it('renders complete raw JSON and handles empty facts in both views',()=>{
   expect(raw).toContain('Raw fact JSON');expect(raw).toContain('tabindex="0"');expect(facts).toEqual(before);
   expect(renderToStaticMarkup(<LongTermMemoryView facts={[]} view="preview" />)).toContain('No key facts yet.');
   expect(renderToStaticMarkup(<LongTermMemoryView facts={[]} view="raw" />)).toContain('[]');
+});
+
+it('keeps the chart and all layer controls without technical footnotes for a populated catalog', () => {
+  const data={...snapshot.data!,facts:[],catalog:{cards:[{id:'lake',description:'Lake',tags:[],changes:[]}]}};
+  const html=renderToStaticMarkup(<SessionMemoryCard snapshot={{data,revision:2}} />);
+  for(const text of ['Current general facts:', 'full stored facts:', 'extracted long-term', 'durable topic card']) expect(html).not.toContain(text);
+  for(const label of ['Memory token distribution', 'Open Short-term memory details', 'Open Medium-term memory details', 'Open Long-term memory details']) expect(html).toContain(label);
 });

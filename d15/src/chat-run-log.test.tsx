@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { ChatRunLog, groupChatEvents } from "./chat-run-log";
 import { chatStatusColor, chatTypeColor } from "./chat-disclosure";
 import { toolExecutionTypeMeta } from "./tool-execution-type";
-import { getContrastRatio } from "@mui/material/styles";
+import { getContrastRatio, ThemeProvider } from "@mui/material/styles";
 import { theme } from "./theme";
 import { RequestMeterCard } from "./request-meter-card";
 import type { TimelineEvent } from "./week2-agent-tool-lab";
@@ -11,6 +11,44 @@ import { createManagerConversation } from "./manager-agent";
 import { restoreHistory, type HistoryEvent } from "./conversation-history";
 import { buildWeek2Timeline } from "./week2-agent-tool-lab";
 import { createBuiltInToolRegistry } from "./tool-runtime";
+
+it("displays only valid Week 3 message timestamps, formatted in local time", () => {
+  const at = Date.UTC(2026, 6, 2, 14, 37, 29, 125);
+  const events: TimelineEvent[] = (["user", "assistant", "system"] as const).map(role => ({
+    kind: "message", role, id: role, runId: "run", text: "Message", createdAt: at,
+  }));
+  const html = renderToStaticMarkup(<ChatRunLog week3 events={events} />);
+  expect(html.match(/<time\b/g)).toHaveLength(2);
+  expect(html).toContain(new Date(at).toISOString());
+  expect(html).toContain(new Intl.DateTimeFormat(undefined, { timeStyle: "short" }).format(at));
+  expect(renderToStaticMarkup(<ChatRunLog events={events} />)).not.toContain("<time");
+  for (const invalid of [undefined, null, NaN, Infinity, 9e15]) {
+    const legacy = { ...events[0], createdAt: invalid } as TimelineEvent;
+    expect(renderToStaticMarkup(<ChatRunLog week3 events={[legacy]} />)).not.toContain("<time");
+  }
+});
+
+it("right-aligns Week 3 user bubbles and keeps assistant Markdown in a left-aligned paper bubble", () => {
+  const render = (role: "user" | "assistant") => renderToStaticMarkup(
+    <ThemeProvider theme={theme}>
+      <ChatRunLog week3 events={[{ kind: "message", id: "msg", runId: "turn", createdAt: 1,
+        role, text: "**Plan**\n\n1. First step" }]} />
+    </ThemeProvider>,
+  );
+  const user = render("user");
+  const assistant = render("assistant");
+  for (const markup of [user, assistant]) {
+    expect(markup).toContain("max-width:85%");
+    expect(markup).toContain("width:fit-content");
+    expect(markup).toContain("border:1px solid");
+  }
+  expect(user).toContain("margin-left:auto");
+  expect(user).toContain(`background-color:${theme.palette.action.selected}`);
+  expect(assistant).not.toContain("margin-left:auto");
+  expect(assistant).toContain(`background-color:${theme.palette.background.paper}`);
+  expect(assistant).toContain("<strong");
+  expect(assistant).toContain("<ol>");
+});
 
 const meter = {
   id: "request",

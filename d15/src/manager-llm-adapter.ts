@@ -323,6 +323,7 @@ export function createManagerLlmAdapter(input: {
   model: string;
   apiKey: string;
   useSavedKey?: boolean;
+  proposalFormat?:()=>Promise<object>;
   registry: ProviderRegistry;
   fetcher?: typeof fetch;
   transport?: (providerId:ProviderId, body:Record<string,unknown>)=>Promise<{status:number;body:unknown}>;
@@ -358,10 +359,11 @@ export function createManagerLlmAdapter(input: {
     const estimate = await estimateManagerRequest({ ...input, messages, tools });
     return { tokens: estimate.estimatedInputTokens, modelInputBudget: estimate.inputBudget, limit: estimate.inputBudget, target: estimate.requestTokenLimit };
   };
-  const request = async (messages: readonly ManagerLlmMessage[], tools: readonly ToolCatalogItem[], onMeter?: (meter: RequestMeter) => Promise<void>, output = outputTokens, requestKind: 'answer' | 'summary' = 'answer', requireComplete = false) => {
+  const request = async (messages: readonly ManagerLlmMessage[], tools: readonly ToolCatalogItem[], onMeter?: (meter: RequestMeter) => Promise<void>, output = outputTokens, requestKind: 'answer' | 'summary' = 'answer', requireComplete = false, proposal = false) => {
     if (!input.transport && !input.useSavedKey && !input.apiKey.trim()) throw new Error('Provider API key is missing.');
-    const body = makeBody(messages, tools, output);
+    const body = {...makeBody(messages, tools, output),...(proposal ? await input.proposalFormat?.() : {})};
     const estimate = await estimateContextInput(input.model, body);
+    if (proposal && (estimate.estimatedInputTokens ?? Infinity) > (managerContextBudget(input).inputBudget ?? 0)) throw Error("Insufficient budget for the memory proposal schema.");
     const initial = { ...await beginMeter(input.providerId, input.model, body, pricingEndpoint), requestKind, sentInputTokens: estimate.estimatedInputTokens };
     await onMeter?.(initial);
     let data: unknown;
@@ -377,6 +379,11 @@ export function createManagerLlmAdapter(input: {
       // Transport errors must not leak headers, credentials or raw upstream text.
       if (error instanceof ManagerProviderError) throw error;
       throw new Error('Manager provider request could not complete. Please retry.');
+    }
+    if (proposal && data && typeof data==="object") {
+      const response=data as {output?:{content?:{type?:string}[]}[];choices?:{message?:{refusal?:string}}[]};
+      if (response.output?.some(o=>o.content?.some(c=>c.type==="refusal")) || response.choices?.some(c=>c.message?.refusal))
+        throw Error("The provider declined the memory extraction request.");
     }
     if (requestKind === 'summary' && data && typeof data === 'object') {
       const response = data as {status?: string; incomplete_details?: {reason?: string}; choices?: {finish_reason?: string; message?: {content?: unknown}}[]; output?: unknown[]};
@@ -402,7 +409,7 @@ export function createManagerLlmAdapter(input: {
     return input.providerId === 'openai' ? parseOpenAIResponses(data, map) : parseOpenAIChatCompletions(data, map);
   };
   return {
-    complete: ({ messages, tools, onMeter }) => request(messages, tools, onMeter),
+    complete: ({ messages, tools, onMeter, memoryProposal }) => request(messages, tools, onMeter, outputTokens, "answer", false, memoryProposal),
     context: {
       assess,
       summarize: async (text, onMeter, maxTokens = 1024, requireComplete = false, policyInstruction?: string) => {

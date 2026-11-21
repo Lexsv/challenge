@@ -13,6 +13,7 @@ import type {
 } from "./agent-tool-contracts";
 import type { ToolCatalogItem, ToolRegistry } from "./tool-runtime";
 import type { SessionMemory } from './session-memory';
+import { writeConfirmation } from "./topic-write-confirmation.ts";
 import { createFactHistoryTool } from './fact-history-tool.ts';
 import type { PersonalizationSnapshot } from './week3-session-api';
 
@@ -41,6 +42,7 @@ export interface ManagerLlmAdapter {
     summarize(text: string, onMeter?: (meter: RequestMeter) => Promise<void>, maxTokens?: number, requireComplete?: boolean, policyInstruction?: string): Promise<string>;
   };
   complete(input: {
+    memoryProposal?: boolean;
     messages: readonly ManagerLlmMessage[];
     tools: readonly ToolCatalogItem[];
     onMeter?: (meter: RequestMeter) => Promise<void>;
@@ -125,6 +127,7 @@ export class ManagerAgent {
     windowSize?: number;
     keyValue?: {load: () => Promise<MemoryEntry[]>; save: (entries: MemoryEntry[]) => Promise<void>};
     sessionMemory?: SessionMemory;
+    receiptRequiredLiterals?: readonly string[];
     personalizationSnapshot?: PersonalizationSnapshot;
     turnIds?: {runId:string;messageId:string};
     onEvent?: (event: HistoryEvent) => Promise<void>;
@@ -176,7 +179,7 @@ export class ManagerAgent {
     let llmMessages = [...history, ...current];
     const runTools = input.sessionMemory ? this.tools.fork() : this.tools;
     if(input.sessionMemory)runTools.register(createFactHistoryTool(input.sessionMemory));
-    const executableTools = runTools
+    let executableTools = runTools
       .listExecutable()
       .filter((tool) => tool.executable);
 
@@ -249,7 +252,8 @@ export class ManagerAgent {
         if (input.sessionMemory) {
           if (!sessionMemoryPrefix) {
             const groups = input.state.runs.filter(r => r.id !== run.id).map(r => ({id:r.id, sourceIds:input.state.messages.filter(m=>m.runId===r.id && m.role==='user').map(m=>m.id), messages:historicalContext({...input.state,messages:input.state.messages.filter(m => m.runId === r.id),toolExecutions:input.state.toolExecutions.filter(t => t.runId === r.id),contextEvents:[]},run.id)})).filter(group => group.messages.length);
-            const prepared = await input.sessionMemory.prepare(groups, current, userMessage.id, onMeter);
+            const prepared = await input.sessionMemory.prepare(groups, current, userMessage.id, onMeter,{id:userMessage.id,at:userMessage.createdAt,order:input.state.messages.length});
+            if(input.sessionMemory.usesSelectedRecordsOnly)executableTools=[];
             sessionMemoryPrefix = prepared.slice(0, prepared.length - current.length);
           }
           llmMessages = [...sessionMemoryPrefix, ...current];
@@ -273,9 +277,11 @@ export class ManagerAgent {
               ...(selectedTurns.length < turns.length ? {beforeInputTokens: full.tokens, afterInputTokens: sent.tokens} : {}) };
           }
           try {
-            return await this.llm.complete({ messages: answerMessages(llmMessages), tools: executableTools,
+            const reply=await this.llm.complete({ messages: answerMessages(llmMessages), tools: executableTools,
               ...(personalizationSnapshot ? {personalizationSnapshot} : {}),
               onMeter: meter => onMeter({ ...meter, ...comparison }) });
+            if(input.sessionMemory?.usesSelectedRecordsOnly && reply.toolCalls?.length)throw Error("Unexpected tool call during a topic lookup.");
+            return reply;
           } catch (error) {
             if (error instanceof ManagerProviderError && error.metadata.status === 503) throw new Error('The server is temporarily unavailable (503). Please try again later.');
             throw error;
@@ -296,7 +302,14 @@ export class ManagerAgent {
             }
           }
         };
-        try { response = memoryAmbiguous ? {text:memoryClarification} : await requestWithMemoryRecovery(); }
+        try {
+          const receipts = input.sessionMemory?.writeReceipts;
+          if (receipts?.length) {
+            response = {text: writeConfirmation(receipts, input.userText, personalizationSnapshot?.habits, input.receiptRequiredLiterals)};
+          } else {
+            response = memoryAmbiguous ? {text:memoryClarification} : await requestWithMemoryRecovery();
+          }
+        }
         catch (error) {
           if (input.contextMode === 'full' && error instanceof ManagerProviderError && error.metadata.kind === 'context-overflow') throw new Error('Full Context exceeds the model input budget. Start a new session or use a different context mode.');
           if (input.sessionMemory || keyFacts || input.keyValue || input.contextMode === 'full' || input.contextMode === 'sliding' || !(error instanceof ManagerProviderError) || error.metadata.kind !== 'context-overflow') throw error;

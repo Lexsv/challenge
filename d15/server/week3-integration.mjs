@@ -1,6 +1,8 @@
+import { DatabaseSync } from "node:sqlite";
+import {validCardEvidence} from "./topic-card-evidence.mjs";
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createSessionServer } from './sessions.mjs';
@@ -77,4 +79,92 @@ test('Week 3 sessions persist immutable profile associations across restart',asy
     result=await request(`/week3/sessions/${selected.id}`);assert.equal(result.status,200);const restored=await result.json();assert.equal(restored.profileId,profile.id);assert.equal(restored.title,'Renamed');
     result=await request('/week3/sessions');assert.equal((await result.json()).find(item=>item.id===selected.id).profileId,profile.id);
   } finally {if(server?.listening)await stop();}
+});
+
+test('finishing a task clears drafts while preserving source history, cards and enduring facts', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'day15-task-'));
+  const server = createSessionServer(join(dir, 'chat.sqlite'));
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const url = 'http://127.0.0.1:' + server.address().port + '/api/week3/sessions';
+  const {id} = await (await fetch(url, {method: 'POST'})).json();
+  const api = url + '/' + id;
+  const send = (path, method, body) => fetch(api + path, {
+    method, headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
+  });
+  const payload = {id: 'source', conversationId: id, runId: 'turn', createdAt: 123, role: 'user', type: 'text', text: 'Plan a lake trip'};
+  assert.equal((await send('/events', 'POST', {id: 'event', sessionId: id, type: 'message', payload})).status, 201);
+  const source = {id: payload.id, at: payload.createdAt, order: 1};
+  const card = {id: source.id, description: 'Lake trip', tags: ['trip'], changes: [
+    {...source, field: 'destination', value: 'lake', evidence: 'lake', evidenceStart: payload.text.indexOf('lake')}
+  ]};
+  const facts = [{subject: 'User', attribute: 'language', value: 'Russian', status: 'confirmed'}];
+  const data = {catalog: {cards: [card], active: card.id, last: source}, facts, summary: 'Temporary draft', short: [], buffer: [], covered: [], extracted: []};
+  const badOffset = structuredClone(data);
+  badOffset.catalog.cards[0].changes[0].evidenceStart++;
+  assert.equal((await send('/memory', 'PUT', {revision: 0, data: badOffset})).status, 400);
+  assert.deepEqual(await (await fetch(api + '/memory')).json(), {revision:0,data:null});
+  assert.equal((await send('/memory', 'PUT', {revision: 0, data})).status, 400);
+  const baseline=new DatabaseSync(join(dir,'chat.sqlite'));
+  assert.ok(validCardEvidence(baseline,id,data.catalog));
+  baseline.prepare("INSERT INTO week3_session_memory VALUES(?,1,?)").run(id,JSON.stringify(data));
+  baseline.close();
+  const forged = structuredClone(data);
+  forged.catalog.cards[0].changes[0].value = 'sea';
+  assert.equal((await send('/memory', 'PUT', {revision: 1, data: forged})).status, 400);
+  assert.equal((await fetch(api + '/finish-task', {method: 'POST', headers: {'If-Match': '0'}})).status, 409);
+  assert.equal((await fetch(api + '/finish-task', {method: 'POST', headers: {'If-Match': '1'}})).status, 200);
+  const saved = await (await fetch(api + '/memory')).json();
+  assert.deepEqual(saved.data.catalog, {cards: [card], last: source, boundary: payload.runId});
+  assert.deepEqual(saved.data.facts, facts);
+  assert.equal(saved.data.summary, '');
+  assert.equal((await (await fetch(api + '/events')).json())[0].payload.text, payload.text);
+});
+
+test('clarified card writes verify both user messages and the existing target before persistence', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'day15-clarified-'));
+  const path = join(dir, 'test.sqlite');
+  let server, base;
+  async function open() {
+    server = createSessionServer(path);
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    base = 'http://127.0.0.1:' + server.address().port + '/api/week3/sessions';
+  }
+  const close = () => new Promise(resolve => server.close(resolve));
+  await open();
+  t.after(async () => { await close(); await rm(dir, {recursive:true,force:true}); });
+  const {id} = await (await fetch(base, {method:'POST'})).json();
+  const request = (route,method,body) => fetch(base+'/'+id+route,{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const instruction = 'Лена не сможет поехать', clarification = 'На море';
+  for (const [i,text] of ['озеро','море',instruction,clarification].entries()) {
+    const payload = {id:'u'+i,runId:'r'+i,conversationId:id,createdAt:i+1,type:'text',role:'user',text};
+    assert.equal((await request('/events','POST',{id:'e'+i,sessionId:id,type:'message',payload})).status,201);
+  }
+  const cards=['озеро','море'].map((description,i)=>({id:'u'+i,description,tags:[description],changes:[]}));
+  const source={id:'u2',order:3,at:3}, reply={id:'u3',order:4,at:4};
+  const data={catalog:{cards,pending:{source,text:instruction,intent:'write',question:'Какая поездка?'}},summary:'',facts:[],buffer:[],short:[],extracted:[],covered:[]};
+  const save=(revision,data)=>request('/memory','PUT',{revision,data});
+  assert.equal((await save(0,data)).status,400);
+  const baseline=new DatabaseSync(path);
+  assert.ok(validCardEvidence(baseline,id,data.catalog));
+  baseline.prepare("INSERT INTO week3_session_memory VALUES(?,1,?)").run(id,JSON.stringify(data));
+  const update=(i,quote,span)=>{
+    const next=structuredClone(data);
+    delete next.catalog.pending;
+    next.catalog.cards[i].changes.push({...source,field:'participants',value:['Олег','Вера'],evidence:quote,resolvedBy:{...reply,evidence:span}});
+    return next;
+  };
+  for(const invalid of [update(0,instruction,clarification),update(1,'выдумано',clarification),update(1,instruction,'На озеро')]){
+    assert.equal(validCardEvidence(baseline,id,invalid.catalog,data.catalog),false);
+    assert.equal((await save(1,invalid)).status,400);
+    assert.deepEqual(await (await request('/memory','GET')).json(),{revision:1,data});
+  }
+  const valid=update(1,instruction,clarification);
+  assert.ok(validCardEvidence(baseline,id,valid.catalog,data.catalog));
+  assert.equal((await save(1,valid)).status,400);
+  baseline.prepare("UPDATE week3_session_memory SET revision=2,data=? WHERE sessionId=?").run(JSON.stringify(valid),id);
+  baseline.close();
+  assert.equal((await save(1,valid)).status,409);
+  await close(); await open();
+  assert.deepEqual(await (await request('/memory','GET')).json(),{revision:2,data:valid});
 });

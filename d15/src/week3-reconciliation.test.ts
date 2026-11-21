@@ -13,7 +13,7 @@ function provider(extracted: unknown[], action: Action, value: string | null, ev
   const requests: ManagerLlmMessage[][]=[];
   const adapter={context:{assess:async()=>({tokens:100,limit:10000}),summarize:async()=>''},complete:vi.fn(async({messages}:{messages:readonly ManagerLlmMessage[]})=>{
     requests.push([...messages]);
-    return {text:messages[0].content.startsWith('Compare the current') ? JSON.stringify({action,target:action==='update'?0:null,value,evidence}) : JSON.stringify({facts:extracted})};
+    return {text:messages[0].content.startsWith('Compare the current') ? JSON.stringify({action,target:action==='update'?0:null,value,evidence}) : JSON.stringify({version:1,topic:{kind:"dialogue"},facts:extracted})};
   })};
   return {processor:new MemoryProcessor(adapter),requests};
 }

@@ -12,6 +12,7 @@ dist/
 work/
 
 # Local container archives
+/day15-app.tar
 /day15-docker.tar.gz
 /day15-image.tar
 /expert-lab-d3.tar

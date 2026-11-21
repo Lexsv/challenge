@@ -6,6 +6,7 @@ import { SessionStatsPanel, SessionStatsContent, SessionStatsFrame, sessionChatC
 import { restoreSessionModelPair, type SessionModelPair } from "./session-model-selection";
 import { ChatComposer } from "./chat-composer";
 import { KeyValueDetails } from "./key-value-details";
+import { TopicCardsPanel } from "./topic-cards-panel";
 import { ChatRunLog } from "./chat-run-log";
 import { contextPhaseLabel } from "./context-compaction";
 import { createAndSelectSession } from "./session-creation";
@@ -27,7 +28,7 @@ import { credentials } from "./saved-credentials";
 import { HistoryWriter, restoreHistory } from "./conversation-history";
 import * as week2Api from "./session-api";
 import * as week3Api from "./week3-session-api";
-import { DEFAULT_SHORT_TERM_TOKEN_BUDGET, MemoryProcessor, SessionMemory, type MemorySnapshot } from './session-memory';
+import { DEFAULT_SHORT_TERM_TOKEN_BUDGET, type MemorySnapshot } from './session-memory';
 import { SessionMemoryCard } from './session-memory-card';
 import { estimateMemoryTokenStats, type MemoryTokenCache, type MemoryTokenStats } from './memory-token-stats';
 import type {MemoryEntry} from './key-value-memory';
@@ -61,7 +62,6 @@ import SettingsOutlined from "@mui/icons-material/SettingsOutlined";
 import type { ProviderRegistry } from "./provider-registry";
 import { ManagerAgent, createManagerConversation } from "./manager-agent";
 import { createManagerLlmAdapter } from "./manager-llm-adapter";
-import { createDevManagerMock } from './dev-manager-mock';
 import type { ToolRegistry } from "./tool-runtime";
 import { loadFunctions } from './custom-functions-api';
 import { executableFunction } from './custom-function-runtime';
@@ -424,7 +424,7 @@ export function Week2AgentToolLab(props: LabProps) {
           <Box sx={{ display: "grid", gridTemplateColumns: sessionChatColumns, gap: 2, alignItems: "start", minWidth: 0 }}>
             <EmptySessionChat showEmptyState={loaded && !loading && sessions.length === 0}
               onCreate={openNewSession} pending={saving} disabled={createDisabled} />
-            <SessionStatsFrame><SessionStatsContent /></SessionStatsFrame>
+            <SessionStatsFrame><SessionStatsContent compact={props.week3 ? {} : undefined} /></SessionStatsFrame>
           </Box>
         )}
         {/* Keep each keyed chat mounted: its draft, timeline and pending run belong to that session. */}
@@ -767,7 +767,7 @@ function SessionChatView({
   const credentialStates = useSyncExternalStore(credentials.subscribe, credentials.getSnapshot, credentials.getSnapshot);
   const savedCredential = credentialStates[provider];
   const useSavedKey = !selectedKey.trim() && !!savedCredential?.saved && savedCredential.verification === 'verified';
-  const hasCredential = devMockModel || !!selectedKey.trim() || useSavedKey;
+  const hasCredential = devMockModel || (week3 ? !!savedCredential?.saved && savedCredential.verification === 'verified' : !!selectedKey.trim() || useSavedKey);
   const timeline = useMemo(
     () =>
       [...buildWeek2Timeline(conversation, toolRegistry).filter(event=>!visibleRuns || visibleRuns.has(event.runId)), ...uiEvents].sort(
@@ -856,9 +856,23 @@ function SessionChatView({
         lease=turn.token;
         renewal=setInterval(()=>{void invariantRequest(chatBase+'/invariant-turn/'+lease,'PATCH').catch(()=>{});},60000);
         if(!hasCredential)throw new InvariantRequestError('No credentials found for this provider. Configure it in Providers.');
-        const initialSnapshot=week3 ? await week3Api.loadPersonalizationSnapshot(working.conversation.id) : undefined;
-        const prepared=initialSnapshot ? await prepareProfileTurn(initialSnapshot) : undefined;
-        const personalizationSnapshot=prepared?.snapshot;
+        if (week3) {
+          const snapshot=await week3Api.loadPersonalizationSnapshot(working.conversation.id);
+          const prepared=await prepareProfileTurn(snapshot,{runId:id,messageId:"user-"+id});
+          const committed=await invariantRequest(chatBase+'/invariant-turn','POST',{provider,model:selectedModel,question,turnId:id,execute:true}).catch(error=>{
+            if(error instanceof InvariantRequestError && error.uncertain) uncertainTurn.current={question,provider,model:selectedModel,id};
+            throw error;
+          });
+          if(committed.status!=='completed') throw new InvariantRequestError('Chat memory could not be committed.');
+          pendingQuestionId.current=null;
+          refreshProtectedHistory();
+          const outcome=await finishProfileTurn(prepared);
+          if(outcome.notice)setInstructionNotice(outcome.notice);
+          if(outcome.proposal){if(activeRef.current && turnGeneration===sessionGeneration.current)setHabitsProposal({proposal:outcome.proposal,deadline:performance.now()+outcome.proposal.expiresInMs});else onProposalDismissed?.('Pending profile confirmation dismissed after switching sessions.');}
+          if(outcome.applied)onProfilesChanged?.();
+          if(committed.maintenanceFailed)setHistoryError('The turn was saved. Topic segment processing needs a retry.');
+          return;
+        }
         if(!fullHistory.current){
           working = restoreHistory(initialConversation, await loadHistory(initialConversation.conversation.id));
           fullHistory.current = true;
@@ -866,9 +880,7 @@ function SessionChatView({
         setAccountingState(undefined); setDialogueCounts(undefined); setSavedDialogueCount(undefined);
         const savedFunctions = await loadFunctions();
         toolRegistry.replaceCustomTools(savedFunctions.map(executableFunction));
-        const topicMode=week3 ? await week3Api.topicProcessingMode(working.conversation.id) : {enabled:false,mockModel:false};
-        if(devMockModel && !topicMode.mockModel)throw new Error('The test model is unavailable; retry after restoring test mode.');
-        const adapter = topicMode.mockModel ? createDevManagerMock(selectedModel,async()=>{const mode=await week3Api.topicProcessingMode(working.conversation.id);if(!mode.mockModel)throw new Error('The test model is unavailable.');return mode.failSummary;}) : createManagerLlmAdapter({
+        const adapter = createManagerLlmAdapter({
           providerId: provider,
           model: selectedModel,
           apiKey: selectedKey,
@@ -881,12 +893,9 @@ function SessionChatView({
         });
         runStarted = true;
         let memoryRevision=0;
-        const sessionMemory = week3 ? new SessionMemory({load:()=>week3Api.loadSessionMemory(working.conversation.id),save:async snapshot=>{const saved=await week3Api.saveSessionMemory(working.conversation.id,snapshot);setSessionMemorySnapshot(saved);return saved;}},new MemoryProcessor(adapter),selectedModel,undefined,topicMode.enabled ? async groups=>{for(const group of groups)await week3Api.processTopicSegment(working.conversation.id,group.id);} : undefined) : undefined;
         const pendingResult = manager.run({
           state: working,
-          ...(personalizationSnapshot ? {personalizationSnapshot} : {}),
-          ...(prepared?.ids ? {turnIds:prepared.ids} : {}),
-          ...(sessionMemory ? {sessionMemory} : memory ? {keyValue:{load:async()=>{const value=await loadMemory(working.conversation.id); memoryRevision=value.revision; return value.entries;},save:async(entries:MemoryEntry[])=>{const value=await saveMemory(working.conversation.id,{revision:memoryRevision,entries});memoryRevision=value.revision;setMemoryEntries(value.entries);}}} : sliding ? {contextMode:'sliding' as const, windowSize:recentMessages} : fullContext ? {contextMode: 'full' as const} : contextStrategy === 'key-facts' ? { keyFacts: { recentMessages, load: () => loadSessionFacts(working.conversation.id), save: async (value: Parameters<typeof saveSessionFacts>[1]) => { await saveSessionFacts(working.conversation.id, value); setFactsRevision(n=>n+1); } } } : {}),
+          ...(memory ? {keyValue:{load:async()=>{const value=await loadMemory(working.conversation.id); memoryRevision=value.revision; return value.entries;},save:async(entries:MemoryEntry[])=>{const value=await saveMemory(working.conversation.id,{revision:memoryRevision,entries});memoryRevision=value.revision;setMemoryEntries(value.entries);}}} : sliding ? {contextMode:'sliding' as const, windowSize:recentMessages} : fullContext ? {contextMode: 'full' as const} : contextStrategy === 'key-facts' ? { keyFacts: { recentMessages, load: () => loadSessionFacts(working.conversation.id), save: async (value: Parameters<typeof saveSessionFacts>[1]) => { await saveSessionFacts(working.conversation.id, value); setFactsRevision(n=>n+1); } } } : {}),
           onEvent: async (event) => {
             if(event.type==='message' && event.payload.role==='user' && pendingQuestionId.current){
               const id=pendingQuestionId.current; pendingQuestionId.current=null;
@@ -907,22 +916,12 @@ function SessionChatView({
         // run() records the user message before its first provider await.
         setConversation(structuredClone(working));
         const result = await pendingResult;
-        let memoryCompleted=true;
-        if (sessionMemory) {
-          const messages = result.state.messages.filter(message=>message.runId===result.run.id);
-          if (messages[0]) try {await sessionMemory.finishCurrent(messages[0].id,messages.map(message=>({role:message.role,content:message.text})));} catch {memoryCompleted=false;setHistoryError('Could not update short-term memory. The original dialogue remains saved.');}
-          else memoryCompleted=false;
-        }
         if (sliding) {
           const events = await loadHistory(initialConversation.conversation.id);
           pageEvents.current = events; fullHistory.current = true;
           setVisibleRuns(new Set(events.map(eventRunId))); setPageCursor({before:null,snapshot:events.at(-1)?.sequence ?? 0});
           setConversation(restoreHistory(initialConversation,events));
         } else setConversation(structuredClone(result.state));
-        if(prepared && result.run.status==='completed' && !result.error){
-          if(memoryCompleted){const outcome=await finishProfileTurn(prepared);if(outcome.notice)setInstructionNotice(outcome.notice);if(outcome.proposal){if(activeRef.current && turnGeneration===sessionGeneration.current)setHabitsProposal({proposal:outcome.proposal,deadline:performance.now()+outcome.proposal.expiresInMs});else onProposalDismissed?.('Pending profile confirmation dismissed after switching sessions.');}if(outcome.applied)onProfilesChanged?.();}
-          else if(prepared.ids)setInstructionNotice('Profile instruction processing was skipped because memory processing did not complete.');
-        }
         if (result.error) {
           setUiEvents((events) => [
             ...events,
@@ -977,6 +976,37 @@ function SessionChatView({
     },
   });
 
+  const composer = (
+    <Box sx={week3 ? {
+      // Keep the input inset while messages scroll through the transparent space below it.
+      position: 'sticky', bottom: 0, zIndex: 1, flexShrink: 0, mt: 'auto', pb: 4.5,
+      ml: 1, mr: 0.5, pointerEvents: 'none', '& > *': { pointerEvents: 'auto' },
+    } : { position: 'sticky', bottom: 24, zIndex: 1, bgcolor: 'background.paper' }}>
+      {habitsProposal && <HabitsConfirmationCard proposal={habitsProposal.proposal} pending={decisionPending || running} onDecision={decision=>{
+        if(decisionLock.current)return;
+        if(!proposalIsActionable(activeRef.current,habitsProposal.deadline)){setHabitsProposal(undefined);setInstructionNotice('Profile confirmation is no longer available; no decision was sent.');return;}
+        decisionLock.current=true;
+        setDecisionPending(true);setInstructionNotice('');setInstructionSuccess('');
+        void decideHabits(habitsProposal.proposal.proposalId,decision).then(result=>{
+          if(!result)return;
+          setHabitsProposal(current=>current?.proposal.proposalId===habitsProposal.proposal.proposalId ? undefined : current);
+          const message=decisionNotice(result.status);
+          if(result.status==='applied'){setInstructionSuccess(message);onProfilesChanged?.();}
+          else if(message)setInstructionNotice(message);
+        }).finally(()=>{decisionLock.current=false;setDecisionPending(false);});
+      }} />}
+      <ChatComposer
+        floating={week3}
+        draft={input}
+        onDraftChange={setInput}
+        onSend={() => void send()}
+        disabled={running || !historyLoaded || saveFailed}
+        sendDisabled={!!modelProblem}
+        running={running}
+      />
+    </Box>
+  );
+
   return (
     <Box sx={{ display: "grid", gridTemplateColumns: sessionChatColumns, gap: 2, alignItems: "start", minWidth: 0 }}>
     <GlobalStyles styles={{ html: { overscrollBehaviorY: 'none' } }} />
@@ -985,8 +1015,8 @@ function SessionChatView({
       {invariantNotice && <Alert severity="warning">{invariantNotice}</Alert>}
       {instructionNotice && <Alert severity="warning">{instructionNotice}</Alert>}
       {instructionSuccess && <Alert severity="success">{instructionSuccess}</Alert>}
-      <Paper variant="outlined" sx={{ p: 2, pb: 3 }}>
-        <Stack spacing={1.5}>
+      <Paper variant="outlined" sx={{ p: 2, pb: week3 ? 0 : 3 }}>
+        <Stack spacing={week3 ? 1 : 1.5}>
           <Stack direction="row" alignItems="flex-start" justifyContent="space-between" gap={1} sx={{ minWidth: 0 }}>
             <Typography variant="h6" component="h3" sx={{ minWidth: 0, flex: 1, overflowWrap: "anywhere" }}>
               {title}
@@ -1012,10 +1042,10 @@ function SessionChatView({
           {limitError && <Alert severity="error">{limitError}</Alert>}
           {!timeline.length && (
             <Typography color="text.secondary">
-              Start a conversation with {providerLabel} · {selectedModel || "Select a model"}
+              {week3 ? "Start a conversation." : `Start a conversation with ${providerLabel} · ${selectedModel || "Select a model"}`}
             </Typography>
           )}
-          {historyLoaded && <Typography variant="caption" color="text.secondary">{providerLabel} · {selectedModel || 'Select a model'}</Typography>}
+          {!week3 && historyLoaded && <Typography variant="caption" color="text.secondary">{providerLabel} · {selectedModel || 'Select a model'}</Typography>}
           {selection.notice && <Alert severity="warning">{selection.notice}</Alert>}
           {modelProblem && <Alert severity="warning">{modelProblem}</Alert>}
           {!isWeek2Provider(provider) && <Alert severity="warning">{unsupportedWeek2ProviderMessage}</Alert>}
@@ -1085,12 +1115,17 @@ function SessionChatView({
           <Box
             ref={scrollRef}
             sx={{
-              minHeight: 380,
-              maxHeight: 500,
+              minHeight: week3 ? 440 : 380,
+              maxHeight: week3 ? 560 : 500,
               overflowY: "auto",
               overflowAnchor: "none",
               pr: 0.5,
-              pb: 9,
+              pb: week3 ? 0 : 9,
+              ...(week3 && {
+                // Widen the scrollport into the panel gutters, keeping the input at its original width.
+                "&&": { mx: -1 }, scrollPaddingBottom: 104,
+                "& > *": { flexShrink: 0 },
+              }),
               display: "flex",
               flexDirection: "column",
               gap: 1,
@@ -1108,49 +1143,33 @@ function SessionChatView({
             {!historyLoaded && !historyError && <Typography role="status">Loading history…</Typography>}
             {pageCursor?.before != null && <Button size="small" disabled={olderLoading || running || saveFailed || retryingSave} onClick={()=>void loadOlder()}>{olderLoading?'Loading older messages…':'Load older messages'}</Button>}
             {olderError && <Alert severity="error">{olderError}</Alert>}
-            <ChatRunLog events={timeline} security={policy.status?.events.filter(event => event.sessionId === initialConversation.conversation.id)} />
+            <ChatRunLog week3={week3} events={timeline} security={policy.status?.events.filter(event => event.sessionId === initialConversation.conversation.id)} />
             {running && (
               <Typography variant="caption" color="text.secondary">
                 Manager is processing…
               </Typography>
             )}
+            {week3 && composer}
           </Box>
-          <Box sx={{ position: 'sticky', bottom: 24, zIndex: 1, bgcolor: 'background.paper' }}>
-          {habitsProposal && <HabitsConfirmationCard proposal={habitsProposal.proposal} pending={decisionPending || running} onDecision={decision=>{
-            if(decisionLock.current)return;
-            if(!proposalIsActionable(activeRef.current,habitsProposal.deadline)){setHabitsProposal(undefined);setInstructionNotice('Profile confirmation is no longer available; no decision was sent.');return;}
-            decisionLock.current=true;
-            setDecisionPending(true);setInstructionNotice('');setInstructionSuccess('');
-            void decideHabits(habitsProposal.proposal.proposalId,decision).then(result=>{
-              if(!result)return;
-              setHabitsProposal(current=>current?.proposal.proposalId===habitsProposal.proposal.proposalId ? undefined : current);
-              const message=decisionNotice(result.status);
-              if(result.status==='applied'){setInstructionSuccess(message);onProfilesChanged?.();}
-              else if(message)setInstructionNotice(message);
-            }).finally(()=>{decisionLock.current=false;setDecisionPending(false);});
-          }} />}
-          <ChatComposer
-            draft={input}
-            onDraftChange={setInput}
-            onSend={() => void send()}
-            disabled={running || !historyLoaded || saveFailed}
-            sendDisabled={!!modelProblem}
-            running={running}
-          />
-          </Box>
+          {!week3 && composer}
         </Stack>
       </Paper>
     </Stack>
-    <Box><SessionStatsPanel state={conversation ?? initialConversation} draft={input}
+    <Box sx={{ minWidth: 0 }}><SessionStatsPanel compact={week3 ? {model:selectedModel,security:policy.status?.counts} : undefined} state={conversation ?? initialConversation} draft={input}
       request={{ providerId: provider, model: selectedModel, registry, requestTokenLimit }} tools={toolRegistry}
       active={active} loaded={historyLoaded} running={running} accountingState={accountingState} dialogueCounts={dialogueCounts}
       contextStrategy={fullContext || sliding || memory ? undefined : contextStrategy} recentMessages={recentMessages} factsRevision={factsRevision} fullContext={fullContext || sliding || memory} >
-      {policy.status && <Box component="dl" sx={{display:"grid",gridTemplateColumns:"1fr auto",gap:.5,m:0,mt:1}}>
+      {!week3 && policy.status && <Box component="dl" sx={{display:"grid",gridTemplateColumns:"1fr auto",gap:.5,m:0,mt:1}}>
         {(["blocked","redacted","withheld"] as const).map(action=><Box key={action} sx={{display:"contents"}}><Typography component="dt" variant="body2">Security {action[0].toUpperCase()+action.slice(1)}</Typography><Typography component="dd" variant="body2" sx={{m:0}}>{policy.status!.counts[action]}</Typography></Box>)}
       </Box>}
       {memory && <KeyValueDetails entries={memoryEntries} />}
       </SessionStatsPanel>
-      {week3 && <SessionMemoryCard snapshot={sessionMemorySnapshot} shortTokens={memoryTokens?.shortTermTokens ?? undefined} summaryTokens={memoryTokens?.mediumTermTokens ?? undefined} factTokens={memoryTokens?.longTermTokens ?? undefined} storedFactTokens={memoryTokens?.storedLongTermTokens ?? undefined} shortLimit={DEFAULT_SHORT_TERM_TOKEN_BUDGET} />}
+      {week3 && <SessionMemoryCard snapshot={sessionMemorySnapshot} shortTokens={memoryTokens?.shortTermTokens ?? undefined} summaryTokens={memoryTokens?.mediumTermTokens ?? undefined} factTokens={memoryTokens?.longTermTokens ?? undefined} shortLimit={DEFAULT_SHORT_TERM_TOKEN_BUDGET} />}
+      {week3 && sessionMemorySnapshot?.data?.catalog && <TopicCardsPanel catalog={sessionMemorySnapshot.data.catalog} disabled={running} finish={async()=>{
+        const response=await fetch(chatBase+'/finish-task',{method:'POST',headers:{'If-Match':String(sessionMemorySnapshot.revision)}});
+        setFactsRevision(n=>n+1);
+        if(!response.ok)throw Error('Could not finish the task. Refresh the chat and try again.');
+      }} />}
     </Box>
     </Box>
   );

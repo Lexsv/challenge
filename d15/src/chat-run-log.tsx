@@ -12,6 +12,20 @@ const titleCase = (value: string) =>
 
 const marker = "████████";
 
+const localTime = new Intl.DateTimeFormat(undefined, { timeStyle: "short" });
+const localDateTime = new Intl.DateTimeFormat(undefined, { dateStyle: "long", timeStyle: "medium" });
+
+function MessageTime({ at, align }: { at: number; align: "left" | "right" }) {
+  if (!Number.isFinite(at)) return null;
+  const date = new Date(at);
+  if (Number.isNaN(date.getTime())) return null;
+  return <Typography component="time" variant="caption" color="text.secondary"
+    dateTime={date.toISOString()} title={localDateTime.format(date)} align={align}
+    sx={{ display: "block", mt: 0.5, lineHeight: 1.25 }}>
+    {localTime.format(date)}
+  </Typography>;
+}
+
 function redactionExplanation(event: TimelineEvent) {
   if (event.kind === "tool") {
     const visible = JSON.stringify([event.arguments, event.error || event.output]);
@@ -225,7 +239,11 @@ export function logsFailed(events: readonly TimelineEvent[]) {
   return events.some(event=>event.kind==='metering'?event.meter.status==='failed':event.kind!=='message'&&event.status==='failed');
 }
 
-export function ChatRunLog({ events,security=[] }: { events: readonly TimelineEvent[]; security?:readonly SecurityEvent[] }) {
+export function ChatRunLog({ events, security = [], week3 = false }: {
+  events: readonly TimelineEvent[];
+  security?: readonly SecurityEvent[];
+  week3?: boolean;
+}) {
   const explanations = new Map<string, Set<string>>();
   const securityRuns = new Set(security.map(event => event.turnId));
   for (const event of events) {
@@ -265,17 +283,19 @@ export function ChatRunLog({ events,security=[] }: { events: readonly TimelineEv
             <Box
               sx={{
                 width: "fit-content",
-                maxWidth: { xs: "100%", md: "80%" },
+                maxWidth: week3 && row.event.role !== "system" ? "85%" : { xs: "100%", md: "80%" },
                 minWidth: 0,
                 overflowWrap: "anywhere",
-                ...(row.event.role === "user"
+                ...(row.event.role === "user" || (week3 && row.event.role === "assistant")
                   ? {
-                      px: 1,
-                      py: 0.6,
+                      boxSizing: "border-box",
+                      ml: week3 && row.event.role === "user" ? "auto" : 0,
+                      px: week3 ? 1.5 : 1,
+                      py: week3 ? 1 : 0.6,
                       border: "1px solid",
                       borderColor: "divider",
                       borderRadius: "8px",
-                      bgcolor: "action.selected",
+                      bgcolor: row.event.role === "user" ? "action.selected" : "background.paper",
                       color: "text.primary",
                     }
                   : {}),
@@ -298,6 +318,9 @@ export function ChatRunLog({ events,security=[] }: { events: readonly TimelineEv
                 >
                   {row.event.text}
                 </Typography>
+              )}
+              {week3 && row.event.role !== "system" && (
+                <MessageTime at={row.event.createdAt} align={row.event.role === "user" ? "right" : "left"} />
               )}
             </Box>
           ) : row.kind === "activity" ? (

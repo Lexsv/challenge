@@ -1,0 +1,357 @@
+{
+  "planning": {
+    "message": "Давай спланируем отдых на озере с друзьями",
+    "proposal": {
+      "version": 1,
+      "facts": [],
+      "topic": {
+        "kind": "write",
+        "updates": [
+          {
+            "target": {
+              "kind": "new",
+              "description": "Планирование отдыха на озере с друзьями",
+              "tags": [
+                "отдых",
+                "друзья"
+              ],
+              "mention": {
+                "source": "current",
+                "quote": "отдых на озере с друзьями"
+              }
+            },
+            "edits": [
+              {
+                "kind": "append_note",
+                "evidence": {
+                  "source": "current",
+                  "quote": "Давай спланируем отдых на озере с друзьями"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "followup": {
+    "message": "Поездка на озеро: 20 июля 2027 года. Едут Сергей, Лена и Катя. Лена берёт термос.",
+    "proposal": {
+      "version": 1,
+      "facts": [],
+      "topic": {
+        "kind": "write",
+        "updates": [
+          {
+            "target": {
+              "kind": "new",
+              "description": "Поездка на озеро",
+              "tags": [],
+              "mention": {
+                "source": "current",
+                "quote": "Поездка на озеро"
+              }
+            },
+            "edits": [
+              {
+                "kind": "set",
+                "field": "date",
+                "value": "2027-07-20",
+                "evidence": {
+                  "source": "current",
+                  "quote": "20 июля 2027 года"
+                }
+              },
+              {
+                "kind": "set_roster",
+                "names": [
+                  "Сергей",
+                  "Лена",
+                  "Катя"
+                ],
+                "evidence": {
+                  "source": "current",
+                  "quote": "Едут Сергей, Лена и Катя."
+                }
+              },
+              {
+                "kind": "assign",
+                "person": "Лена",
+                "item": "берёт термос",
+                "evidence": {
+                  "source": "current",
+                  "quote": "Лена берёт термос."
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "repair": {
+      "version": 1,
+      "facts": [],
+      "topic": {
+        "kind": "write",
+        "updates": [
+          {
+            "target": {
+              "kind": "existing",
+              "card": "user-37a55dfc-f555-4872-8292-298b4ee1364f",
+              "mention": {
+                "source": "current",
+                "quote": "Поездка на озеро"
+              }
+            },
+            "edits": [
+              {
+                "kind": "set",
+                "field": "date",
+                "value": "2027-07-20",
+                "evidence": {
+                  "source": "current",
+                  "quote": "20 июля 2027 года."
+                }
+              },
+              {
+                "kind": "set_roster",
+                "names": [
+                  "Сергей",
+                  "Лена",
+                  "Катя"
+                ],
+                "evidence": {
+                  "source": "current",
+                  "quote": "Едут Сергей, Лена и Катя."
+                }
+              },
+              {
+                "kind": "assign",
+                "person": "Лена",
+                "item": "берёт термос",
+                "evidence": {
+                  "source": "current",
+                  "quote": "Лена берёт термос."
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "wrongSource": {
+      "version": 1,
+      "facts": [],
+      "topic": {
+        "kind": "write",
+        "updates": [
+          {
+            "target": {
+              "kind": "new",
+              "description": "Поездка на озеро",
+              "tags": [
+                "поездка",
+                "озеро"
+              ],
+              "mention": {
+                "source": "pending",
+                "quote": "Поездка на озеро"
+              }
+            },
+            "edits": [
+              {
+                "kind": "set",
+                "field": "date",
+                "value": "2027-07-20",
+                "evidence": {
+                  "source": "pending",
+                  "quote": "20 июля 2027 года"
+                }
+              },
+              {
+                "kind": "set_roster",
+                "names": [
+                  "Сергей",
+                  "Лена",
+                  "Катя"
+                ],
+                "evidence": {
+                  "source": "pending",
+                  "quote": "Едут Сергей, Лена и Катя."
+                }
+              },
+              {
+                "kind": "assign",
+                "person": "Лена",
+                "item": "Лена берёт термос",
+                "evidence": {
+                  "source": "pending",
+                  "quote": "Лена берёт термос."
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "sourceRepair": {
+      "version": 1,
+      "facts": [],
+      "topic": {
+        "kind": "write",
+        "updates": [
+          {
+            "target": {
+              "kind": "new",
+              "description": "Поездка на озеро",
+              "tags": [],
+              "mention": {
+                "source": "current",
+                "quote": "Поездка на озеро"
+              }
+            },
+            "edits": [
+              {
+                "kind": "set",
+                "field": "date",
+                "value": "2027-07-20",
+                "evidence": {
+                  "source": "current",
+                  "quote": "20 июля 2027 года"
+                }
+              },
+              {
+                "kind": "set_roster",
+                "names": [
+                  "Сергей",
+                  "Лена",
+                  "Катя"
+                ],
+                "evidence": {
+                  "source": "current",
+                  "quote": "Едут Сергей, Лена и Катя."
+                }
+              },
+              {
+                "kind": "assign",
+                "person": "Лена",
+                "item": "берёт термос",
+                "evidence": {
+                  "source": "current",
+                  "quote": "Лена берёт термос."
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "fresh": {
+    "message": "Поездка на озеро: 20 июля 2027 года. Едут Сергей, Лена, Катя. Лена берёт термос.",
+    "proposal": {
+      "version": 1,
+      "facts": [],
+      "topic": {
+        "kind": "write",
+        "updates": [
+          {
+            "target": {
+              "kind": "new",
+              "description": "Поездка на озеро",
+              "tags": [],
+              "mention": {
+                "source": "current",
+                "quote": "Поездка на озеро"
+              }
+            },
+            "edits": [
+              {
+                "kind": "set",
+                "field": "date",
+                "value": "2027-07-20",
+                "evidence": {
+                  "source": "current",
+                  "quote": "20 июля 2027 года"
+                }
+              },
+              {
+                "kind": "set_roster",
+                "names": [
+                  "Сергей",
+                  "Лена",
+                  "Катя"
+                ],
+                "evidence": {
+                  "source": "current",
+                  "quote": "Едут Сергей, Лена, Катя."
+                }
+              },
+              {
+                "kind": "assign",
+                "person": "Лена",
+                "item": "берёт термос",
+                "evidence": {
+                  "source": "current",
+                  "quote": "Лена берёт термос."
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "repair": {
+      "version": 1,
+      "facts": [],
+      "topic": {
+        "kind": "write",
+        "updates": [
+          {
+            "target": {
+              "kind": "new",
+              "description": "Поездка на озеро",
+              "tags": [],
+              "mention": {
+                "source": "pending",
+                "quote": "Поездка на озеро"
+              }
+            },
+            "edits": [
+              {
+                "kind": "set",
+                "field": "date",
+                "value": "2027-07-20",
+                "evidence": {
+                  "source": "pending",
+                  "quote": "20 июля 2027 года"
+                }
+              },
+              {
+                "kind": "set_roster",
+                "names": [
+                  "Сергей",
+                  "Лена",
+                  "Катя"
+                ],
+                "evidence": {
+                  "source": "pending",
+                  "quote": "Едут Сергей, Лена, Катя."
+                }
+              },
+              {
+                "kind": "assign",
+                "person": "Лена",
+                "item": "берёт термос",
+                "evidence": {
+                  "source": "pending",
+                  "quote": "Лена берёт термос."
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}
