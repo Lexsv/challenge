@@ -2,19 +2,31 @@
 
 A standalone TypeScript server for one-time reminders. A Streamable HTTP client connects to `http://127.0.0.1:3000/mcp` and calls `create_reminder`. The server persists each reminder before acknowledging it. When it is due, the executor logs the task ID and stores the message as the SQLite execution result.
 
-## Start on this Mac
+## Start locally
 
-Run these commands in a terminal. The project-local Node installation on this Mac is ignored by Git. On a fresh checkout, put Node 24.10 or later and npm on your PATH first. Verification used Node 24.14.0, npm 11.9.0 and the official MCP TypeScript SDK 1.32.2. This Node release prints an experimental warning for its built-in SQLite module.
+Install Node.js 24.10 or later and npm. Run the following in a POSIX-compatible shell from the repository root. All later source-checkout commands assume the working directory is `d17/`. Node.js 24 may print an experimental warning for its built-in SQLite module.
 
 ```sh
-cd /Users/alex/challenge/d17
-export PATH="$PWD/.toolchain/node-v24.14.0-darwin-arm64/bin:$PATH"
+cd d17
 npm ci
 npm run build
+```
+
+For a first-time setup, run this command from `d17/` to create a private `.env` from the example and populate `MCP_AUTH_TOKEN` with a random value. It refuses to overwrite an existing file. You can also supply the token through your environment or secret manager.
+
+```sh
+node --input-type=module <<'NODE'
+import { randomBytes } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
+const template = readFileSync(".env.example", "utf8");
+const token = randomBytes(32).toString("hex");
+writeFileSync(".env", template.replace(/^MCP_AUTH_TOKEN=$/m, "MCP_AUTH_TOKEN=" + token),
+  { flag: "wx", mode: 0o600 });
+NODE
 npm start
 ```
 
-The configured LaunchAgent already has a private `.env`. For a fresh installation, copy `.env.example` to `.env` and supply a high-entropy `MCP_AUTH_TOKEN` before starting. `npm start` loads it. Exported environment variables take precedence. Stop with Ctrl-C or SIGTERM. Shutdown closes the listener, drains active requests and the current polling pass, and closes SQLite.
+`npm start` loads `.env`. Exported environment variables take precedence. Stop the foreground server with Ctrl-C or SIGTERM. Shutdown closes the listener, drains active requests and the current polling pass, and closes SQLite.
 
 ## Connect the Day 16 client
 
@@ -91,7 +103,7 @@ For multiple tasks, register one handler and dispatch by URI. Keep the client ru
 | `ALLOWED_ORIGINS` | bound server origin on localhost | Comma-separated exact origins including scheme and non-default port. LAN requires an explicit HTTPS origin list. |
 | `TLS_CERT_PATH`, `TLS_KEY_PATH` | unset | PEM certificate chain and private key. Set both for HTTPS. Required on LAN. |
 
-For LAN use, bind to the Mac's specific LAN IP and provision a certificate trusted by the client with that IP in its subject alternative names. Configure both TLS paths, allow the client origin, and set a random token (for example, generate one with `openssl rand -hex 32`). Connect to `https://<bound-ip>:<port>/mcp` with `Authorization: Bearer <token>`. The server validates Host, checks every supplied Origin and authenticates each tool request. Native clients can omit Origin. Browser preflight is supported. Keep the token and private key outside version control.
+For LAN use, bind to the server's LAN interface IP and provision a certificate trusted by the client with that IP in its subject alternative names. Configure both TLS paths, allow the client origin, and set a random token (for example, generate one with `openssl rand -hex 32`). Connect to `https://<bound-ip>:<port>/mcp` with `Authorization: Bearer <token>`. The server validates Host, checks every supplied Origin and authenticates each tool request. Native clients can omit Origin. Browser preflight is supported. Keep the token and private key outside version control.
 
 ## Scheduling and recovery
 
@@ -123,90 +135,92 @@ npm run smoke
 
 Tests use an injected clock and exercise SQLite claims, failures, cancellation, restart recovery, tool registration and validation. The smoke test starts the built server on a temporary loopback port, uses the official SDK client to initialize, list tools and create a reminder, checks HTTP access controls, and reads the saved row after SIGTERM. Independent SDK clients also verify SSE delivery, per-task isolation, unsubscribe, dropped-stream reconnect, new-session resubscription, idle expiry and explicit session termination. Test databases are isolated under `.test-data/`. Local dependencies, build output, the runtime, secrets and database files are ignored by Git.
 
+## Operate a macOS LaunchAgent (optional)
 
-## Operate the Mac mini service
+For a background service on macOS, supply a LaunchAgent plist for your login session. The repository does not ship a machine-specific plist. Set `WorkingDirectory` to the absolute path of your `d17/` checkout. In `ProgramArguments`, use the absolute Node executable path (obtain it with `node -p 'process.execPath'`), followed by `--env-file=.env` and `dist/src/service.js`. Set `RunAtLoad` and `KeepAlive` to true and both launchd output paths to `/dev/null`. Use a private `.env` in the working directory.
 
-The configured service runs under the current user's macOS launchd GUI session. Its job definition, TLS material, database and logs are under the ignored `data/` directory. The job uses the project-local Node executable, reads `.env` on each start and restarts on exit. Closing Terminal leaves the job running. A new login after logout or reboot requires the start command below.
-
-Run these in the same shell, from the project directory:
+The following example assumes your plist has label `local.mcp-scheduler` and is saved as `local.mcp-scheduler.plist` in the standard per-user LaunchAgents directory. Substitute your own label if needed. Run each command for the indicated operation from a terminal in the logged-in macOS GUI session.
 
 ```sh
-cd /Users/alex/challenge/d17
-label=local.day17.mcp-scheduler
+label=local.mcp-scheduler
 domain="gui/$(id -u)"
 job="$domain/$label"
-plist="$PWD/data/launchd/$label.plist"
+plist="$HOME/Library/LaunchAgents/$label.plist"
 
-launchctl print "$job"                  # inspect state and PID
-tail -n 0 -F data/logs/scheduler.log    # stream new records
-launchctl kill SIGTERM "$job"           # graceful restart via KeepAlive
-launchctl bootout "$job"                # stop and unload
-launchctl bootstrap "$domain" "$plist"   # start a stopped job
+plutil -lint "$plist"                  # validate the job definition
+launchctl bootstrap "$domain" "$plist" # start an unloaded job
+launchctl print "$job"                 # inspect a loaded job and its PID
+launchctl kill SIGTERM "$job"          # graceful restart with KeepAlive
+launchctl bootout "$job"               # stop and unload
 ```
 
-The service binds only to the private interface selected in `.env`. To display the configured endpoint without printing credentials:
+To display the endpoint from the same configuration as the built server, run this from `d17/` with the service's environment:
 
 ```sh
-.toolchain/node-*/bin/node --env-file=.env -p '"https://" + process.env.SERVER_HOST + ":" + process.env.SERVER_PORT + "/mcp"'
+node --env-file-if-exists=.env --input-type=module -e 'import { loadConfig } from "./dist/src/config/config.js"; console.log(loadConfig(process.env).origin + "/mcp");'
 ```
 
-Configure the Day 16 backend as the MCP client. Register the scheduler as `day17-scheduler`, using the description “Schedule one-time reminders on the Mac mini.” Choose Streamable HTTP and use the HTTPS endpoint. Supply `Authorization: Bearer <token>` on every MCP request. Provision the `MCP_AUTH_TOKEN` value from the private project `.env` into the client's secret storage. For an SDK client, set the authorization header through the HTTP transport's `requestInit.headers`. The SDK handles protocol headers, including `Content-Type: application/json` and `Accept: application/json, text/event-stream`.
+Register the scheduler in the client as `day17-scheduler` using Streamable HTTP and the configured endpoint. Supply `Authorization: Bearer <token>` on every MCP request. Provision the same `MCP_AUTH_TOKEN` in the client's secret storage. For an SDK client, set the authorization header through the HTTP transport's `requestInit.headers`. The SDK handles protocol headers, including `Content-Type: application/json` and `Accept: application/json, text/event-stream`.
 
-Transfer only the **public** `data/tls/server.pem` to the client using a trusted channel. Compare its SHA-256 fingerprint with `openssl x509 -in data/tls/server.pem -noout -fingerprint -sha256`. For a Node client, point `NODE_EXTRA_CA_CERTS` at its local copy before starting the client process. Other clients need equivalent trust for this self-signed server certificate. The endpoint IP must match the certificate's IP SAN. If the LAN address changes, update the server configuration, issue a matching certificate and update client trust and the endpoint. Check expiry with `openssl x509 -in data/tls/server.pem -noout -enddate`.
+For a self-signed TLS deployment, transfer the public certificate configured by `TLS_CERT_PATH` to the client through a trusted channel. From `d17/`, use OpenSSL to check the fingerprint and expiry against the client's copy:
+
+```sh
+cert=$(node --env-file-if-exists=.env -p 'process.env.TLS_CERT_PATH || ""')
+openssl x509 -in "$cert" -noout -fingerprint -sha256 -enddate
+```
+
+For a Node client, point `NODE_EXTRA_CA_CERTS` at the client's copy before starting the client process. The endpoint IP must match the certificate's IP subject alternative name. If the address changes, update the configuration, certificate and client trust.
 
 The Day 16 backend should omit Origin. The scheduler checks any supplied Origin against its exact allowlist. Store the token in the backend environment and keep it out of browser code. The only advertised tool is `create_reminder`.
 
 ## Monitor a Day 16 call
 
-Run this command in a separate Herdr terminal on the Mac mini. It starts at the end of the current log and follows the filename across rotation.
+For a service started with `dist/src/service.js`, open a separate terminal in `d17/`. This command follows new records across rotation using the default `LOG_DIR`. Substitute your configured log directory if it differs.
 
 ```sh
-tail -n 0 -F /Users/alex/challenge/d17/data/logs/scheduler.log
+tail -n 0 -F data/logs/scheduler.log
 ```
 
 At the default info level, each application record contains an ISO 8601 UTC `time`, a `level` and an `event`. Use the server-generated `requestId` (also returned in `X-Request-Id`) to trace HTTP receipt, authentication, MCP method, tool invocation and validation. The `task.created` record connects the request to its `taskId`. Follow that ID through `task.started`, `reminder.executed` and `task.finished`. The final record carries the persisted status. Failures carry a safe reason code. Reminder text, executor result text, raw exceptions, request bodies and headers are excluded. The service also captures stdout in `data/logs/stdout.log`. Node runtime notices can appear on stderr alongside the JSON records.
 
 ## File rotation
 
-The LaunchAgent runs `dist/src/service.js` with the existing project-local Node and `--env-file=.env`. This entry point forwards termination signals to the scheduler and drains both pipes on graceful shutdown. It sends the scheduler's full stderr stream (including the existing structured logger) to `scheduler.log`, and stdout to `stdout.log`. The supervisor's launchd `StandardOutPath` and `StandardErrorPath` are both `/dev/null`, so launchd never holds an extra file descriptor on a renamed archive. Foreground `npm start` continues to log to the terminal.
+The LaunchAgent runs `dist/src/service.js` with the configured Node executable and `--env-file=.env`. This entry point forwards termination signals to the scheduler and drains both pipes on graceful shutdown. It sends the scheduler's full stderr stream (including the existing structured logger) to `scheduler.log`, and stdout to `stdout.log`. The supervisor's launchd `StandardOutPath` and `StandardErrorPath` are both `/dev/null`, so launchd never holds an extra file descriptor on a renamed archive. Foreground `npm start` continues to log to the terminal.
 
-Each stream rotates independently before exceeding its size limit. The writer reserves up to 64 KiB for the final write. The newest archive is `.1.gz`; subsequent rotations replace the oldest archive at the configured retention limit. Reducing retention takes effect when the service next opens the directory. Gzip is always enabled. JSON records keep their original bytes and UTC timestamps. Follow the active filename with `tail -n 0 -F`, or open the active and archived logs in lnav:
+Each stream rotates independently before exceeding its size limit. The writer reserves up to 64 KiB for the final write. The newest archive is `.1.gz`; subsequent rotations replace the oldest archive at the configured retention limit. Reducing retention takes effect when the service next opens the directory. Gzip is always enabled. JSON records keep their original bytes and UTC timestamps. Follow the active filename with `tail -n 0 -F`, or, with lnav installed, open the active and archived logs from `d17/` (default log directory):
 
 ```sh
-cd /Users/alex/challenge/d17
 find data/logs -type f \( -name scheduler.log -o -name 'scheduler.log.*.gz' \) -exec lnav {} +
 ```
 
-For an existing LaunchAgent using `dist/src/main.js`, set its final program argument to `dist/src/service.js` and both launchd output paths to `/dev/null` in the job plist. After approving the service interruption, unload and bootstrap the job to load the new plist. Subsequent changes to the three log environment settings require a graceful restart. Run only one service writer per log directory.
+After editing a loaded LaunchAgent plist, unload and bootstrap the job to apply the changes. Subsequent changes to the three log environment settings require a graceful restart. Run only one service writer per log directory.
 
-## Docker deployment on Apple Silicon
+## Docker deployment (Linux ARM64 image)
 
 The `linux/arm64` image is tagged `mcp-scheduler:1.0.0`. Its runtime contains Node.js, its required Linux shared libraries, production npm packages and the compiled server. It runs as UID/GID 1000. The build context allows the package manifests, TypeScript compiler configuration and application source. The final stage starts from `scratch`. Configuration, credentials, TLS material and the database are provisioned at runtime.
 
 ### Build and export
 
-Run from the Day 17 source directory on a Docker host with Buildx:
+From `d17/`, use Docker with Buildx and Linux ARM64 build support. The export command writes the archive in the current directory. The checksum examples require OpenSSL.
 
 ```sh
 docker buildx build --platform linux/arm64 --pull --no-cache --provenance=false \
   --load -t mcp-scheduler:1.0.0 .
-mkdir -p /Users/alex/Documents/challenge/d17
-docker save --platform linux/arm64 -o /Users/alex/Documents/challenge/d17/mcp-scheduler.tar mcp-scheduler:1.0.0
-shasum -a 256 /Users/alex/Documents/challenge/d17/mcp-scheduler.tar
+docker save --platform linux/arm64 -o mcp-scheduler.tar mcp-scheduler:1.0.0
+openssl dgst -sha256 mcp-scheduler.tar
 ```
 
-Distribute the tar with its SHA-256 checksum. The recipient needs Docker and the archive. Compare the checksum before loading:
+Distribute the tar with its SHA-256 checksum. The recipient needs Docker and the archive. Run these commands in the directory containing the received archive. Compare the checksum with the one supplied by the publisher before loading the image.
 
 ```sh
-cd /Users/alex/Documents/challenge/d17
-shasum -a 256 mcp-scheduler.tar
+openssl dgst -sha256 mcp-scheduler.tar
 docker load -i mcp-scheduler.tar
 docker image inspect mcp-scheduler:1.0.0 --format '{{.Os}}/{{.Architecture}} {{.Id}}'
 ```
 
 ### Start with persistent storage
 
-For a host-local backend, this example uses port 3100 so it can coexist with the native LaunchAgent on port 3000. It requires Docker Engine on Linux or Docker Desktop with host networking enabled. Configure the same high-entropy bearer token in the client and the container. Supply it through your environment or secret manager.
+For a host-local backend, this example uses loopback port 3100. Choose an available port and use it in both the server settings and the client URL. Run the Docker commands from any directory after loading the image. It requires Docker Engine on Linux or Docker Desktop with host networking enabled. Configure the same high-entropy bearer token in the client and the container. Supply it through your environment or secret manager.
 
 ```sh
 : "${MCP_AUTH_TOKEN:?Export the deployed service bearer token first}"
@@ -222,4 +236,4 @@ Connect to `http://127.0.0.1:3100/mcp` with the bearer header. For a container-o
 
 For LAN deployments on a network where the container can bind the selected interface address, supply an explicit `SERVER_HOST`, trusted TLS certificate and matching private key mounted read-only, `TLS_CERT_PATH`, `TLS_KEY_PATH`, and exact HTTPS `ALLOWED_ORIGINS`. The container user needs read access to the mounted TLS files. Docker Desktop host networking has interface-binding limitations; the example above is for loopback access.
 
-The image writes SQLite to `/var/lib/scheduler/tasks.sqlite` and rotating logs to `/var/lib/scheduler/logs`. A fresh volume starts with zero tasks. To replace the container, stop and remove that container, then repeat the run command with the same named volume. Keep one scheduler process per database. Give the container its own volume, separate from the Mac LaunchAgent's project-local `data/`. The application image is read-only in the example. [Docker volumes](https://docs.docker.com/engine/storage/volumes/)
+The image writes SQLite to `/var/lib/scheduler/tasks.sqlite` and rotating logs to `/var/lib/scheduler/logs`. A fresh volume starts with zero tasks. To replace the container, stop and remove that container, then repeat the run command with the same named volume. Keep one scheduler process per database. Give the container its own volume, separate from any native installation's `data/`. The application image is read-only in the example. [Docker volumes](https://docs.docker.com/engine/storage/volumes/)
