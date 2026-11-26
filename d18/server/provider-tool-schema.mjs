@@ -61,8 +61,14 @@ const checkProfile = new AjvJsonSchemaValidator().getValidator(profile);
 // Validate JSON trees before compiling untrusted catalogs or validating arguments.
 // The SDK's AJV uses JavaScript property lookup. Reject reserved object keys and
 // use null-prototype objects so inherited properties cannot satisfy a required key.
-function jsonTree(value, depth = 0, budget = { remaining: 12000 }) {
-  if (depth > 48 || --budget.remaining < 0) throw Error();
+const pointer = (path, key) => path + "/" + String(key).replaceAll("~", "~0").replaceAll("/", "~1");
+function incompatible(path, rule) {
+  const error = new Error(rule);
+  error.schemaPath = path;
+  throw error;
+}
+function jsonTree(value, depth = 0, budget = { remaining: 12000 }, path = "") {
+  if (depth > 48 || --budget.remaining < 0) incompatible(path, "JSON depth or node limit exceeded.");
   if (
     value === null ||
     typeof value === "boolean" ||
@@ -71,30 +77,60 @@ function jsonTree(value, depth = 0, budget = { remaining: 12000 }) {
   )
     return value;
   if (Array.isArray(value))
-    return Array.from(value, (item) => jsonTree(item, depth + 1, budget));
+    return Array.from(value, (item, i) => jsonTree(item, depth + 1, budget, pointer(path, i)));
   if (
     !value ||
     typeof value !== "object" ||
     ![Object.prototype, null].includes(Object.getPrototypeOf(value))
   )
-    throw Error();
+    incompatible(path, "Expected a JSON value.");
   const out = Object.create(null);
   for (const [key, item] of Object.entries(value)) {
     if (Object.hasOwn(Object.prototype, key) || key === "prototype")
-      throw Error();
-    out[key] = jsonTree(item, depth + 1, budget);
+      incompatible(pointer(path, key), "Reserved object key.");
+    out[key] = jsonTree(item, depth + 1, budget, pointer(path, key));
   }
   return out;
 }
 
-function checkPatterns(schema) {
+// Ask the same profile about individual keywords only on the rejection path.
+function explainProfile(schema, path = "") {
+  for (const [key, value] of Object.entries(schema)) {
+    const at = pointer(path, key);
+    if (!Object.hasOwn(profile.properties, key)) incompatible(at, "Keyword is outside the supported profile.");
+    const check = checkProfile({ [key]: value });
+    if (check.valid) continue;
+    if (key === "anyOf" && Array.isArray(value)) {
+      if (value.length !== 2 || !value.some(v => v?.type === "null" && Object.keys(v).length === 1))
+        incompatible(at, "Expected exactly two alternatives including a null-only branch.");
+    }
+    let children = [];
+    if ((key === "properties" && value && typeof value === "object" && !Array.isArray(value)) ||
+        (key === "anyOf" && Array.isArray(value))) children = Object.entries(value);
+    else if (key === "items" || key === "additionalProperties") children = [["", value]];
+    for (const [name, child] of children) {
+      const childPath = key === "properties" || key === "anyOf" ? pointer(at, name) : at;
+      if (!child || typeof child !== "object" || Array.isArray(child))
+        incompatible(childPath, key === "additionalProperties" ? "Expected a boolean or schema object." : "Expected a schema object.");
+      if (!checkProfile(child).valid) explainProfile(child, childPath);
+    }
+    const rule = profile.properties[key];
+    if (rule.const !== undefined) incompatible(at, `Only ${JSON.stringify(rule.const)} is supported.`);
+    if (key === "type") incompatible(at, "Expected a single JSON Schema primitive type name.");
+    incompatible(at, check.errorMessage?.replace(/^data[^ ]* /, "") ?? "Invalid keyword value.");
+  }
+  incompatible(path, "Expected a schema object.");
+}
+
+function checkPatterns(schema, path = "") {
   if (!schema || typeof schema !== "object") return;
   if (Object.hasOwn(schema, "pattern") && !supportedPattern(schema.pattern))
-    throw Error("Unsupported regular expression profile.");
-  for (const child of Object.values(schema.properties ?? {})) checkPatterns(child);
-  for (const child of schema.anyOf ?? []) checkPatterns(child);
-  checkPatterns(schema.items);
-  checkPatterns(schema.additionalProperties);
+    incompatible(pointer(path, "pattern"), "Pattern is outside the bounded regular expression profile.");
+  for (const [key, child] of Object.entries(schema.properties ?? {}))
+    checkPatterns(child, pointer(path + "/properties", key));
+  for (const [index, child] of (schema.anyOf ?? []).entries()) checkPatterns(child, path + "/anyOf/" + index);
+  checkPatterns(schema.items, path + "/items");
+  checkPatterns(schema.additionalProperties, path + "/additionalProperties");
 }
 
 // Each compiled catalog is scoped to the run. No global cache of untrusted schemas.
@@ -103,22 +139,19 @@ export function createProviderInputValidator(provider) {
   return function prepareProviderInput(schema, now) {
     let diagnostic = "Unsupported provider or root schema.";
     try {
-      if (
-        !["openai", "opencode-console", "opencode-go"].includes(provider) ||
-        schema?.type !== "object"
-      )
-        throw Error();
+      if (!["openai", "opencode-console", "opencode-go"].includes(provider)) incompatible("", "Unsupported provider profile.");
+      if (schema?.type !== "object") incompatible("/type", "The root schema must declare type object.");
       diagnostic = "Schema exceeds the admitted JSON structure or dialect.";
       const json = jsonTree(schema);
       // The admitted assertion keywords have the same semantics in both
       // dialects. Remove the declaration only on the private AJV compile copy.
       // The provider and catalog retain the full original declaration.
       if (Object.hasOwn(json, "$schema")) {
-        if (!dialects.has(json.$schema)) throw Error();
+        if (!dialects.has(json.$schema)) incompatible("/$schema", "Unsupported JSON Schema dialect.");
         delete json.$schema;
       }
       diagnostic = "Schema keyword or keyword value is outside the supported profile.";
-      if (!checkProfile(json).valid) throw Error();
+      if (!checkProfile(json).valid) explainProfile(json);
       diagnostic = "Pattern is outside the bounded regular expression profile.";
       checkPatterns(json);
       diagnostic = "Schema could not be compiled.";
@@ -133,7 +166,8 @@ export function createProviderInputValidator(provider) {
           }
         },
       };
-    } catch {
+    } catch (failure) {
+      const schemaPath = failure.schemaPath ?? "";
       return {
         ok: false,
         error: {...executionError(
@@ -141,7 +175,7 @@ export function createProviderInputValidator(provider) {
           "provider-adapter",
           "compatibility",
           now,
-        ), diagnostic},
+        ), schemaPath, diagnostic: failure.schemaPath !== undefined ? failure.message : diagnostic},
       };
     }
   };

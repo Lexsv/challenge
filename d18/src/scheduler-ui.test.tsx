@@ -56,6 +56,12 @@ describe("Scheduler results", () => {
     expect(html).not.toContain("<svg");
     expect(reportDatasets([run('{"results":[{"value":0}]}')])[0].rows).toEqual([{ value: 0 }]);
   });
+  it.each(["Completed", "PartialSuccess", "Failed"])("renders the saved response for a %s run", state => {
+    const row = {...run(JSON.stringify({version:1, format:"markdown", content:"**Verified first step**"})), state};
+    const html = renderToStaticMarkup(<SchedulerReports rows={[row]} />);
+    expect(html).toContain("<strong>Verified first step</strong>");
+    expect(html).not.toContain("No result available yet");
+  });
   it("uses backend status labels and displays millisecond or multi-hour cadence", () => {
     expect(renderToStaticMarkup(<TaskStatus status="RequiresReview" />)).toContain("Requires review");
     expect(cadence({ kind: "interval", startAt: 0, everyMs: 7200000 })).toBe("Every 2 hours");
@@ -196,6 +202,32 @@ it.each([
   expect(buttons[0][1]).not.toContain("disabled");
   expect(buttons[1][2]).toMatch(/Stop$/);
   expect(buttons[1][1].includes("disabled")).toBe(stopDisabled);
+});
+
+it.each([
+  ["Paused", "Continue", false], ["Running", "Pause", false], ["Stopped", "Start", true],
+] as const)("keeps %s controls independent of an admitted run", (status, label, disabled) => {
+  const row = { status, stopped: status === "Stopped", review_definition: 0,
+    metrics: { occurrences: 1, total: 1, success: 0, failed: 0, denied: 0, review: 0, active: 1, last: 1 } };
+  const html = renderToStaticMarkup(<LifecycleButtons task={row} busy={false} control={() => {}} />);
+  const primary = html.match(/<button\b([^>]*)>([\s\S]*?)<\/button>/)!;
+  expect(primary[2]).toMatch(new RegExp(label + "$"));
+  expect(primary[1].includes("disabled")).toBe(disabled);
+});
+
+it.each([
+  ["Pending", "start", 0], ["Running", "pause", 0], ["Paused", "resume", 0], ["Running", "stop", 1],
+] as const)("shows only the pending %s/%s request and locks both controls", (status, action, index) => {
+  const task = {status, stopped:false, review_definition:0,
+    metrics:{occurrences:1, total:1, success:0, failed:0, denied:0, review:0, active:1, last:1}};
+  const render = (busy: boolean) => renderToStaticMarkup(<LifecycleButtons task={task}
+    busy={busy} pendingAction={busy ? action : undefined} control={() => {}} />);
+  const buttons = [...render(true).matchAll(/<button\b([^>]*)>([\s\S]*?)<\/button>/g)];
+  expect(buttons).toHaveLength(2);
+  expect(buttons.every(button => button[1].includes("disabled"))).toBe(true);
+  expect(buttons[index][2]).toContain('role="progressbar"');
+  expect(buttons[1-index][2]).not.toContain('role="progressbar"');
+  expect(render(false)).not.toContain('role="progressbar"');
 });
 
 describe("Scheduler execution history", () => {

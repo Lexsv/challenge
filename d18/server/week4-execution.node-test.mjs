@@ -83,6 +83,19 @@ test("skips remain informational when the exact operation later succeeds", async
   }
 });
 
+test("a scheduled read recovered by the same later read retains its failed receipt", async t => {
+  const {ctx,service,tool,j} = fixture(t);
+  ctx.currentResolutionIssues = [];
+  const failed = await tool(async () => fail("schema"), {connection:"first"});
+  await tool(success, {connection:"first", grantId:"fixture-mutation", safety:"side-effecting",
+    call:{id:randomUUID(),toolId:"fixture-change",arguments:{}}});
+  const corrected = await tool(success, {connection:"first"});
+  assert.equal(corrected.ok, true);
+  assert.equal(service.finish(ctx,"delivered"), "Completed");
+  assert.equal(j.op(failed.logicalCallId).state, "Failed");
+  assert.deepEqual(j.stats(ctx.id).tools, {Failed:1,Success:2});
+});
+
 test("terminal states cannot dispatch; interrupted and waiting have explicit transitions", () => {
   assertTransition("run", "Interrupted", "Running");
   assertTransition("call", "WaitingForRetry", "Running");

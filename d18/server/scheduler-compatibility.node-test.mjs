@@ -43,6 +43,21 @@ test("each provider enforces both date-time and the original regular expression"
   }
 });
 
+test("compatibility diagnostics pinpoint the rejected keyword without admitting a wider profile", () => {
+  const prepare = createProviderInputValidator("openai");
+  for (const [field, suffix, rule] of [
+    [{anyOf:["string","number","integer","boolean","null"].map(type => ({type}))}, "/anyOf", /exactly two/],
+    [{type:"array", items:{oneOf:[]}}, "/items/oneOf", /outside the supported profile/],
+    [{type:"string",pattern:"(?:a+)+"}, "/pattern", /bounded regular expression/],
+    [false, "", /Expected a schema object/],
+  ]) {
+    const result = prepare({type:"object",properties:{"a/b~c":field}}, 0);
+    assert.equal(result.error.code, "unsupported_schema");
+    assert.equal(result.error.schemaPath, "/properties/a~1b~0c" + suffix);
+    assert.match(result.error.diagnostic, rule);
+  }
+});
+
 test("scheduler diagnostics rotate within their combined cap and omit payload fields", () => {
   const dir = mkdtempSync(join(tmpdir(), "sched-logs-"));
   try {
@@ -61,6 +76,13 @@ test("scheduler diagnostics rotate within their combined cap and omit payload fi
     );
     assert.ok(lines.every((l) => !l.includes("test-secret")));
     assert.equal(JSON.parse(lines.at(-1)).issues, 79);
+    const issue = createProviderInputValidator("openai")({
+      type:"object", properties:{stamp:{type:"string", format:"custom"}},
+    }, 0).error;
+    log("resolution_error", issue);
+    const last = JSON.parse(readFileSync(path, "utf8").trim().split("\n").at(-1));
+    assert.equal(last.schemaPath, "/properties/stamp/format");
+    assert.match(last.diagnostic, /date-time/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

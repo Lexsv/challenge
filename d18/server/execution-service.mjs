@@ -770,18 +770,42 @@ export class ExecutionService {
     const { tools } = j.stats(ctx.id);
     // Keep the skip diagnostic, but count the requirement as fulfilled if
     // the same operation was subsequently completed in this run.
-    const outstandingSkip = tools.Skipped && operations.some((op, index) => {
-      if (op.state !== "Skipped") return false;
+    function succeededLater(op, index) {
       const base = op.logical_key.split(":")[0];
-      return !operations.slice(index + 1).some(later => later.state === "Success" &&
+      return operations.slice(index + 1).some(later => later.kind === "tool" && later.state === "Success" &&
         later.target === op.target && later.connection_key === op.connection_key &&
         later.logical_key.split(":")[0] === base);
-    });
+    }
+    const outstandingSkip = tools.Skipped && operations.some((op, index) =>
+      op.state === "Skipped" && !succeededLater(op, index));
     const resolutionIssues = ctx.resolutionIssues ?? JSON.parse(j.run(ctx.id).error ?? "null")?.resolutionIssues ?? [];
-    const incomplete = resolutionIssues.length > 0 || answer !== "delivered" || tools.Failed || outstandingSkip || tools.Cancelled;
+    const currentIssues = ctx.currentResolutionIssues ?? resolutionIssues;
+    const noToolEvidence = !operations.some(op => op.kind === "tool");
+    const blockingIssue = ctx.blockedResolutionIssues?.[0] ?? currentIssues.find(issue =>
+      issue.code !== "unsupported_schema" || (noToolEvidence && !ctx.toolIndependentAnswer));
+    // The Manager links a replacement to the validation rejection it corrected.
+    // Follow only same-run pre-dispatch rejections, starting at durable successes.
+    const corrected = new Set();
+    if (tools.Failed) {
+      for (const op of operations.slice().reverse()) {
+        if (op.kind !== "tool" || (op.state !== "Success" && !corrected.has(op.id))) continue;
+        const prior = JSON.parse(op.display ?? "null")?.correctsOperation;
+        if (prior) corrected.add(prior);
+      }
+    }
+    const outstandingFailure = tools.Failed && operations.find((op, index) => {
+      if (op.kind !== "tool" || op.state !== "Failed") return false;
+      const failure = JSON.parse(op.error ?? "null");
+      if (ctx.currentResolutionIssues && op.safety === "read-only" &&
+          failure?.certainty === "known" && succeededLater(op, index)) return false;
+      return !corrected.has(op.id) || failure?.code !== "invalid_arguments" ||
+        failure.stage !== "validation" || failure.certainty !== "known" || j.attempts(op.id).length > 0;
+    });
+    const incomplete = blockingIssue || answer !== "delivered" || outstandingFailure || outstandingSkip || tools.Cancelled;
+    const uncertain = operations.find(op => (op.kind === "tool" && op.state === "Unknown") ||
+      (op.state === "Failed" && JSON.parse(op.error ?? "null")?.certainty === "unknown"));
     let state;
-    if (tools.Unknown || answer === "interrupted" || operations.some(op =>
-      op.state === "Failed" && JSON.parse(op.error ?? "null")?.certainty === "unknown")) state = "RequiresReview";
+    if (uncertain || answer === "interrupted") state = "RequiresReview";
     else if (tools.Success && incomplete) state = "PartialSuccess";
     else if (answer === "cancelled") state = "Cancelled";
     else state = incomplete ? "Failed" : "Completed";
@@ -794,6 +818,11 @@ export class ExecutionService {
           this.now(),
         )
       : null;
+    const taskError = ctx.failure ?? JSON.parse(uncertain?.error ?? "null") ?? blockingIssue ??
+      JSON.parse(outstandingFailure?.error ?? "null") ?? error;
+    const availability = resolutionIssues.map(issue =>
+      ctx.blockedResolutionIssues?.some(blocked => blocked.toolId === issue.toolId && blocked.code === issue.code)
+        ? {...issue, required: true} : issue);
     this.db
       .prepare(
         "UPDATE week4_runs SET answer=?,error=?,owner=NULL,lease_until=NULL WHERE id=?",
@@ -801,8 +830,8 @@ export class ExecutionService {
       .run(
         answer,
         JSON.stringify(resolutionIssues.length
-          ? {...(ctx.failure ?? resolutionIssues[0]), resolutionIssues}
-          : answer === "delivered" ? null : (ctx.failure ?? error)),
+          ? {...taskError, resolutionIssues: availability}
+          : ctx.currentResolutionIssues ? taskError : answer === "delivered" ? null : (ctx.failure ?? error)),
         ctx.id,
       );
     return state;

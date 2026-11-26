@@ -142,7 +142,7 @@ export class ManagerAgent {
     sessionTools?: () => {tools: ToolCatalogItem[]; availability?: readonly {service:string; callable:number; issues:string[]}[]; plan:(call:ManagerToolCall)=>SessionToolPlan | Promise<SessionToolPlan>};
     journalSummary?: () => string | undefined;
     executeDurably?: (operation: {
-      id: string; call: ManagerToolCall; safety: import('./execution-policy').OperationSafety;
+      id: string; call: ManagerToolCall; correctsOperation?: string; safety: import('./execution-policy').OperationSafety;
       validation?:string; authorization?:string; repeatAfterSuccess?:boolean; allowed: boolean; skip: boolean; skipReason?: DependencyReason; check: () => unknown; connection?:string;grantId?:string;preflightError?:import("./execution-policy").ExecutionError;
       prerequisiteCallIds?: readonly string[]; stateScope?:string;
       invoke: DurableInvocation;
@@ -251,7 +251,7 @@ export class ManagerAgent {
       while (balance < 0 && link.endsWith(")")) { link = link.slice(0, -1); balance++; }
       return link;
     };
-    let correctable: {toolId:string; callId:string} | undefined;
+    let correctable: {toolId:string; callId:string; operationId?:string} | undefined;
     const unresolvedFailures = new Set<string>();
     const callOutcomes = new Map<string,"success" | "failed" | "skipped">();
     const derivedValues = new Map<string,{available:boolean; value:unknown}>();
@@ -550,6 +550,7 @@ export class ManagerAgent {
             }
             execution = await input.executeDurably({
               id: toolExecution.id, call, allowed, safety: bound?.safety ?? tool?.safety ?? 'side-effecting',
+              correctsOperation: correctingArguments ? correctable?.operationId : undefined,
               repeatAfterSuccess:bound?.repeatAfterSuccess,
               validation:plan?.validation, authorization:plan?.authorization, connection:bound?.connection ?? (plan && !plan.allowed ? plan.error?.connectionId : undefined),grantId:bound?.grantId,preflightError:plan && !plan.allowed ? plan.error : undefined,
               prerequisiteCallIds:plan?.prerequisiteCallIds, stateScope:bound?.stateScope,
@@ -564,7 +565,7 @@ export class ManagerAgent {
             if (!execution.ok && execution.outcome !== "Skipped") unresolvedFailures.add(call.id);
             correctable = !execution.ok && execution.error.code === "invalid_arguments" &&
               execution.error.stage === "validation" &&
-              (!earlierFailure || correctingArguments) ? {toolId:call.toolId, callId:call.id} : undefined;
+              (!earlierFailure || correctingArguments) ? {toolId:call.toolId, callId:call.id, operationId:execution.logicalCallId} : undefined;
             callOutcomes.set(call.id,execution.ok ? "success" : execution.outcome === "Skipped" ? "skipped" : "failed");
             for (const field of tool?.produces ?? []) {
               const out=execution.ok && execution.output && typeof execution.output==='object' ? execution.output as Record<string,unknown> : {};

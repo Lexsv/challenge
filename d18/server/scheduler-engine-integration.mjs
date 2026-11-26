@@ -286,6 +286,8 @@ test("a delivered answer cannot complete an occurrence whose granted tool failed
   const grants=[];
   const {app,db,clock,define,runs}=await fixture(t,()=>({complete:async request=>{
     assert.equal(request.tools.length,0);
+    if (request.messages.some(message => message.role === "user" && message.content.includes("text-only fixture")))
+      return {text:JSON.stringify({blockedToolIds:[], partialResult:"Text-only fixture result."})};
     return {text:"The model produced an answer."};
   }}),grants);
   const repo=createMcpRepository(db,()=>clock.value), connectionId=randomUUID();
@@ -302,6 +304,15 @@ test("a delivered answer cannot complete an occurrence whose granted tool failed
   assert.equal(result.error,"unsupported_schema");
   assert.equal(result.resolutionIssues[0].toolId,toolId);
   assert.equal(result.resolutionIssues[0].schemaSide,"input");
+  assert.equal(result.resolutionIssues[0].schemaPath,"/properties/field/format");
+  assert.match(result.resolutionIssues[0].diagnostic,/date-time/);
+  const offline = createStarted(app.scheduledTasks, {...define({kind:"once",at:clock.value}),
+    instructions:"Write a text-only fixture summary.",permissions:[{connectionId,toolId}]});
+  await until(()=>runs(offline.id)[0]?.owner===null);
+  const summary = app.scheduledTasks.getOccurrence(runs(offline.id)[0].id);
+  assert.equal(summary.state, "Completed");
+  assert.equal(summary.response, "Text-only fixture result.");
+  assert.equal(summary.resolutionIssues[0].toolId,toolId);
 });
 
 test("retirement fences new admissions, drains the running occurrence and preserves history across restart", async t => {
@@ -386,6 +397,9 @@ test("consumed one-time tasks restart with a new occurrence; an uncertain write 
  // Simulate a lost run receipt; even the absence of visible tool calls cannot establish safety.
  db.prepare("UPDATE week4_runs SET state='RequiresReview' WHERE id=?").run(first);
  svc.stop(task.id);
+ const api = await client(app);
+ const denial = await api("/" + task.id + "/resume", "POST", undefined, 409);
+ assert.match(denial.error, /Review the uncertain execution/);
  assert.throws(()=>svc.start(task.id),{status:409});
  assert.throws(()=>svc.review(task.id,{confirmed:true,revision:task.revision,occurrenceIds:[randomUUID()]}),{status:409});
  svc.review(task.id,{confirmed:true,revision:task.revision,occurrenceIds:[first]});
@@ -431,21 +445,121 @@ test("failed and paused tasks can be retired without losing their original outco
  assert.equal(runs(paused.id).length,0);
 });
 
+async function client(server) {
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const origin = "http://127.0.0.1:" + server.address().port;
+  return async (path, method = "GET", body, expected = 200, ifMatch) => {
+    const r = await fetch(origin + "/api/scheduler/tasks" + path, {
+      method, headers: { origin, "x-day18-ui": "scheduler", "content-type": "application/json",
+        ...(ifMatch && {"if-match":ifMatch}) },
+      body: body && JSON.stringify(body),
+    });
+    assert.equal(r.status, expected);
+    return r.json();
+  };
+}
+
+for (const resumeBeforeFinish of [true, false]) {
+  test(`an admitted execution finishes with scheduling ${resumeBeforeFinish ? "resumed" : "paused"}`, async t => {
+    const release = Promise.withResolvers();
+    let calls = 0;
+    const {app, clock, define, runs, close, open} = await fixture(t, () => ({
+      complete: async () => {
+        if (++calls === 1) await release.promise;
+        return {text:"Stored fixture result " + calls};
+      },
+    }));
+    const start = clock.value, interval = 1000;
+    const task = createStarted(app.scheduledTasks, define({kind:"interval", startAt:start, everyMs:interval}));
+    let api = await client(app);
+    const path = "/" + task.id;
+    const read = async () => (await api("")).find(row => row.id === task.id);
+    const token = row => `"${row.revision}-${row.updated_at}"`;
+    try {
+      await until(() => calls === 1);
+      const original = runs(task.id)[0].id;
+      let row = await read();
+      for (let i = 0; i < 3; i++) {
+        const oldToken = token(row);
+        row = await api(path + "/pause", "POST", undefined, 200, oldToken);
+        assert.equal(row.schedulingState, "Paused");
+        assert.equal(row.executionActive, true);
+        assert.equal((await read()).metrics.active, 1);
+        if (i === 2 && !resumeBeforeFinish) break;
+        row = await api(path + "/resume", "POST", undefined, 200, token(row));
+        assert.equal(row.schedulingState, "Running");
+        assert.equal(row.executionActive, true);
+        const repeated = await api(path + "/resume", "POST", undefined, 200, token(row));
+        assert.equal(repeated.updated_at, row.updated_at);
+        assert.equal(repeated.schedulingState, "Running");
+        // An old tab still sees Running, but cannot undo the newer Continue.
+        await api(path + "/pause", "POST", undefined, 409, oldToken);
+      }
+      clock.value += interval * 3;
+      await sleep(45);
+      assert.deepEqual(runs(task.id).map(r => [r.id,r.state]), [[original,"Running"]]);
+      release.resolve();
+      await until(() => runs(task.id)[0].state === "Completed");
+      if (resumeBeforeFinish) await until(() => runs(task.id)[1]?.state === "Completed");
+      const count = resumeBeforeFinish ? 2 : 1;
+      const slots = runs(task.id).map(r => r.due_at);
+      assert.deepEqual(slots, resumeBeforeFinish ? [start,clock.value] : [start]);
+      const before = await api(path + "/history");
+      assert.equal(before.rows.length, count);
+      const report = await api(path + "/result");
+      assert.equal(report.rows[0].response, "Stored fixture result " + count);
+      await close(app);
+      api = await client(open());
+      row = await read();
+      assert.equal(row.schedulingState, resumeBeforeFinish ? "Running" : "Paused");
+      assert.equal(row.metrics.active, 0);
+      assert.deepEqual(await api(path + "/history"), before);
+      assert.deepEqual(await api(path + "/result"), report);
+      if (!resumeBeforeFinish) {
+        await api(path + "/resume", "POST", undefined, 200, token(row));
+        await until(() => runs(task.id)[1]?.state === "Completed");
+      }
+      clock.value += interval;
+      await until(() => runs(task.id)[2]?.state === "Completed");
+      await api(path + "/stop", "POST");
+      clock.value += 2 * interval;
+      await sleep(45);
+      assert.equal(calls, 3);
+      assert.equal((await read()).schedulingState, "Stopped");
+      assert.equal(new Set(runs(task.id).map(r => r.due_at)).size, 3);
+    } finally { release.resolve(); }
+  });
+}
+
+for (const action of ["resume", "stop"]) {
+  test(`${action} during an admitted one-time occurrence does not rearm it`, async t => {
+    const release = Promise.withResolvers();
+    let calls = 0;
+    const {app, clock, define, runs} = await fixture(t, () => ({
+      complete: async () => { calls++; await release.promise; return {text:"One-time fixture"}; },
+    }));
+    const svc = app.scheduledTasks;
+    const task = createStarted(svc, define({kind:"once", at:clock.value}));
+    try {
+      await until(() => calls === 1);
+      svc.pause(task.id);
+      svc[action](task.id);
+      if (action === "stop") assert.throws(() => svc.start(task.id), {status:409});
+      release.resolve();
+      await until(() => runs(task.id)[0].state === "Completed");
+      clock.value += 10000;
+      await sleep(45);
+      assert.equal(svc.getTask(task.id).next_due_at, null);
+      assert.equal(svc.getTask(task.id).stopped, action === "stop");
+      assert.equal(runs(task.id).length, 1);
+      assert.equal(calls, 1);
+    } finally { release.resolve(); }
+  });
+}
+
 test("a new task remains Pending through edits, polling and restart until Start arms its schedule", async t => {
   const { app, clock, open, close, define, runs } = await fixture(t);
-  async function client(server) {
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-    const origin = "http://127.0.0.1:" + server.address().port;
-    return async (path, method = "GET", body, expected = 200) => {
-      const r = await fetch(origin + "/api/scheduler/tasks" + path, {
-        method, headers: { origin, "x-day18-ui": "scheduler", "content-type": "application/json" },
-        body: body && JSON.stringify(body),
-      });
-      assert.equal(r.status, expected);
-      return r.json();
-    };
-  }
   let api = await client(app);
   const interval = 10_000;
   const def = { ...define({ kind: "interval", startAt: clock.value, everyMs: interval }),
@@ -483,4 +597,26 @@ test("a new task remains Pending through edits, polling and restart until Start 
   clock.value += 3 * interval;
   await sleep(45);
   assert.equal(runs(task.id).length, 2);
+});
+
+test("task list orders persisted lifecycle groups by newest creation across transitions and restart", async t => {
+  const {app,clock,define,open,close} = await fixture(t);
+  let api = await client(app);
+  const ids = [];
+  for (let i = 0; i < 8; i++) {
+    clock.value++;
+    const task = app.scheduledTasks.createTask(define({kind:"once", at:clock.value + 100000}));
+    ids.push(task.id);
+  }
+  const order = async (...positions) => assert.deepEqual((await api("")).map(task => task.id), positions.map(i => ids[i]));
+  await order(7,6,5,4,3,2,1,0);
+  for (const i of [0,1,2,3,4,5]) app.scheduledTasks.start(ids[i]);
+  for (const i of [3,4]) app.scheduledTasks.pause(ids[i]);
+  for (const i of [0,5]) app.scheduledTasks.stop(ids[i]);
+  await order(7,6,4,3,2,1,5,0);
+  app.scheduledTasks.resume(ids[4]);
+  await order(7,6,3,4,2,1,5,0);
+  await close(app);
+  api = await client(open());
+  await order(7,6,3,4,2,1,5,0);
 });

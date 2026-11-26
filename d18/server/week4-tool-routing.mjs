@@ -118,7 +118,7 @@ export function resolveWeek4Tools({
       prepareInput ??= createProviderInputValidator(provider);
       const prepared = prepareInput(adapted.data.inputSchema, now());
       if (!prepared.ok) {
-        errors.push({ ...prepared.error, ...context, ...ids, schemaSide: "input" });
+        errors.push({ ...prepared.error, ...context, ...ids, toolName: row.originalName, schemaSide: "input" });
         continue;
       }
       const scopes = new Map();
@@ -146,7 +146,7 @@ export function resolveWeek4Tools({
       if (policy && adapted.data.outputSchema) {
         const validator = prepareInput(adapted.data.outputSchema, now());
         if (!validator.ok) {
-          errors.push({ ...validator.error, ...context, ...ids, schemaSide: "output" });
+          errors.push({ ...validator.error, ...context, ...ids, toolName: row.originalName, schemaSide: "output" });
           continue;
         }
         checkOutput = validator.data;

@@ -71,7 +71,9 @@ test(
   { timeout: 20000 },
   async (t) => {
     const peer = await remote(t);
-    peer.state.pages = [definitions.slice(0, 2), definitions.slice(2)];
+    peer.state.pages = [definitions.slice(0, 2), [...definitions.slice(2), {name:"optional_metadata", inputSchema:object({
+      value:{anyOf:["string","boolean","integer","number","array"].map(type => ({type}))},
+    })}]];
     const location = "Fixture Harbour",
       periodHours = 1,
       minute = 60000;
@@ -79,7 +81,8 @@ test(
       firstReport = startAt + 5 * minute;
     let clock = startAt - minute,
       sensorOffline = false,
-      historyOffline = false;
+      historyOffline = false,
+      requireMetadata = false;
     const stored = [],
       calls = [];
     const samples = [
@@ -118,6 +121,7 @@ test(
     const file = join(dir, "sessions.sqlite"),
       grants = [];
     const mock = createDevManagerMock("fixture");
+    let unavailableToolId;
     const open = () =>
       createSessionServer(file, {
         executionOptions: { now: () => clock, readMcpPolicy: () => grants },
@@ -146,12 +150,20 @@ test(
             const last = input.messages.at(-1);
             if (last.role === "tool") {
               const outcome = JSON.parse(last.content);
+              if (last.toolCallId === "invalid-observation-request") {
+                assert.equal(outcome.error.code, "invalid_arguments");
+                return call("get_weather", {place:location});
+              }
               if (!outcome.ok) return { text: "Weather operation failed. Data unavailable." };
               const output = outcome.output.structuredContent;
               if (last.toolCallId === "get_weather")
                 return call("save_weather", { observation: output.observation }, ["get_weather"]);
               if (last.toolCallId === "save_weather")
                 return { text: "Saved observation for " + output.time };
+              if (requireMetadata) {
+                assert.ok(input.messages.some(m => m.content.includes(unavailableToolId)));
+                return {text:JSON.stringify({blockedToolIds:[unavailableToolId], partialResult:fixtureReport(output)})};
+              }
               return { text: fixtureReport(output) };
             }
             assert.ok(last.content.includes(location));
@@ -167,6 +179,11 @@ test(
               });
             }
             assert.deepEqual(tools.map((t) => t.originalName).sort(), ["get_weather", "save_weather"]);
+            if (clock === startAt) {
+              const proposal = call("get_weather", {place:3});
+              proposal.toolCalls[0].id = "invalid-observation-request";
+              return proposal;
+            }
             return call("get_weather", { place: location });
           },
         }),
@@ -214,8 +231,12 @@ test(
       },
     };
     const templates = weatherTaskDefinitions(catalog, inputs);
+    const optional = catalog.tools.find(t => t.originalName === "optional_metadata");
+    unavailableToolId = optional.toolId;
+    for (const template of [templates.collection, templates.reporting])
+      template.permissions.push({connectionId:conn.connectionId, toolId:optional.toolId});
     let readProof;
-    for (const name of ["get_weather", "save_weather", "read_weather_history"]) {
+    for (const name of ["get_weather", "save_weather", "read_weather_history", "optional_metadata"]) {
       const { toolId, document } = catalog.tools.find((t) => t.originalName === name);
       const grant = {
         schedulerScope:true,
@@ -228,7 +249,8 @@ test(
       if (name === "get_weather") {
         grant.arguments = { place: location };
         readProof = policyDigest(grant);
-      } else grant.argumentSchema = document.inputSchema;
+      } else if (name === "optional_metadata") grant.arguments = {};
+      else grant.argumentSchema = document.inputSchema;
       if (name === "save_weather") grant.requires = [readProof];
       grants.push(grant);
     }
@@ -322,8 +344,18 @@ test(
     for (let i = 0; i < 5; i++) {
       clock = startAt + i * minute;
       const run = await terminal(collection, clock);
-      const ops = operations(run);
+      const all = operations(run);
+      if (i === 0) {
+        assert.equal(all[0].state, "Failed");
+        assert.equal(JSON.parse(all[0].error).code, "invalid_arguments");
+        assert.equal(JSON.parse(all[1].display).correctsOperation, all[0].id);
+      }
+      const ops = i === 0 ? all.slice(1) : all;
       assert.equal(run.state, "Completed", JSON.stringify(ops));
+      assert.equal(run.error, null);
+      assert.equal(run.resolutionIssues.length, 1);
+      assert.equal(run.resolutionIssues[0].schemaPath, "/properties/value/anyOf");
+      assert.match(run.resolutionIssues[0].diagnostic, /two alternatives/);
       assert.deepEqual(
         ops.map((op) => [JSON.parse(op.display).name, op.state]),
         [
@@ -347,6 +379,7 @@ test(
       full = await terminal(report, clock);
     assert.equal(operations(failed)[0].state, "Failed");
     assert.equal(failed.state, "Failed");
+    assert.equal(failed.error, JSON.parse(operations(failed)[0].error).code);
     assert.equal(full.state, "Completed");
     assert.deepEqual(
       operations(full).map((op) => [JSON.parse(op.display).name, op.state]),
@@ -359,7 +392,26 @@ test(
     const failedReport = await terminal(report, clock);
     assert.equal(failedReport.state, "Failed");
     historyOffline = false;
+    requireMetadata = true;
+    clock += minute;
+    const partial = await terminal(report, clock);
+    assert.equal(partial.state, "PartialSuccess");
+    assert.equal(partial.error, "unsupported_schema");
+    assert.equal(partial.resolutionIssues.find(issue => issue.toolId === optional.toolId).required, true);
+    assert.deepEqual(operations(partial).map(op => op.state), ["Success"]);
+    assert.ok(JSON.parse(partial.response).count > 0);
+    app.scheduledTasks.pause(report.id);
+    base = await start(app);
+    const savedPartial = () => ui("tasks/" + report.id + "/result");
+    assert.deepEqual((await savedPartial()).rows, [{response:partial.response}]);
+    app.scheduledTasks.stop(report.id);
+    await close();
+    app = open();
+    base = await start(app);
+    assert.deepEqual((await savedPartial()).rows, [{response:partial.response}]);
+    requireMetadata = false;
     clock += 2 * 3600000;
+    app.scheduledTasks.start(report.id);
     const empty = await terminal(report, clock);
     assert.equal(empty.state, "Completed");
     grants.splice(
@@ -378,6 +430,9 @@ test(
     base = await start(app);
     assert.deepEqual(await api("week3/sessions"),[]);
     const answer = run=>app.scheduledTasks.getOccurrence(run.id).response;
+    // The newer rejected occurrence has no response and must not hide the report.
+    assert.equal(answer(denied), null);
+    assert.deepEqual((await ui("tasks/" + report.id + "/result")).rows, [{response:answer(empty)}]);
     assert.deepEqual(JSON.parse(answer(full)), {
       from: iso(firstReport - periodHours * 3600000),
       until: iso(firstReport),
@@ -388,6 +443,9 @@ test(
       conditions: ["Cloudy", "Clear", "Rain"],
     });
     assert.match(answer(failedReport), /failed|unavailable/i);
+    const failedResponse = answer(failed);
+    assert.ok(failedResponse);
+    assert.deepEqual((await ui("tasks/" + collection.id + "/result")).rows, [{response:failedResponse}]);
     assert.deepEqual(JSON.parse(answer(empty)), {
       from: iso(empty.due_at - periodHours * 3600000),
       until: iso(empty.due_at),
@@ -398,7 +456,7 @@ test(
     const journal=(await Promise.all(occurrences.map(o=>ui("tasks/"+collection.id+"/history/"+o.id+"/journal")))).flat();
     await ui("tasks/"+report.id+"/history/"+occurrences[0].id+"/journal",undefined,"GET",404);
     assert.equal(journal.filter((op) => op.status === "Success").length, 10);
-    assert.equal(journal.filter((op) => op.status === "Failed").length, 1);
+    assert.equal(journal.filter((op) => op.status === "Failed").length, 2);
     assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
     const workspace = await ui("tasks");
     const savedReport = workspace.find((t) => t.id === report.id);

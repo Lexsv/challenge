@@ -18,6 +18,11 @@ import {
 } from "./execution-service.mjs";
 import { createBuiltInToolRegistry } from "../src/tool-runtime.ts";
 
+function issueKey(issue) {
+  return JSON.stringify([issue.connectionId, issue.toolId, issue.code, issue.stage,
+    issue.schemaSide, issue.schemaPath, issue.diagnostic]);
+}
+
 // Both interactive and backend Week 4 commands use this execution context.
 export function createWeek4Execution(db, options = {}) {
   const local = new AsyncLocalStorage();
@@ -271,15 +276,18 @@ export function createWeek4Execution(db, options = {}) {
           const result = resolve(effectivePolicy(session, ctx.id, localExecution));
           if (scheduled) {
             const issues = result.ok ? result.data.errors : [result.error];
-            if (issues.length || ctx.resolutionIssues?.length) {
-              // Persist run-level diagnostics without inventing a dispatched tool call.
+            ctx.currentResolutionIssues = issues;
+            // Keep each distinct observation even when a later iteration resolves the catalog.
+            const seen = new Set((ctx.resolutionIssues ?? []).map(issueKey));
+            const fresh = issues.filter(issue => !seen.has(issueKey(issue)));
+            if (fresh.length) {
+              ctx.resolutionIssues = [...(ctx.resolutionIssues ?? []), ...fresh];
               service.journal.transaction(() => {
                 service.journal.fence(ctx.id);
-                db.prepare("UPDATE week4_runs SET error=? WHERE id=?").run(
-                  issues.length ? JSON.stringify({...issues[0], resolutionIssues:issues}) : null, ctx.id);
+                db.prepare("UPDATE week4_runs SET error=? WHERE id=?")
+                  .run(JSON.stringify({resolutionIssues: ctx.resolutionIssues}), ctx.id);
               });
             }
-            ctx.resolutionIssues = issues;
             log("resolution", {offered: result.ok ? result.data.tools.length : 0, issues: issues.length});
             for (const issue of issues) log("resolution_error", issue);
           }
@@ -418,6 +426,7 @@ export function createWeek4Execution(db, options = {}) {
             )));
           }
           const display = {
+            ...(scheduled && operation.correctsOperation ? {correctsOperation: operation.correctsOperation} : {}),
             proposedArguments,
             proposedFields,
             type: external ? "MCP" : (internal?.executionType ?? "unavailable"),

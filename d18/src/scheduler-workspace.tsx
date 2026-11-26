@@ -16,6 +16,7 @@ import {
   List,
   ListItemButton,
   Paper,
+  Snackbar,
   Stack,
   Tab,
   Tabs,
@@ -41,7 +42,7 @@ import type { ProviderRegistry } from "./provider-registry";
 import { ExecutionDetails, journalStatus, useSessionToolJournal } from "./session-tool-journal";
 import { SchedulerForm } from "./scheduler-form";
 import { SchedulerReports } from "./scheduler-results";
-import { cadence, schedulerApi, stamp, type Task, type HistoryPage, type Occurrence } from "./scheduler-api";
+import { cadence, changeScheduling, type LifecycleAction, schedulerApi, stamp, type Task, type HistoryPage, type Occurrence } from "./scheduler-api";
 
 export function TaskStatus({ status }: { status: string }) {
   const color = ["Completed", "Scheduled", "Success"].includes(status)
@@ -74,10 +75,12 @@ function Execution({ row, task }: { row: Occurrence; task: HistoryTask }) {
       <Typography variant="subtitle2">Attempt Details</Typography>
       {row.error && <Alert severity="warning">{row.error}</Alert>}
       {row.resolutionIssues?.map((issue, i) => (
-        <Alert severity="error" key={i}>
-          {issue.code} · {issue.source} / {issue.stage}
+        <Alert severity={issue.required ? "warning" : "info"} key={i}>
+          {issue.required ? "Required tool unavailable" : "Tool availability"} · {issue.code} · {issue.source} / {issue.stage}
           {issue.schemaSide && " · " + issue.schemaSide + " schema"}
+          {issue.toolName && " · " + issue.toolName}
           {issue.toolId && " · Tool " + issue.toolId}
+          {issue.schemaPath !== undefined && " · " + (issue.schemaPath || "(root)")}
           {issue.diagnostic && " · " + issue.diagnostic}
         </Alert>
       ))}
@@ -132,7 +135,7 @@ function HistoryRow({ row, task, dates }: { row: Occurrence; task: HistoryTask; 
         <TableCell align="center">
           {row.finished_at !== null && row.started_at !== null ? row.finished_at - row.started_at + " ms" : "—"}
         </TableCell>
-        <TableCell align="center"><TaskStatus status={row.state} /></TableCell>
+        <TableCell align="center"><TaskStatus status={row.state === "Completed" ? "Success" : row.state} /></TableCell>
       </TableRow>
       {expanded && (
         <TableRow id={detailsId}>
@@ -229,16 +232,25 @@ function Configuration({ task: t }: { task: Task }) {
     </Stack>
   );
 }
-export function LifecycleButtons({ task, busy, control }: {
+const controlSuccess: Record<LifecycleAction, string> = {
+  start: "Scheduling started successfully.",
+  pause: "Scheduling paused successfully.",
+  resume: "Scheduling resumed successfully.",
+  stop: "Scheduling stopped successfully.",
+};
+type ControlAction = LifecycleAction | "review" | "delete";
+export function LifecycleButtons({ task, busy, pendingAction, control }: {
   task: Pick<Task, "status" | "review_definition" | "metrics" | "stopped">;
   busy: boolean;
-  control: (action: string) => void;
+  pendingAction?: ControlAction;
+  control: (action: LifecycleAction) => void;
 }) {
   const status = task.status;
   const active = status === "Scheduled" || status === "Running";
   const paused = status === "Paused";
   const canStart = ["Pending", "Stopped", "Finished", "Failed"].includes(status) && !task.review_definition;
-  const primaryEnabled = active || (!task.metrics.active && (paused || canStart));
+  const primaryAction = active ? "pause" : paused ? "resume" : "start";
+  const primaryEnabled = active || paused || (!task.metrics.active && canStart);
   return (
     <>
       <Button
@@ -246,8 +258,10 @@ export function LifecycleButtons({ task, busy, control }: {
         variant={active ? "outlined" : "contained"}
         sx={{ width: "7rem", height: 32 }}
         startIcon={active ? <PauseOutlined /> : paused ? <PlayCircleOutline /> : <PlayArrowOutlined />}
+        loading={pendingAction === primaryAction}
+        loadingPosition="start"
         disabled={busy || !primaryEnabled}
-        onClick={() => control(active ? "pause" : paused ? "resume" : "start")}
+        onClick={() => control(primaryAction)}
       >
         {active ? "Pause" : paused ? "Continue" : "Start"}
       </Button>
@@ -256,6 +270,8 @@ export function LifecycleButtons({ task, busy, control }: {
         variant="outlined"
         sx={{ width: "5rem", height: 32 }}
         startIcon={<StopOutlined />}
+        loading={pendingAction === "stop"}
+        loadingPosition="start"
         disabled={busy || status === "Pending" || task.stopped || status === "Stopped" || status === "Deleting"}
         onClick={() => control("stop")}
       >
@@ -277,22 +293,30 @@ export function SchedulerWorkspace({ registry }: { registry: ProviderRegistry })
   const [review, setReview] = useState<Task | null>(null);
   const [deleting, setDeleting] = useState<Task | null>(null);
   const [form, setForm] = useState<"create" | Task | null>(null),
-    [busy, setBusy] = useState(false),
-    lock = useRef(false);
+    [pending, setPending] = useState<{id: string; action: ControlAction} | null>(null),
+    lock = useRef(false),
+    commandEpoch = useRef(0);
   const [revision, refresh] = useState(0),
+    [success, setSuccess] = useState(""),
     [error, setError] = useState(""),
-    [readError, setReadError] = useState("");
+    [readError, setReadError] = useState(""),
+    [dismissedReadError, setDismissedReadError] = useState("");
+  const busy = pending !== null;
+  const commandError = !deleting && !review ? error : "";
+  const toastError = commandError || (readError !== dismissedReadError ? readError : "");
   const task = tasks.find((t) => t.id === id),
     pageKey = (task?.id ?? "") + "/" + tab + "/" + offset;
   useEffect(() => {
     let active = true,
       running = false;
     async function read() {
-      if (running || document.hidden) return;
+      if (running || lock.current || document.hidden) return;
       running = true;
+      const epoch = commandEpoch.current;
+      const current = () => active && epoch === commandEpoch.current;
       try {
         const list = await schedulerApi<Task[]>(archive ? "archive" : "tasks");
-        if (!active || lock.current) return;
+        if (!current()) return;
         setTasks(list);
         setReady(true);
         const item = list.find((t) => t.id === id);
@@ -301,16 +325,18 @@ export function SchedulerWorkspace({ registry }: { registry: ProviderRegistry })
           const result = await schedulerApi<{ rows: Pick<Occurrence, "response">[] }>(
             "tasks/" + item.id + "/result",
           );
-          if (active) setLatest({ key: item.id, rows: result.rows });
+          if (current()) setLatest({ key: item.id, rows: result.rows });
         } else if (item && tab === 1) {
           const value = await schedulerApi<HistoryPage>("tasks/" + item.id + "/history?offset=" + offset);
-          if (active) setPage({ key: item.id + "/" + tab + "/" + offset, value });
+          if (current()) setPage({ key: item.id + "/" + tab + "/" + offset, value });
         }
-        if (active) setReadError("");
+        if (current()) {
+          setReadError("");
+          setDismissedReadError("");
+        }
       } catch (e) {
-        if (active) {
-          setPage(null);
-          setLatest(null);
+        if (current()) {
+          setSuccess("");
           setReadError((e as Error).message);
         }
       } finally {
@@ -326,30 +352,42 @@ export function SchedulerWorkspace({ registry }: { registry: ProviderRegistry })
       document.removeEventListener("visibilitychange", read);
     };
   }, [id, offset, tab, revision, archive]);
-  async function control(action: string) {
+  async function control(action: ControlAction) {
     const target = action === "delete" ? deleting : action === "review" ? review : task;
     if (!target || lock.current) return;
     lock.current = true;
-    setBusy(true);
+    commandEpoch.current++;
+    setPending({id: target.id, action});
+    setSuccess("");
     setError("");
     try {
       if (action === "delete") {
         await schedulerApi("tasks/" + target.id, "DELETE");
         setDeleting(null);
-      } else if (action === "review" && review) {
-        await schedulerApi("tasks/" + review.id + "/review", "POST", {
+      } else if (action === "review") {
+        await schedulerApi("tasks/" + target.id + "/review", "POST", {
           confirmed: true,
-          revision: review.revision,
-          occurrenceIds: review.reviewIds,
+          revision: target.revision,
+          occurrenceIds: target.reviewIds,
         });
         setReview(null);
-      } else await schedulerApi("tasks/" + target.id + "/" + action, "POST");
+      } else {
+        const {executionActive, ...confirmed} = await changeScheduling(target, action);
+        setSuccess(controlSuccess[action]);
+        setTasks(items => items.map(item => {
+          if (item.id !== target.id) return item;
+          const active = executionActive === undefined ? item.metrics.active : Number(executionActive);
+          return {...item, ...confirmed, metrics:{...item.metrics, active}};
+        }));
+      }
     } catch (e) {
-      setError((e as Error).message);
+      setError(e instanceof DOMException && e.name === "TimeoutError"
+        ? "The Scheduler did not confirm the change in time. Refreshing the task state."
+        : (e as Error).message);
     } finally {
       refresh((x) => x + 1);
       lock.current = false;
-      setBusy(false);
+      setPending(null);
     }
   }
   const history = page?.key === pageKey ? page.value : null;
@@ -361,11 +399,16 @@ export function SchedulerWorkspace({ registry }: { registry: ProviderRegistry })
       <Typography variant="h5" component="h2">
         Scheduler
       </Typography>
-      {((!deleting && !review && error) || readError) && (
-        <Alert severity="error" action={<Button onClick={() => refresh((v) => v + 1)}>Refresh</Button>}>
-          {(!deleting && !review && error) || readError}
-        </Alert>
-      )}
+      <Snackbar key={toastError || success} open={!!(toastError || success)}
+        anchorOrigin={{vertical:"top", horizontal:"right"}} autoHideDuration={toastError ? 6000 : 3000}
+        onClose={(_, reason) => {
+          if (reason === "clickaway") return;
+          if (commandError) setError("");
+          else if (toastError) setDismissedReadError(readError);
+          else setSuccess("");
+        }}>
+        <Alert severity={toastError ? "error" : "success"} variant="filled">{toastError || success}</Alert>
+      </Snackbar>
       <Dialog
         open={!!review}
         onClose={() => {
@@ -495,7 +538,7 @@ export function SchedulerWorkspace({ registry }: { registry: ProviderRegistry })
                     <Typography variant="subtitle2" sx={{ overflowWrap: "anywhere" }}>
                       {t.name}
                     </Typography>
-                    <TaskStatus status={t.status} />
+                    <TaskStatus status={t.status === "Scheduled" ? t.schedulingState ?? t.status : t.status} />
                   </Stack>
                   <Typography variant="body2">{cadence(t.schedule)}</Typography>
                   <Typography variant="caption" color="text.secondary">
@@ -535,11 +578,11 @@ export function SchedulerWorkspace({ registry }: { registry: ProviderRegistry })
                 <Typography variant="h6" sx={{ overflowWrap: "anywhere" }}>
                   {task.name}
                 </Typography>
-                <TaskStatus status={task.status} />
               </Stack>
               {!archive && (
                 <Stack direction="row" gap={1} flexWrap="wrap">
-                  <LifecycleButtons task={task} busy={busy} control={control} />
+                  <LifecycleButtons task={task} busy={busy}
+                    pendingAction={pending?.id === task.id ? pending.action : undefined} control={control} />
                   <Button
                     size="small"
                     startIcon={<EditOutlined />}
@@ -582,9 +625,6 @@ export function SchedulerWorkspace({ registry }: { registry: ProviderRegistry })
                 <Alert severity="warning">
                   Review and save the standalone configuration before starting this migrated task.
                 </Alert>
-              )}
-              {!!task.metrics.active && !task.enabled && (
-                <Alert severity="info">An admitted execution is still running.</Alert>
               )}
               {!!task.metrics.review && (
                 <Alert severity="warning">An execution requires review. Further runs are held.</Alert>

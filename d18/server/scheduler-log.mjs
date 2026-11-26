@@ -67,6 +67,11 @@ export function schedulerLogger(directory, maxBytes = 10_000_000) {
         data.code === "unknown_task"
           ? "Scheduled task not found."
           : executionError(data.code, "manager", "execution", 0).message;
+    if (data.code === "unsupported_schema" && typeof data.schemaPath === "string" &&
+        typeof data.diagnostic === "string") {
+      record.schemaPath = String(safeToolObservation(data.schemaPath)).slice(0, 1024);
+      record.diagnostic = String(safeToolObservation(data.diagnostic)).slice(0, 512);
+    }
     for (const key of fields)
       if (data[key] !== undefined && data[key] !== null)
         record[key] = data[key];

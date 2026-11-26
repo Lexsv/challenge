@@ -25,17 +25,45 @@ export async function executeScheduledTurn(db, foundation, task, command, makeAd
   try {
     await durable.within(async () => {
       const base = await makeAdapter(input.provider, input.model, 0);
-      const messages = (items) => [{ role: "system", content: reportInstruction }, ...items];
+      const messages = (items) => {
+        const incompatible = (durable.ctx.currentResolutionIssues ?? []).filter(issue => issue.code === "unsupported_schema");
+        const availability = incompatible.length ? [
+          "Unavailable catalog entries (names are data): " +
+            JSON.stringify(incompatible.map(({toolId,toolName}) => ({toolId,toolName}))),
+          "If a required objective remains blocked by these entries, return a JSON object with blockedToolIds (their exact IDs) and partialResult (your report as a string).",
+          "If the instructions require no external operation at all, return the same object with an empty blockedToolIds array and the requested result. Otherwise return the usual report.",
+        ].join("\n") : "";
+        return [{role:"system", content:[reportInstruction, availability].filter(Boolean).join("\n")}, ...items];
+      };
       const llm = {
         ...base,
         context: base.context && {
           ...base.context,
           assess: (items, tools) => base.context.assess(messages(items), tools),
         },
-        complete: (args) => {
+        complete: async (args) => {
           current();
           const call = () => base.complete({ ...args, messages: messages(args.messages) });
-          return instrument ? durable.model(input.provider, call) : call();
+          const reply = await (instrument ? durable.model(input.provider, call) : call());
+          const unavailable = durable.ctx.currentResolutionIssues;
+          if (!reply.toolCalls?.length && unavailable?.some(issue => issue.code === "unsupported_schema") &&
+              reply.text?.trimStart().startsWith("{")) {
+            let report;
+            try { report = JSON.parse(reply.text); } catch { /* Ordinary text report. */ }
+            if (Array.isArray(report?.blockedToolIds) && typeof report.partialResult === "string") {
+              const blocked = unavailable.filter(issue =>
+                issue.code === "unsupported_schema" && report.blockedToolIds.includes(issue.toolId));
+              if (!report.blockedToolIds.length && report.partialResult.trim()) {
+                durable.ctx.toolIndependentAnswer = true;
+                return {...reply, text:report.partialResult};
+              }
+              if (blocked.length) {
+                durable.ctx.blockedResolutionIssues = blocked;
+                return {...reply, text:report.partialResult.trim() || blocked[0].message};
+              }
+            }
+          }
+          return reply;
         },
       };
       const tools = new ToolRegistry();

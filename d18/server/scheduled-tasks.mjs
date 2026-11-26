@@ -131,6 +131,7 @@ export function createScheduledTasks(
       .map((p) => ({ connectionId: p.connection_id, toolId: p.tool_id }));
     return {
       ...row,
+      schedulingState: row.pending_start || row.stopped || row.deletion_state ? "Stopped" : row.enabled ? "Running" : "Paused",
       stopped: !!row.stopped,
       enabled: !!row.enabled,
       schedule: JSON.parse(row.schedule),
@@ -496,18 +497,25 @@ export function createScheduledTasks(
     log?.("task_review_confirmed",{taskId:id,previousState:"Requires review",state:"Stopped"});
     return updated;
   }
-  function changeLifecycle(id, action) {
+  function changeLifecycle(id, action, ifMatch) {
     let changed=false, previousState, restart=false, previouslyRun=false;
     const updated=transaction(()=>{
       const current=task(id);
+      if (ifMatch !== undefined && ifMatch !== `"${current.revision}-${current.updated_at}"`)
+        throw new InvariantError(409,"The schedule changed. Refresh its controls and try again.");
       previousState=lifecycle(current);
       const active=action==="start" || action==="resume", stopped=action==="stop";
       if (!["start","resume","stop","pause"].includes(action)) invalid();
       if (current.pending_start && action !== "start")
         throw new InvariantError(409,"Only Start can activate a pending task.");
       if (active && current.review_definition) deny();
-      if (active && (previousState==="Requires review" || running(id)))
-        throw new InvariantError(409,"Wait for the active execution or confirm the outstanding review.");
+      if (active && previousState==="Requires review")
+        throw new InvariantError(409,"Review the uncertain execution before enabling scheduling.");
+      // Resume persists the scheduling intention immediately. The admission fence
+      // holds the next slot until the existing owner finishes and review is clear.
+      if (action==="resume" && ["Scheduled","Running"].includes(previousState)) return getTask(id);
+      if (action==="start" && running(id))
+        throw new InvariantError(409,"A new Start is unavailable while the previous execution is finishing.");
       if (action==="resume" && previousState!=="Paused" || action==="pause" && !["Scheduled","Running","Paused"].includes(previousState))
         throw new InvariantError(409,"This lifecycle transition is unavailable.");
       previouslyRun=action==="start" && !!db.prepare("SELECT 1 FROM scheduled_occurrences WHERE task_id=? AND (started_at IS NOT NULL OR rejection IS NOT NULL) LIMIT 1").get(id);
@@ -538,7 +546,7 @@ export function createScheduledTasks(
       // Lifecycle controls stop admission. The existing permission revision still
       // fences actual permission edits, including during an admitted execution.
       db.prepare(
-        "UPDATE scheduled_tasks SET enabled=?,stopped=?,pending_start=0,next_due_at=?,updated_at=? WHERE id=?",
+        "UPDATE scheduled_tasks SET enabled=?,stopped=?,pending_start=0,next_due_at=?,updated_at=max(updated_at+1,?) WHERE id=?",
       ).run(+active, +stopped, next, at, id);
       return getTask(id);
     });
@@ -789,7 +797,7 @@ export function createScheduledTasks(
     editDefinition,
     toolChoices,
     rows,
-    lifecycle, reviewIds, acknowledgeReview, changeLifecycle,
+    lifecycle, running, reviewIds, acknowledgeReview, changeLifecycle,
     deleteTask,
     recoverDeletions,
     dueTasks,

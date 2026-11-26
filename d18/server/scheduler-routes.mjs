@@ -12,9 +12,15 @@ export function schedulerRoutes(db, tasks, journal) {
     count(*) FILTER (WHERE r.state='RequiresReview' OR (o.started_at IS NOT NULL AND r.id IS NULL)) AS review,
     count(*) FILTER (WHERE r.owner IS NOT NULL) AS active, max(o.started_at) AS last
     FROM scheduled_occurrences o LEFT JOIN week4_runs r ON r.id=o.id GROUP BY o.task_id`);
+  function lifecycleGroup(task) {
+    if (task.status === "Pending") return 0;
+    if (task.status === "Paused") return 1;
+    if (task.status === "Scheduled" || task.status === "Running") return 2;
+    return 3;
+  }
   function list(archived = false) {
     const counts = new Map(stats.all().map((r) => [r.task_id, r]));
-    return db
+    const entries = db
       .prepare("SELECT id FROM scheduled_tasks WHERE (deletion_state=2)=? ORDER BY name COLLATE NOCASE,id")
       .all(+archived)
       .map(({ id }) => {
@@ -44,10 +50,10 @@ export function schedulerRoutes(db, tasks, journal) {
           tools,
           metrics:{...metrics,review:reviewIds.length}, reviewIds, status,
         };
-      }).sort((a,b)=>{
-        const group=t=>["Scheduled","Running"].includes(t.status)?0:t.status==="Paused"?1:2;
-        return group(a)-group(b) || (group(a)===0 ? (a.next_due_at??Infinity)-(b.next_due_at??Infinity) : 0);
       });
+    if (archived) return entries;
+    return entries.sort((a,b) => lifecycleGroup(a) - lifecycleGroup(b) ||
+      b.created_at - a.created_at || a.id.localeCompare(b.id));
   }
   function history(id, offset) {
     if (!db.prepare("SELECT 1 FROM scheduled_tasks WHERE id=?").get(id)) throw new InvariantError(404, "Scheduled task not found.");
@@ -134,14 +140,16 @@ export function schedulerRoutes(db, tasks, journal) {
       }
       if (req.method==="GET" && action==="result") {
         tasks.getTask(id,true);
-        const row=db.prepare(`SELECT o.response FROM scheduled_occurrences o JOIN week4_runs r ON r.id=o.id
-          WHERE o.task_id=? AND o.response IS NOT NULL AND r.state='Completed' ORDER BY o.due_at DESC LIMIT 1`).get(id);
+        const row=db.prepare(`SELECT response FROM scheduled_occurrences
+          WHERE task_id=? AND length(trim(response, char(9,10,11,12,13,32)))>0 ORDER BY due_at DESC,id LIMIT 1`).get(id);
         return send(200,{rows:row?[row]:[],hasMore:false});
       }
       const withStatus = task => ({ ...task, status: tasks.lifecycle(task) });
       if (req.method==="POST" && action==="review") return send(200,withStatus(tasks.acknowledgeReview(id,await readConfig(req))));
-      if (req.method === "POST" && id && ["start","pause","resume","stop"].includes(action))
-        return send(200, withStatus(tasks.changeLifecycle(id, action)));
+      if (req.method === "POST" && id && ["start","pause","resume","stop"].includes(action)) {
+        const task = tasks.changeLifecycle(id, action, req.headers["if-match"]);
+        return send(200, {...withStatus(task), executionActive:tasks.running(id)});
+      }
       if (
         !action &&
         ((!id && req.method === "POST") || (id && req.method === "PUT"))
