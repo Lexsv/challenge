@@ -1,0 +1,30 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { DatabaseSync } from 'node:sqlite';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createContextWorkspaceStore } from './context-workspaces.mjs';
+
+test('checkpoints create independent branches with isolated messages and memory after restart', () => {
+  const path = join(mkdtempSync(join(tmpdir(), 'd10-workspaces-')), 'test.sqlite');
+  let db = new DatabaseSync(path);
+  db.exec('PRAGMA foreign_keys=ON; CREATE TABLE sessions(id TEXT PRIMARY KEY); INSERT INTO sessions VALUES (\'session-1\');');
+  let store = createContextWorkspaceStore(db);
+  const initial = store.create('session-1', 'key-value', 'Main', {messages:['shared'], memory:[{key:'picnic',value:'cucumbers'}]});
+  const checkpoint = store.checkpoint('session-1', 'key-value', initial.id, 'Before split');
+  const left = store.branchFrom('session-1', 'key-value', checkpoint.id, 'Left');
+  const right = store.branchFrom('session-1', 'key-value', checkpoint.id, 'Right');
+  store.save('session-1', 'key-value', left.id, 0, {messages:['shared','left'],memory:[{key:'picnic',value:'tomatoes'}]});
+  store.save('session-1', 'key-value', right.id, 0, {messages:['shared','right'],memory:[{key:'vacation',value:'train'}]});
+  assert.throws(() => store.save('session-1', 'key-value', left.id, 0, {}), /changed/);
+  assert.equal(store.get('session-1', 'sticky', left.id), undefined);
+  db.close();
+  db = new DatabaseSync(path);
+  store = createContextWorkspaceStore(db);
+  assert.deepEqual(store.get('session-1', 'key-value', left.id).state, {messages:['shared','left'],memory:[{key:'picnic',value:'tomatoes'}]});
+  assert.deepEqual(store.get('session-1', 'key-value', right.id).state, {messages:['shared','right'],memory:[{key:'vacation',value:'train'}]});
+  const third = store.branchFrom('session-1', 'key-value', checkpoint.id, 'Third');
+  assert.deepEqual(third.state, initial.state);
+  db.close();
+});

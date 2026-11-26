@@ -1,0 +1,26 @@
+services:
+  backend:
+    image: day18-backend:1.0
+    build:
+      context: .
+      target: backend
+    ports:
+      - "127.0.0.1:${DAY18_PORT:-8085}:8080"
+    volumes:
+      - day18-data:/app/data
+    environment:
+      TZ: "${TZ:-UTC}"
+      DAY18_WORKER_VALIDATOR_PROVIDER: "${DAY18_WORKER_VALIDATOR_PROVIDER:-openai}"
+      DAY18_WORKER_VALIDATOR_MODEL: "${DAY18_WORKER_VALIDATOR_MODEL:-gpt-5.6-terra}"
+      DAY18_INSTRUCTION_DETECTOR_PROVIDER: "${DAY18_INSTRUCTION_DETECTOR_PROVIDER:-}"
+      DAY18_INSTRUCTION_DETECTOR_MODEL: "${DAY18_INSTRUCTION_DETECTOR_MODEL:-}"
+    stop_grace_period: 2m
+  frontend:
+    image: day18-frontend:1.0
+    build:
+      context: .
+      target: frontend
+    # Keep local-only API checks intact across the two processes.
+    network_mode: "service:backend"
+volumes:
+  day18-data:

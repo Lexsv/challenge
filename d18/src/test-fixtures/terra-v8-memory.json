@@ -1,0 +1,196 @@
+{
+  "s12": {
+    "turnId": "b866559e-ffb0-46e7-9eb7-6c5517645ce0",
+    "instruction": "Прочти образец текста.",
+    "proposals": [
+      {
+        "version": 1,
+        "facts": [],
+        "topic": {
+          "kind": "abstain",
+          "reason": "Нет явных долгосрочно значимых фактов или обязательств пользователя."
+        }
+      },
+      {
+        "version": 1,
+        "facts": [],
+        "topic": {
+          "kind": "abstain",
+          "reason": "No clear long-term personal facts or topic commitments were stated."
+        }
+      }
+    ]
+  },
+  "s17": {
+    "turnId": "a317ec21-85c1-4ae8-ac11-196e9741c611",
+    "message": "Поездка на озеро: 20 июля 2027 года. Едут Сергей и Лена. Сергей берёт лодку.",
+    "proposals": [
+      {
+        "version": 1,
+        "facts": [],
+        "topic": {
+          "kind": "write",
+          "updates": [
+            {
+              "target": {
+                "kind": "existing",
+                "card": "user-608e2ec9-5957-461e-b960-798eefc7f0ef",
+                "mention": {
+                  "source": "pending",
+                  "quote": "Давай спланируем отдых на озере с друзьями"
+                }
+              },
+              "edits": [
+                {
+                  "kind": "set",
+                  "field": "date",
+                  "value": "2027-07-20",
+                  "evidence": {
+                    "source": "current",
+                    "quote": "Поездка на озеро: 20 июля 2027 года."
+                  }
+                },
+                {
+                  "kind": "set_roster",
+                  "names": [
+                    "Сергей",
+                    "Лена"
+                  ],
+                  "evidence": {
+                    "source": "current",
+                    "quote": "Едут Сергей и Лена."
+                  }
+                },
+                {
+                  "kind": "assign",
+                  "person": "Сергей",
+                  "item": "лодку",
+                  "evidence": {
+                    "source": "current",
+                    "quote": "Сергей берёт лодку."
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "version": 1,
+        "facts": [],
+        "topic": {
+          "kind": "write",
+          "updates": [
+            {
+              "target": {
+                "kind": "existing",
+                "card": "user-608e2ec9-5957-461e-b960-798eefc7f0ef",
+                "mention": {
+                  "source": "current",
+                  "quote": "Поездка на озеро"
+                }
+              },
+              "edits": [
+                {
+                  "kind": "set",
+                  "field": "date",
+                  "value": "2027-07-20",
+                  "evidence": {
+                    "source": "current",
+                    "quote": "20 июля 2027 года"
+                  }
+                },
+                {
+                  "kind": "set_roster",
+                  "names": [
+                    "Сергей",
+                    "Лена"
+                  ],
+                  "evidence": {
+                    "source": "current",
+                    "quote": "Едут Сергей и Лена."
+                  }
+                },
+                {
+                  "kind": "assign",
+                  "person": "Сергей",
+                  "item": "лодку",
+                  "evidence": {
+                    "source": "current",
+                    "quote": "Сергей берёт лодку."
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "s19": {
+    "turnId": "7d51bc4c-2d17-49d3-a488-e36f305fd345",
+    "message": "Поставь дату поездки на озеро 12 декабря 2027 года.",
+    "proposals": [
+      {
+        "version": 1,
+        "facts": [],
+        "topic": {
+          "kind": "write",
+          "updates": [
+            {
+              "target": {
+                "kind": "existing",
+                "card": "user-8cb7bbd8-1aed-4eae-92bb-9db32ab58660",
+                "mention": {
+                  "source": "current",
+                  "quote": "Поставь дату поездки на озеро 12 декабря 2027 года."
+                }
+              },
+              "edits": [
+                {
+                  "kind": "set",
+                  "field": "дата поездки",
+                  "value": "2027-12-12",
+                  "evidence": {
+                    "source": "current",
+                    "quote": "Поставь дату поездки на озеро 12 декабря 2027 года."
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "version": 1,
+        "facts": [],
+        "topic": {
+          "kind": "write",
+          "updates": [
+            {
+              "target": {
+                "kind": "existing",
+                "card": "user-8cb7bbd8-1aed-4eae-92bb-9db32ab58660",
+                "mention": {
+                  "source": "current",
+                  "quote": "Поставь дату поездки на озеро 12 декабря 2027 года."
+                }
+              },
+              "edits": [
+                {
+                  "kind": "set",
+                  "field": "дата поездки",
+                  "value": "2027-12-12",
+                  "evidence": {
+                    "source": "current",
+                    "quote": "Поставь дату поездки на озеро 12 декабря 2027 года."
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  }
+}
