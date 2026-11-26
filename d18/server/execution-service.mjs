@@ -24,9 +24,10 @@ function routingOrigin(error) {
     error?.source === "router" &&
     ["routing", "validation"].includes(error.stage)
   )
-    return { source: "router", stage: error.stage };
+    return { source: "router", stage: error.stage, effectEvidence:"pre_dispatch" };
   if (error?.source === "mcp" && ["dispatch","response"].includes(error.stage))
     return {source:"mcp",stage:error.stage,
+      ...(["pre_dispatch","atomic_rejection"].includes(error.effectEvidence) && {effectEvidence:error.effectEvidence}),
       ...(error.stage === "response" && error.code === "execution_error" && error.reportedFailure === true && {reportedFailure:true}),
       ...(error.diagnostic && {diagnostic:error.diagnostic})};
   if (error?.source === "storage" && error.stage === "routing")
@@ -94,8 +95,10 @@ export function hasCompleteArguments(op) {
   );
 }
 
+export const invocationKey = (target, args) => digest([target, args]);
+
 function matchesInvocation(op, target, args) {
-  const base = digest([target, args]);
+  const base = invocationKey(target, args);
   return op.logical_key === base ||
     (op.safety === "read-only" && op.logical_key.split(":")[0] === base);
 }
@@ -316,22 +319,15 @@ export class ExecutionService {
         clearTimeout(timer);
         signal.removeEventListener("abort", rejectAbort);
       }
-      const unknown =
-        !!failure &&
-        dispatched &&
-        op.safety === "side-effecting" &&
-        [
-          "timeout",
-          "connection",
-          "cancelled",
-          "execution_error",
-          "schema",
-          "protocol",
-          "unavailable",
-        ].includes(failure.code);
-      const error =
-        failure &&
-        this.error(ctx, op, failure.code, unknown, attemptId, failure.origin);
+      const mcp = op.kind === "tool" && op.target.startsWith("mcp:");
+      const origin = failure && { ...failure.origin,
+        ...(!dispatched && {effectEvidence:"pre_dispatch"}),
+      };
+      const unknown = !!failure && dispatched && op.safety === "side-effecting" &&
+        !origin.effectEvidence && (mcp || [
+          "timeout", "connection", "cancelled", "execution_error", "schema", "protocol", "unavailable",
+        ].includes(failure.code));
+      const error = failure && this.error(ctx, op, failure.code, unknown, attemptId, origin);
       const delay = error?.retryable
         ? Math.max(
             failure.retryAfter || 0,
@@ -403,7 +399,7 @@ export class ExecutionService {
     }
   }
   // Bind a dry dispatch to an acknowledged, still-running tool attempt.
-  routingAttempt(ctx, target, args, connection, correlation, mcp, grantId) {
+  routingAttempt(ctx, target, args, connection, correlation, mcp, grantId, safety) {
     if (
       typeof correlation?.toolCallId !== "string" ||
       typeof correlation.attemptId !== "string"
@@ -416,6 +412,7 @@ export class ExecutionService {
       op.state !== "Running" ||
       op.target !== target ||
       op.connection_key !== connection ||
+      (mcp && safety && op.safety !== safety) ||
       (mcp && (grantId ? op.policy_grant !== grantId : op.safety !== "side-effecting")) ||
       this.now() >= op.deadline ||
       !matchesInvocation(op, target, args)
@@ -457,6 +454,13 @@ export class ExecutionService {
         this.now(),
         unknown ? "unknown" : "known",
       ),
+      ...(op.kind === "tool" && code !== "dependency" && (
+        op.safety === "read-only" ? {failureKind:"read_failure"} :
+        op.safety === "side-effecting" && unknown ? {failureKind:"uncertain_write_outcome"} :
+        op.safety === "side-effecting" && origin?.effectEvidence ? {failureKind:"confirmed_write_failure"} : {}
+      )),
+      ...(origin?.effectEvidence && {effectEvidence:origin.effectEvidence}),
+      ...(origin?.skipReason && {blockingOperationIds:origin.blockingOperationIds, missingEvidence:origin.missingEvidence}),
       ...(origin?.source === "mcp" && origin.reportedFailure && {reportedFailure:true}),
       ...(origin?.source === "mcp" && origin.stage === "response" && !ctx.privatePayloads &&
         typeof origin.diagnostic === "string" && {diagnostic: origin.diagnostic}),
@@ -473,7 +477,8 @@ export class ExecutionService {
     };
   }
   async stopCall(ctx, op, code, state, origin) {
-    const error = this.error(ctx, op, code, false, undefined, origin);
+    const error = this.error(ctx, op, code, false, undefined,
+      state === "Failed" && !this.journal.attempts(op.id).length ? {...origin, effectEvidence:"pre_dispatch"} : origin);
     await this.journal.send(
       { runId: ctx.id, operationId: op.id, event: state },
       () => {
@@ -495,12 +500,15 @@ export class ExecutionService {
       // consumed write. Reserve the logical operation inside the intent transaction.
       // A whole-tool connection consent can be exercised in a new user run
       // after confirmed success. In-flight and uncertain writes stay reserved.
-      const consumed = grantId && safety === "side-effecting" && this.db.prepare(
+      const consumed = grantId && this.db.prepare(
         `SELECT 1 FROM week4_operations o JOIN week4_runs r ON r.id=o.run_id
-         WHERE coalesce(r.session_id,'task:'||r.task_id)=? AND o.connection_key=? AND o.target=? AND o.logical_key=?
+         WHERE coalesce(r.session_id,'task:'||r.task_id)=? AND o.connection_key=? AND o.target=? AND substr(o.logical_key,1,64)=?
+           AND (?='side-effecting' OR o.state IN ('Pending','Running','WaitingForRetry','Unknown') OR json_extract(o.error,'$.certainty')='unknown')
            AND o.safety='side-effecting' AND o.policy_grant IS NOT NULL
+           AND NOT (o.state='Skipped' AND NOT EXISTS(SELECT 1 FROM week4_attempts a WHERE a.operation_id=o.id))
+           AND NOT (o.state='Failed' AND coalesce(json_extract(o.error,'$.failureKind'),'')='confirmed_write_failure')
            AND NOT (? AND o.run_id<>? AND o.state='Success' AND r.state IN ('Completed','PartialSuccess','Failed','RequiresReview','Cancelled')) LIMIT 1`,
-      ).get(j.run(ctx.id).session_id ?? "task:"+j.run(ctx.id).task_id, connection, target, key, +repeatAfterSuccess, ctx.id);
+      ).get(j.run(ctx.id).session_id ?? "task:"+j.run(ctx.id).task_id, connection, target, key.split(":")[0], safety, +repeatAfterSuccess, ctx.id);
       this.db
         .prepare(
           `INSERT INTO week4_operations(id,run_id,kind,provider_call_hash,parent_llm_id,logical_key,target,connection_key,safety,state,arguments,created,deadline,max_attempts,policy_grant)
@@ -621,7 +629,7 @@ export class ExecutionService {
   }
   async tool(ctx, operation) {
     const { id, call, allowed, skip, check } = operation;
-    const base = digest([call.toolId, call.arguments]);
+    const base = invocationKey(call.toolId, call.arguments);
     const previous = ctx.bindings.get(call.id);
     if (previous && previous.split(":")[0] !== base) throw new OperationFailure("protocol");
     // Refresh verified reads after an intervening mutation attempt, including an
@@ -648,7 +656,7 @@ export class ExecutionService {
             skip ? "dependency" : (denied?.code ?? "authorization"),
             false,
             undefined,
-            skip ? {source:"manager", stage:"validation", skipReason:operation.skipReason} : denied?.origin,
+            skip ? {source:"manager", stage:"validation", skipReason:operation.skipReason, blockingOperationIds:operation.blockingOperationIds, missingEvidence:operation.missingEvidence} : denied?.origin,
           ),
         };
       return ctx.cache.get(key);
@@ -660,7 +668,7 @@ export class ExecutionService {
   async executeTool(
     ctx,
     key,
-    { id, call, safety, allowed, skip, skipReason, check, invoke, connection, grantId, preflightError, display, repeatAfterSuccess },
+    { id, call, safety, allowed, skip, skipReason, blockingOperationIds, missingEvidence, check, invoke, connection, grantId, preflightError, display, repeatAfterSuccess },
   ) {
     const target = allowed ? call.toolId : "unavailable";
     const op = await this.register(ctx, {
@@ -685,7 +693,7 @@ export class ExecutionService {
         op,
         allowed ? "dependency" : preflightError?.code ?? "unknown_tool",
         allowed ? "Skipped" : "Failed",
-        allowed && skip ? {source:"manager", stage:"validation", skipReason} : routingOrigin(preflightError),
+        allowed && skip ? {source:"manager", stage:"validation", skipReason, blockingOperationIds, missingEvidence} : routingOrigin(preflightError),
       );
     else
       result = await this.attempt(
@@ -796,10 +804,11 @@ export class ExecutionService {
     const outstandingFailure = tools.Failed && operations.find((op, index) => {
       if (op.kind !== "tool" || op.state !== "Failed") return false;
       const failure = JSON.parse(op.error ?? "null");
-      if (ctx.currentResolutionIssues && op.safety === "read-only" &&
+      if (op.safety === "read-only" &&
           failure?.certainty === "known" && succeededLater(op, index)) return false;
-      return !corrected.has(op.id) || failure?.code !== "invalid_arguments" ||
-        failure.stage !== "validation" || failure.certainty !== "known" || j.attempts(op.id).length > 0;
+      if (!corrected.has(op.id) || failure?.certainty !== "known") return true;
+      if (failure.failureKind === "confirmed_write_failure" && failure.effectEvidence === "atomic_rejection") return false;
+      return failure.code !== "invalid_arguments" || failure.stage !== "validation" || j.attempts(op.id).length > 0;
     });
     const incomplete = blockingIssue || answer !== "delivered" || outstandingFailure || outstandingSkip || tools.Cancelled;
     const uncertain = operations.find(op => (op.kind === "tool" && op.state === "Unknown") ||

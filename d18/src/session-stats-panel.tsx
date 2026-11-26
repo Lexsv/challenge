@@ -1,4 +1,5 @@
-import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useId, useState, type ReactNode } from "react";
+import { providerInfo } from "./provider-registry";
 import { historicalContext } from "./context-compaction";
 import { factHistory, factMessage, selectFactLayers } from './key-facts-context';
 import { loadHistory, loadSessionFacts } from './session-api';
@@ -13,7 +14,7 @@ import {
 } from "./manager-llm-adapter";
 import type { ToolRegistry } from "./tool-runtime";
 import {
-  aggregateSessionStats,
+
   type NextSessionContext,
   type SessionStats,
 } from "./session-stats";
@@ -93,16 +94,37 @@ function StatSection({ title, summary, rows, children }: {
       <Typography component="span" variant="caption" color="text.secondary">{summary}</Typography>
     </AccordionSummary>
     <AccordionDetails sx={{ px: 0, pt: 0, pb: 1.25 }}>
-      <Box component="dl" sx={{ m: 0, px: 1.25, py: 1, borderRadius: 1, bgcolor: "action.hover", display: "grid",
+      {rows.length > 0 && <Box component="dl" sx={{ m: 0, px: 1.25, py: 1, borderRadius: 1, bgcolor: "action.hover", display: "grid",
         gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1.4fr)", columnGap: 1, rowGap: .5, overflowWrap: "anywhere" }}>
         {rows.map(([label,value])=><Box key={label} sx={{ display: "contents" }}>
           <Typography component="dt" variant="body2" color="text.secondary">{label}</Typography>
           <Typography component="dd" variant="body2" sx={{ m: 0, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{value}</Typography>
         </Box>)}
-      </Box>
+      </Box>}
       {children}
     </AccordionDetails>
   </Accordion>;
+}
+
+export function SessionUsageCards({stats}: {stats:SessionStats}) {
+  const card = (title:string, row:SessionStats["summary"] | SessionStats["models"][number], summary=false) => {
+    const cost = row.pricedRequests
+      ? (row.receiptCount < row.pricedRequests ? "≈ " : "") + formatSessionCost(row.usd) + " USD"
+      : row.requests ? "Unavailable" : formatSessionCost(0) + " USD";
+    const field = (label:string, value:string | number) => <Box sx={{display:"flex", justifyContent:"space-between", gap:1}}>
+      <Typography variant="body2" color="text.secondary">{label}</Typography><Typography variant="body2">{value}</Typography></Box>;
+    return <Paper key={title} variant="outlined" sx={{p:1.25, mt:1, bgcolor:summary ? "action.selected" : "action.hover", borderColor:summary ? "primary.main" : "divider"}}>
+      <Typography variant="subtitle2" sx={{mb:.5, overflowWrap:"anywhere",fontWeight:summary ? 700 : undefined}}>{title}</Typography>
+      {field("Requests",row.requests)}
+      {field("Active time",row.timedRequests || !row.requests ? duration(row.milliseconds) : "Unavailable")}
+      {field("Cost",cost)}
+      {row.pricedRequests > 0 && row.pricedRequests < row.requests && <Typography variant="caption">{row.pricedRequests} of {row.requests} requests priced</Typography>}
+      {row.timedRequests > 0 && row.timedRequests < row.requests && <Typography variant="caption" display="block">{row.timedRequests} of {row.requests} requests timed</Typography>}
+      {"modelsUsed" in row && field("Models used",row.modelsUsed)}
+    </Paper>;
+  };
+  return <>{stats.models.map(row=>card((providerInfo[row.provider as keyof typeof providerInfo]?.label ?? row.provider)+" · "+row.model,row))}
+    {card("Session Summary",stats.summary,true)}</>;
 }
 
 export function SessionStatsContent({
@@ -124,14 +146,6 @@ export function SessionStatsContent({
 }) {
   const usage = (value: SessionStats["input"] | undefined) =>
     value?.reportedRequests ? number(value.knownTokens) : "Not reported";
-  const modelsUsed: StatRow = [
-      "Models used",
-      stats?.models.length
-        ? [...new Set(stats.models.map((model) => model.model))].map(
-            (model) => <Box key={model}>{model}</Box>,
-          )
-        : "—",
-    ];
   const tokens: StatRow[] = [
     ["Input", usage(stats?.input)],
     ["Output", usage(stats?.output)],
@@ -140,27 +154,6 @@ export function SessionStatsContent({
       stats?.total.reportedValues
         ? number(stats.total.knownTokens)
         : "Not reported",
-    ],
-  ];
-  const requests: StatRow = ["Requests", compact && !stats ? "Unavailable" : number(stats?.requestCount ?? 0)];
-  const usageRows: StatRow[] = [
-    [
-      "Active time",
-      compact && !stats ? "Unavailable" : `${duration(stats?.activeTime.milliseconds ?? 0)}${stats?.activeTime.missingDurations ? " · Partial" : ""}`,
-    ],
-    [
-      compact ? "Estimated cost" : "Cost (≈)",
-      stats?.cost.subtotals.length ? (
-        <>
-          {stats.cost.subtotals.map((cost) => (
-            <Box key={cost.currency}>
-              {formatSessionCost(cost.subtotal)} {cost.currency}
-            </Box>
-          ))}
-        </>
-      ) : (
-        "Unavailable"
-      ),
     ],
   ];
   const contextRows: StatRow[] = [
@@ -186,12 +179,12 @@ export function SessionStatsContent({
         {showBreakdown && <ContextBreakdownPanel value={breakdown}/>}
       </StatSection>
       <StatSection title="Security" summary={counts ? number(counts.blocked)+" blocked · "+number(counts.redacted)+" redacted · "+number(counts.withheld)+" withheld" : "Counts unavailable"} rows={securityRows}/>
-      <StatSection title="Usage" summary={stats ? number(stats.requestCount)+(stats.requestCount===1?" request":" requests") : "Requests unavailable"} rows={[requests,...usageRows,modelsUsed]}/>
+      <StatSection title="Usage" summary={stats ? number(stats.requestCount)+(stats.requestCount===1?" request":" requests") : "Requests unavailable"} rows={[]}>{stats && <SessionUsageCards stats={stats}/>}</StatSection>
     </Box>;
   }
-  const rows: StatRow[] = [modelsUsed, requests, ["Tokens",""], ...tokens, ...usageRows, ["Context",""], ...contextRows];
+  const rows: StatRow[] = [["Tokens",""], ...tokens, ["Context",""], ...contextRows];
   return (
-    <Box
+    <><Box
       component="dl"
       sx={{
         display: "grid",
@@ -245,7 +238,7 @@ export function SessionStatsContent({
         </Box>
       ))}
       {showBreakdown && <ContextBreakdownPanel value={breakdown}/>}
-    </Box>
+    </Box>{stats && <SessionUsageCards stats={stats}/>}</>
   );
 }
 
@@ -257,7 +250,7 @@ export function SessionStatsPanel({
   active,
   loaded,
   running,
-  accountingState,
+  usageUrl,
   dialogueCounts,
   contextStrategy,
   recentMessages,
@@ -273,7 +266,7 @@ export function SessionStatsPanel({
   active: boolean;
   loaded: boolean;
   running: boolean;
-  accountingState?: ManagerConversationState;
+  usageUrl: string;
   dialogueCounts?: Partial<Record<'o200k_base' | 'cl100k_base',number>>;
   contextStrategy?: 'token-budget'|'key-facts';
   recentMessages?: number;
@@ -282,7 +275,20 @@ export function SessionStatsPanel({
   compact?: CompactStats;
   children?: ReactNode;
 }) {
-  const stats = useMemo(() => aggregateSessionStats(accountingState ?? state), [state, accountingState]);
+  const [snapshot,setSnapshot] = useState<{url:string;stats:SessionStats}>();
+  const [usageError,setUsageError] = useState("");
+  useEffect(() => {
+    if (!active || !loaded) return;
+    const controller = new AbortController();
+    setUsageError("");
+    fetch(usageUrl,{signal:controller.signal}).then(async response=>{
+      if (!response.ok) throw Error();
+      const stats:SessionStats = await response.json();
+      if (!controller.signal.aborted) setSnapshot({url:usageUrl, stats});
+    }).catch(()=>{if (!controller.signal.aborted) setUsageError("Session usage could not be refreshed.");});
+    return ()=>controller.abort();
+  },[usageUrl,active,loaded,running,state.requestMeters,state.runs]);
+  const stats = snapshot?.url === usageUrl ? snapshot.stats : undefined;
   const budget = managerContextBudget(request);
   const [dialogue, setDialogue] = useState<{state: ManagerConversationState; model: string; tokens?: number}>();
   const [breakdown, setBreakdown] = useState<ContextBreakdown>();
@@ -312,6 +318,7 @@ export function SessionStatsPanel({
       <SessionStatsContent compact={compact} stats={loaded ? stats : undefined}
         context={{ ...budget, dialogueTokens: pending ? undefined : dialogue?.tokens }} contextPending={pending}
         showBreakdown={contextStrategy==='key-facts'} breakdown={breakdown} fullContext={fullContext} />
+      {usageError && <Typography color="error" variant="caption">{usageError}</Typography>}
       {children}
     </SessionStatsFrame>
   );

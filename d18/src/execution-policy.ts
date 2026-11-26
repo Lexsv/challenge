@@ -40,6 +40,10 @@ export type ExecutionError = {
   message: string;
   diagnostic?: string;
   reportedFailure?: boolean;
+  failureKind?: "read_failure" | "confirmed_write_failure" | "uncertain_write_outcome";
+  effectEvidence?: "pre_dispatch" | "atomic_rejection";
+  blockingOperationIds?: readonly string[];
+  missingEvidence?: readonly string[];
   skipReason?: DependencyReason;
   source: ErrorSource;
   category:

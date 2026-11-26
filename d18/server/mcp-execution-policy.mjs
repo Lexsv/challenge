@@ -30,7 +30,15 @@ export function invocationGrantId(grant, args, runId) {
 // Operator-owned deployment configuration. Session permissions cannot edit or
 // override it. Discovery and model output cannot issue grants.
 export function readMcpPolicy() {
-  const path = process.env.DAY18_MCP_EXECUTION_POLICY_FILE;
+  return readPolicyFile(process.env.DAY18_MCP_EXECUTION_POLICY_FILE);
+}
+
+// Classification contracts never create permissions or turn on managed admission.
+export function readActionContracts() {
+  return readPolicyFile(process.env.DAY18_MCP_ACTION_CONTRACTS_FILE);
+}
+
+function readPolicyFile(path) {
   if (!path) return [];
   let fd;
   try {
@@ -58,7 +66,11 @@ function attachedCreate(grant, row) {
       !grant.argumentSchema || grant.codeTemplate) return false;
   const remote = JSON.parse(row.document).inputSchema;
   const scope = grant.argumentSchema;
-  const selectors = Object.keys({...remote.properties,...scope.properties})
+  return pinnedSelectors(remote, scope);
+}
+
+function pinnedSelectors(remote, scope) {
+  const selectors = Object.keys({...remote.properties, ...scope.properties})
     .filter(key => /^(?:action|operation|method|command)$/i.test(key));
   return selectors.every(key => scope.required?.includes(key) &&
     typeof scope.properties?.[key]?.const === "string");
@@ -68,7 +80,8 @@ export function readGrants(row, read, sessionId, args) {
   try {
     const policy = read(row, args);
     if (!Array.isArray(policy) || policy.length > 512) return [];
-    const definition = policyDigest(JSON.parse(row.document));
+    const document = JSON.parse(row.document);
+    const definition = policyDigest(document);
     return policy.filter(
       (p) =>
         // Reusable capabilities are an explicit deployment choice. The caller
@@ -78,6 +91,7 @@ export function readGrants(row, read, sessionId, args) {
         ["read-only", "side-effecting"].includes(p.safety) &&
         // Optional operator-attested, disjoint state domain within this connection.
         // Omitted on legacy and catalog-wide grants: uncertainty then covers the connection.
+        (!p.argumentSchema || p.safety !== "read-only" || pinnedSelectors(document.inputSchema,p.argumentSchema)) &&
         (p.stateScope === undefined || (!p.catalogScope && typeof p.stateScope === "string" &&
           /^[a-zA-Z0-9_-]{1,64}$/.test(p.stateScope))) &&
         (p.requires === undefined ||
@@ -222,4 +236,25 @@ export function matchGrant(grants, args, scopes) {
       : isDeepStrictEqual(p.arguments, args)),
   );
   return matches.length === 1 ? matches[0] : undefined;
+}
+
+// Apply only to a previously authorized catalog invocation. Overlapping reviews
+// cannot prove a weaker safety class, and an open argument schema proves none.
+export function reviewedAction(contracts, row, args, prepare, now) {
+  if (!Array.isArray(contracts) || contracts.length > 512) return;
+  const document = JSON.parse(row.document);
+  const definition = policyDigest(document);
+  const matches = contracts.filter(contract => {
+    if (!contract || contract.connectionId !== row.connectionId || contract.toolId !== row.toolId ||
+        contract.revision !== row.revision || contract.definition !== definition) return false;
+    const schema = contract.argumentSchema;
+    if ((contract.independentInputs !== undefined && typeof contract.independentInputs !== "boolean") ||
+        (contract.stateScope !== undefined && (typeof contract.stateScope !== "string" || !/^[a-zA-Z0-9_-]{1,64}$/.test(contract.stateScope))) ||
+        schema?.type !== "object" || schema.additionalProperties !== false ||
+        !["read-only", "side-effecting"].includes(contract.safety)) return false;
+    // A multiplexed tool needs an explicit selector in its reviewed schema.
+    if (!pinnedSelectors(document.inputSchema, schema)) return false;
+    return compileScope(contract, row.originalName, prepare, now)?.(args) === true;
+  });
+  if (matches.length === 1) return matches[0];
 }

@@ -14,7 +14,7 @@ describe("OpenCode catalog", () => {
     ).toBe(0);
     expect(
       catalog.find((m) => m.id === "deepseek-v4.1-flash")?.price.input,
-    ).toBe(0.3);
+    ).toBe(0.12);
     expect(
       catalog.find((m) => m.id === "beam-free")?.price.cacheWrite,
     ).toBeNull();
@@ -31,7 +31,7 @@ describe("OpenCode catalog", () => {
   it("resolves API and catalog components independently", () => {
     const p = resolvePrice("deepseek-v4.1-flash", { input: 0, cacheWrite: -1 });
     expect(p.input).toEqual({ value: 0, source: "API" });
-    expect(p.output).toEqual({ value: 1.2, source: "Catalog" });
+    expect(p.output).toEqual({ value: 0.48, source: "Catalog" });
     expect(p.cacheWrite).toEqual({ value: null, source: "Unknown" });
     expect(resolvePrice("absent").input.source).toBe("Unknown");
   });

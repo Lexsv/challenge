@@ -620,3 +620,19 @@ test("task list orders persisted lifecycle groups by newest creation across tran
   api = await client(open());
   await order(7,6,3,4,2,1,5,0);
 });
+
+test("an interrupted occurrence with only an undispatched write skip holds no external reservation after restart", async t => {
+  const {app, db, clock, define, runs, open, close} = await fixture(t);
+  const task = createStarted(app.scheduledTasks, define({kind:"once",at:clock.value}));
+  await until(() => runs(task.id)[0]?.state === "Completed");
+  const run = runs(task.id)[0].id;
+  // Restore the durable boundaries of an interrupted run with one proposed write.
+  db.prepare("UPDATE week4_runs SET state='RequiresReview' WHERE id=?").run(run);
+  db.prepare(`INSERT INTO week4_operations(id,run_id,kind,logical_key,target,connection_key,safety,state,created,deadline,max_attempts)
+    VALUES(?,?,'tool','fixture','mcp:fixture','fixture','side-effecting','Skipped',?,?,1)`).run(randomUUID(),run,clock.value,clock.value+100);
+  await close(app);
+  const restored = open(), api = await client(restored);
+  const rows = await api("");
+  assert.deepEqual(rows.find(row => row.id===task.id).reviewIds, []);
+  assert.equal(restored.scheduledTasks.getOccurrence(run).state, "RequiresReview");
+});

@@ -1,3 +1,4 @@
+import { billingUsage, providerCost } from './token-billing.ts';
 import { requestClock, withServerTime } from "./server-time-context.ts";
 import { httpFailure, sanitizeFailureText, type NormalizedFailure } from "./normalized-failure.ts";
 import { parameterPayload } from "./api-parameters.ts";
@@ -97,16 +98,12 @@ export function openCodeAdapter(
       });
       if (!response.ok) {
         let detail = "";
-        let reportedFailureCost: number | undefined;
-        let reportedFailureEstimated = false;
+        let failureCost: ReturnType<typeof providerCost>;
         try {
           const payload: unknown = await response.json();
           if (payload && typeof payload === "object") {
             const billing = (payload as { usage?: { cost?: unknown; opencode?: { estimated?: unknown } } }).usage;
-            if (mode === "console" && new URL(endpoint()).origin === "https://opencode.ai" && typeof billing?.cost === "number" && Number.isFinite(billing.cost) && billing.cost >= 0) {
-              reportedFailureCost = billing.cost;
-              reportedFailureEstimated = billing.opencode?.estimated === true;
-            }
+            if (endpoint() === INFERENCE_ENDPOINTS[mode]) failureCost = providerCost("opencode-" + mode, billing);
             const record = payload as { error?: unknown; message?: unknown; error_description?: unknown };
             const error = record.error ?? record.message ?? record.error_description;
             const message =
@@ -125,7 +122,7 @@ export function openCodeAdapter(
           status: "failed",
           text: "",
           failure,
-          ...(reportedFailureCost !== undefined ? { cost: { usd: reportedFailureCost, source: "provider" as const, estimated: reportedFailureEstimated } } : {}),
+          ...(failureCost && { cost: failureCost }),
           error: detail
             ? `OpenCode request failed (${response.status}): ${detail}`
             : `OpenCode request failed (${response.status}). Check account access, model and settings.`,
@@ -141,22 +138,14 @@ export function openCodeAdapter(
       const text = plan?.protocol === "responses"
         ? (Array.isArray(data.output) ? data.output.flatMap((item: { content?: unknown }) => Array.isArray(item.content) ? item.content : []).filter((part: { type?: string; text?: unknown }) => part?.type === "output_text" && typeof part.text === "string").map((part: { text: string }) => part.text).join("") : "")
         : typeof choice?.message?.content === "string" ? choice.message.content : "";
-      const number = (v: unknown) =>
-        typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : undefined;
-      const usage = data.usage
-        ? {
-            input: number(plan?.protocol === "responses" ? data.usage.input_tokens : data.usage.prompt_tokens),
-            output: number(plan?.protocol === "responses" ? data.usage.output_tokens : data.usage.completion_tokens),
-            reasoning: number(
-              (plan?.protocol === "responses" ? data.usage.output_tokens_details : data.usage.completion_tokens_details)?.reasoning_tokens,
-            ),
-            cachedInput: number((plan?.protocol === "responses" ? data.usage.input_tokens_details : data.usage.prompt_tokens_details)?.cached_tokens),
-          }
-        : undefined;
-      const reportedCost = mode === "console" && new URL(endpoint()).origin === "https://opencode.ai" ? number(data.usage?.cost) : undefined;
+      const provider = "opencode-" + mode;
+      const usage = billingUsage(provider, data.usage, data.service_tier);
+      const official = endpoint() === INFERENCE_ENDPOINTS[mode];
+      if (usage && !official) usage.billingIncomplete = true;
+      const cost = official ? providerCost(provider, data.usage) : undefined;
       const common = {
         text,
-        ...(reportedCost !== undefined ? { cost: { usd: reportedCost, source: "provider" as const, estimated: data.usage?.opencode?.estimated === true } } : {}),
+        ...(cost && {cost}),
         usage,
         ms: performance.now() - started,
         actualModel:

@@ -42,6 +42,7 @@ export function mcpFailure(toolId, error, signal, stage = "dispatch") {
       ...executionError(code, "mcp", stage, Date.now()),
       ...(error instanceof McpProblem && ["tls", "tls_config"].includes(error.code) && {retryable: false, diagnostic: error.message}),
       ...(error instanceof McpProblem && ["tool", "result"].includes(error.code) && error.diagnostic && {diagnostic:error.diagnostic}),
+      ...(error instanceof McpProblem && error.code === "tool" && error.atomicRejection === true && {effectEvidence:"atomic_rejection"}),
       ...(code === "execution_error" && error.reportedFailure && {reportedFailure:true}),
       ...(error?.retryAfter > 0 && { retryAfterMs: error.retryAfter }),
     },
@@ -106,8 +107,14 @@ export function normalizeMcpResult(result, destination, values) {
   const texts = blocks.filter(block => block.type === "text");
   const failedEnvelope = value => value?.success === false || value?.ok === false ||
     (value?.error && (value.status === "error" || Object.keys(value).length === 1));
-  if (result.isError === true || failedEnvelope(result.structuredContent))
-    throw toolFailure(result, result.structuredContent, values);
+  if (result.isError === true || failedEnvelope(result.structuredContent)) {
+    const failure = toolFailure(result, result.structuredContent, values);
+    const receipt = destination.rejectionReceipt;
+    if (result.isError === true && typeof receipt?.field === "string" && typeof receipt.value === "string" &&
+        receipt.value.length > 0 && result.structuredContent && Object.hasOwn(result.structuredContent, receipt.field) &&
+        result.structuredContent[receipt.field] === receipt.value) failure.atomicRejection = true;
+    throw failure;
+  }
   // Keep the existing interpretation of ordinary structured/text replies.
   // In a mixed format, also check accompanying text for a tool-level failure.
   const mixed = texts.length < blocks.length;

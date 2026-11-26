@@ -20,12 +20,15 @@ describe("historical request costs", () => {
     expect(formatCost(0)).toBe("$0.000000");
     expect(formatCost(0.00000000001)).toContain("e-");
   });
-  it("leaves unknown models, per-minute pricing, other providers and failures unknown", () => {
-    for (const a of [attempt({ actualModel: "unknown" }), attempt({ actualModel: "gpt-live-1" }), attempt({ status: "failed" }), attempt({ actualModel: undefined }), attempt({ usage: { input: 1 } })]) expect(requestCost(a, "opencode-console")).toBeUndefined();
+  it("leaves unknown models, per-minute pricing, other providers and unmetered failures unknown", () => {
+    for (const a of [attempt({ actualModel: "unknown" }), attempt({ actualModel: "gpt-live-1" }), attempt({ status: "failed", usage: undefined }), attempt({ actualModel: undefined }), attempt({ usage: { input: 1 } })]) expect(requestCost(a, "opencode-console")).toBeUndefined();
     expect(requestCost(attempt(), "openai")).toBeUndefined();
   });
+  it("accounts for billed tokens even when the application cannot use the answer", () => {
+    expect(requestCost(attempt({status:"incomplete"}), "opencode-console")?.usd).toBe(requestCost(attempt(), "opencode-console")?.usd);
+  });
   it("sums attempts and evaluator requests while identifying partial costs", () => {
-    const run = { results: [{ expert: { name: "A", provider: "opencode-console" }, attempts: [attempt()] }, { expert: { name: "B", provider: "opencode-console" }, attempts: [attempt({ status: "failed" })] }], evaluations: [attempt({ cost: { usd: 0.01, source: "provider", estimated: false } })], snapshot: { evaluator: { provider: "openai" } } } as unknown as Run;
+    const run = { results: [{ expert: { name: "A", provider: "opencode-console" }, attempts: [attempt()] }, { expert: { name: "B", provider: "opencode-console" }, attempts: [attempt({ status: "failed", usage: undefined })] }], evaluations: [attempt({ cost: { usd: 0.01, source: "provider", estimated: false } })], snapshot: { evaluator: { provider: "openai" } } } as unknown as Run;
     const total = experimentCost(run);
     expect(total.amount).toBeCloseTo(0.010042, 9);
     expect(total.missing).toEqual(["B (attempt 1)"]);

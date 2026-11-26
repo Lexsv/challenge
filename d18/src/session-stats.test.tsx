@@ -158,6 +158,7 @@ it("counts requests including retries and summaries, folds snapshots, and uses r
     missingDurations: 0,
   });
   expect(stats.cost).toEqual({
+    providerReportedRequests: 0,
     subtotals: [{ currency: "USD", subtotal: 0.002, requests: 1 }],
     pricedRequests: 1,
     excludedRequests: 2,
@@ -180,12 +181,14 @@ it("lists unique models by latest request, without promoting a late usage snapsh
   expect(
     aggregateSessionStats(state).models.map((m) => [m.model, m.requests]),
   ).toEqual([
-    ["model-a", 2],
+    ["model-a", 1],
     ["model-b", 1],
+    ["model-a", 1],
   ]);
   state.requestMeters.push(meter("fourth", { model: "model-b" }));
   expect(aggregateSessionStats(state).models.map((m) => m.model)).toEqual([
     "model-b",
+    "model-a",
     "model-a",
   ]);
 });
@@ -270,14 +273,10 @@ it("compares full saved history with Manager summary/retained turns using one se
   );
   const labels = [...html.matchAll(/<dt[^>]*>([^<]+)<\/dt>/g)].map((m) => m[1]);
   expect(labels).toEqual([
-    "Models used",
-    "Requests",
     "Tokens",
     "Input",
     "Output",
     "Total",
-    "Active time",
-    "Cost (≈)",
     "Context", "Model window", "Dialogue", "Compaction target", "Last request",
   ]);
   expect(html).toContain("padding-top:20px");

@@ -54,6 +54,34 @@ async function fixture(run: (ctx: {
   finally { if (server?.listening) await stop(); await rm(folder, { recursive: true, force: true }); }
 }
 
+it("reads a saved key only for an explicit local provider-settings reveal", async () => {
+  await fixture(async ({ call, values, store, upstream }) => {
+    values.set("openai", "fixture-for-display");
+    const headers = { "X-Day18-UI": "reveal-provider-key" };
+    expect(await (await call()).json()).toEqual({ saved: true, verification: "unchecked" });
+    expect((await call("openai", "/reveal", "GET", undefined, headers)).status).toBe(405);
+    expect((await call("openai", "/reveal", "POST")).status).toBe(403);
+    expect((await call("openai", "/reveal", "POST", undefined, { ...headers, Origin: "https://example.test" })).status).toBe(403);
+    expect((await call("openai", "/reveal", "POST", undefined, { ...headers, "Sec-Fetch-Site": "cross-site" })).status).toBe(403);
+    expect((await call("opencode-go", "/reveal", "POST", undefined, headers)).status).toBe(404);
+    expect(store.read).not.toHaveBeenCalled();
+    const response = await call("openai", "/reveal", "POST", undefined, headers);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(await response.json()).toEqual({ key: "fixture-for-display" });
+    expect(store.read).toHaveBeenCalledExactlyOnceWith("openai");
+    expect(upstream).not.toHaveBeenCalled();
+    let finish!: (value: string) => void;
+    store.read.mockImplementationOnce(() => new Promise<string>(resolve => { finish = resolve; }));
+    const pending = call("openai", "/reveal", "POST", undefined, headers);
+    await vi.waitFor(() => expect(store.read).toHaveBeenCalledTimes(2));
+    expect((await call("openai", "", "DELETE")).status).toBe(200);
+    finish("fixture-for-display");
+    const superseded = await pending;
+    expect(superseded.status).toBe(409);
+    expect(await superseded.text()).not.toContain("fixture-for-display");
+  });
+});
+
 it('publishes the same successful OpenAI Verify result to header and dialog after a retryable 503', async () => {
   await fixture(async ({ call, store, upstream }) => {
     const controller = new CredentialController(async (provider, action = '', init) => {
@@ -380,4 +408,50 @@ it('reports a rejected replacement in the dialog while retaining the configured 
   await controller.verify('openai');
   expect(controller.getSnapshot().openai).toEqual(verified);
   expect(request).toHaveBeenCalledTimes(4);
+});
+
+it('refreshes the saved OpenAI account catalog and exposes only unique model IDs', async () => {
+  await fixture(async ({call,values,upstream})=>{
+    values.set('openai','fixture-placeholder');
+    upstream.mockResolvedValueOnce(Response.json({data:[{id:'gpt-6-astra',owned_by:'private fixture'},{id:'gpt-6-astra'},{id:'embedding-fixture'},{id:'fixture-placeholder'}]}));
+    expect(await (await call('openai','/models')).json()).toEqual({ids:['embedding-fixture','gpt-6-astra']});
+    expect(upstream).toHaveBeenCalledWith('https://api.openai.com/v1/models',expect.objectContaining({method:'GET',redirect:'error'}));
+    expect((await call('openai','/models')).status).toBe(200);
+    expect(upstream).toHaveBeenCalledTimes(1);
+    upstream.mockResolvedValueOnce(Response.json({data:[]}));
+    expect(await (await call('openai','/models?refresh=1')).json()).toEqual({ids:[]});
+    upstream.mockResolvedValueOnce(new Response('private fixture diagnostic',{status:403}));
+    const denied=await call('openai','/models?refresh=1');
+    expect(denied.status).toBe(403); expect(await denied.text()).not.toContain('private fixture');
+    await call('openai','','DELETE');
+    expect((await call('openai','/models')).status).toBe(404);
+  });
+});
+
+it.each(['sessions','week3/sessions'])('restores server-side usage after switching providers and back in %s',async base=>{
+  await fixture(async ({api,restart})=>{
+    const {id}=await (await api(base,'POST',{})).json();
+    const session=base+'/'+id;
+    const event=async(type:string,eventId:string,payload:unknown)=>{
+      const response=await api(session+'/events','POST',{id:eventId,sessionId:id,type,payload});
+      expect(response.status,await response.text()).toBe(201);
+    };
+    await event('run','run-event',{id:'run-one',conversationId:id,agentId:'manager',status:'running',startedAt:1,messageIds:[],toolExecutionIds:[]});
+    const first={sessionId:id,runId:'run-one',provider:'openai',model:'gpt-6-astra',library:'js-tiktoken',startedAt:1,status:'running'};
+    const price={currency:'USD',inputPerMillion:5,outputPerMillion:10,source:'openai-model-page',asOf:'2020-01-01'};
+    for(const [i,provider,model,cost] of [[1,'openai','gpt-6-astra',0.1],[2,'opencode-console','gpt-6-astra',0],[3,'openai','gpt-6.1-sol',0.03],[4,'openai','gpt-6-astra',0.2]] as const){
+      const meter={...first,id:'meter-'+i,provider,model,startedAt:i*20};
+      await event('metering','start-'+i,meter);
+      await event('metering','end-'+i,{...meter,status:'completed',endedAt:i*20+10,actualPricing:price,estimatedRequestCost:cost,...(i===2 && {providerRequestCost:0})});
+    }
+    const result=await (await api(session+'/usage')).json();
+    expect(result.summary).toMatchObject({modelsUsed:3,requests:4,milliseconds:40,pricedRequests:4,receiptCount:1});
+    expect(result.summary.usd).toBeCloseTo(0.33,12);
+    expect(result.models).toContainEqual(expect.objectContaining({model:'gpt-6-astra',provider:'openai',requests:2,milliseconds:20,usd:expect.closeTo(0.3,12)}));
+    expect(result.models).toContainEqual(expect.objectContaining({provider:'opencode-console',requests:1,usd:0}));
+    await restart();
+    expect(await (await api(session+'/usage')).json()).toEqual(result);
+    const other=await (await api(base,'POST',{})).json();
+    expect((await (await api(base+'/'+other.id+'/usage')).json()).summary.requests).toBe(0);
+  });
 });

@@ -1,3 +1,4 @@
+import {aggregateSessionStats} from "./session-usage.ts";
 import { serverClock, serverTimePath } from "../src/server-time-context.ts";
 import {sessionToolJournal} from "./session-tool-journal.mjs";
 import {createWeek4Execution} from './week4-execution.mjs';
@@ -84,19 +85,20 @@ function validateContext(p) {
 }
 
 function validateMeter(p, sessionId) {
-  const fields = ['id', 'sessionId', 'runId', 'toolExecutionOffset', 'provider', 'model', 'actualModel', 'requestKind', 'sentInputTokens', 'beforeInputTokens', 'afterInputTokens', 'compacted', 'library', 'startedAt', 'endedAt', 'status', 'encoding', 'estimatedInputTokens', 'actualInputTokens', 'actualOutputTokens', 'actualTotalTokens', 'cachedInputTokens', 'pricing', 'actualPricing', 'estimatedInputCost', 'estimatedRequestCost'];
+  const fields = ['id', 'sessionId', 'runId', 'toolExecutionOffset', 'provider', 'model', 'actualModel', 'requestKind', 'sentInputTokens', 'beforeInputTokens', 'afterInputTokens', 'compacted', 'library', 'startedAt', 'endedAt', 'status', 'encoding', 'estimatedInputTokens', 'actualInputTokens', 'actualOutputTokens', 'actualTotalTokens', 'cachedInputTokens', 'cacheWriteTokens', 'longCacheWriteTokens', 'providerRequestCost', 'providerCostEstimated', 'pricing', 'actualPricing', 'estimatedInputCost', 'estimatedRequestCost'];
   if (Object.keys(p).some((key) => !fields.includes(key)) || p.sessionId !== sessionId || p.library !== 'js-tiktoken' || !['openai', 'opencode-console', 'opencode-go'].includes(p.provider) || typeof p.model !== 'string' || p.model.length > 200 || !['running', 'completed', 'failed', 'incomplete'].includes(p.status)) return null;
   if (typeof p.runId !== 'string' || !Number.isFinite(p.startedAt) || (p.endedAt !== undefined && !Number.isFinite(p.endedAt))) return null;
   if (p.requestKind !== undefined && !['answer', 'summary', 'extraction'].includes(p.requestKind)) return null;
   if (p.compacted !== undefined && typeof p.compacted !== 'boolean') return null;
   if (p.actualModel !== undefined && (typeof p.actualModel !== 'string' || p.actualModel.length > 200)) return null;
   if (p.encoding !== undefined && !['o200k_base', 'cl100k_base'].includes(p.encoding)) return null;
-  for (const key of ['sentInputTokens', 'beforeInputTokens', 'afterInputTokens', 'toolExecutionOffset', 'estimatedInputTokens', 'actualInputTokens', 'actualOutputTokens', 'actualTotalTokens', 'cachedInputTokens']) if (p[key] !== undefined && (!Number.isSafeInteger(p[key]) || p[key] < 0)) return null;
-  for (const key of ['estimatedInputCost', 'estimatedRequestCost']) if (p[key] !== undefined && (!Number.isFinite(p[key]) || p[key] < 0)) return null;
+  for (const key of ['sentInputTokens', 'beforeInputTokens', 'afterInputTokens', 'toolExecutionOffset', 'estimatedInputTokens', 'actualInputTokens', 'actualOutputTokens', 'actualTotalTokens', 'cachedInputTokens', 'cacheWriteTokens', 'longCacheWriteTokens']) if (p[key] !== undefined && (!Number.isSafeInteger(p[key]) || p[key] < 0)) return null;
+  if (p.providerCostEstimated !== undefined && typeof p.providerCostEstimated !== 'boolean') return null;
+  for (const key of ['providerRequestCost', 'estimatedInputCost', 'estimatedRequestCost']) if (p[key] !== undefined && (!Number.isFinite(p[key]) || p[key] < 0)) return null;
   for (const name of ['pricing', 'actualPricing']) if (p[name] !== undefined) {
     const price = p[name];
-    if (!price || typeof price !== 'object' || Object.keys(price).some((key) => !['currency', 'inputPerMillion', 'outputPerMillion', 'cachedInputPerMillion', 'source', 'asOf'].includes(key)) || price.currency !== 'USD' || !['openai-model-page', 'opencode-catalog'].includes(price.source) || typeof price.asOf !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(price.asOf)) return null;
-    if (['inputPerMillion', 'outputPerMillion'].some((key) => !Number.isFinite(price[key]) || price[key] < 0) || (price.cachedInputPerMillion !== undefined && (!Number.isFinite(price.cachedInputPerMillion) || price.cachedInputPerMillion < 0))) return null;
+    if (!price || typeof price !== 'object' || Object.keys(price).some((key) => !['currency', 'inputPerMillion', 'outputPerMillion', 'cachedInputPerMillion', 'cacheWritePerMillion', 'longCacheWritePerMillion', 'source', 'asOf'].includes(key)) || price.currency !== 'USD' || !['openai-model-page','google-pricing','opencode-discovery','opencode-mixed','opencode-catalog','opencode-fallback'].includes(price.source) || typeof price.asOf !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(price.asOf)) return null;
+    if (['inputPerMillion', 'outputPerMillion'].some((key) => !Number.isFinite(price[key]) || price[key] < 0) || ['cachedInputPerMillion','cacheWritePerMillion','longCacheWritePerMillion'].some(key => price[key] !== undefined && (!Number.isFinite(price[key]) || price[key] < 0))) return null;
   }
   return Object.fromEntries(fields.filter((key) => Object.hasOwn(p, key)).map((key) => [key, p[key]]));
 }
@@ -300,6 +302,19 @@ export function createSessionServer(databasePath = fileURLToPath(new URL('../dat
       if (path === serverTimePath && req.method === 'GET') { reply(200, serverClock()); return; }
       if (await invariants.route(req,path,reply)) return;
       protect=invariants.guard(req,path);
+      const usageRoute = path.match(/^\/api\/(week3\/)?sessions\/([a-zA-Z0-9-]+)\/usage$/);
+      if (usageRoute && req.method === 'GET') {
+        const [, week3, id] = usageRoute;
+        const prefix = week3 ? 'week3_' : '';
+        if (!db.prepare('SELECT 1 FROM '+prefix+'sessions WHERE id=?').get(id)) { reply(404,{error:'Session not found.'}); return; }
+        const rows = db.prepare("SELECT type,payload,id,sessionId,sequence FROM "+prefix+"history_events WHERE sessionId=? AND type IN ('run','context','metering') ORDER BY sequence").all(id)
+          .map(row=>({...row,payload:JSON.parse(row.payload)}));
+        const filter = invariants.guard(req,path.replace(/usage$/, 'events'));
+        const events = filter ? filter(rows) : rows;
+        const byType = type => events.filter(row=>row.type===type).map(row=>row.payload);
+        reply(200,aggregateSessionStats({conversation:{id},runs:byType('run'),contextEvents:byType('context'),requestMeters:byType('metering')}));
+        return;
+      }
       if (await profileRoutes(req, path, reply) || await week3Routes(req, path, reply)) {
         if (req.method === "DELETE") mcpManager.updateWatches();
         return;

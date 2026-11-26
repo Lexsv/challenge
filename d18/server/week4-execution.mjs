@@ -15,6 +15,7 @@ import {
   ExecutionService,
   OperationFailure,
   hasCompleteArguments,
+  invocationKey,
 } from "./execution-service.mjs";
 import { createBuiltInToolRegistry } from "../src/tool-runtime.ts";
 
@@ -47,23 +48,34 @@ export function createWeek4Execution(db, options = {}) {
     return base;
   }
   function prerequisiteFailure(runId, callIds, requiredGrants = []) {
-    if (!Array.isArray(callIds)) return "prerequisite_missing";
+    const missing = (evidence, blockers = []) => ({
+      reason: "prerequisite_missing", missingEvidence: [evidence], blockingOperationIds: blockers,
+    });
+    if (!Array.isArray(callIds)) return missing("current_run_call");
     const grants = new Set();
     for (const id of callIds) {
-      if (typeof id !== "string") return "prerequisite_missing";
+      if (typeof id !== "string") return missing("current_run_call");
       const parent = db.prepare(
-        `SELECT p.state,p.policy_grant,json_extract(p.display,'$.incompleteResult') AS incomplete FROM week4_operations p WHERE p.run_id=? AND p.id=? AND p.kind='tool'
-           AND NOT (p.safety='read-only' AND EXISTS (SELECT 1 FROM week4_operations u
-             WHERE u.run_id=p.run_id AND u.connection_key=p.connection_key AND u.rowid>p.rowid
-               AND (u.state='Unknown' OR (u.state='Failed' AND json_extract(u.error,'$.certainty')='unknown'))
-               AND (json_extract(p.display,'$.stateScope') IS NULL OR json_extract(u.display,'$.stateScope') IS NULL
-                 OR json_extract(p.display,'$.stateScope')=json_extract(u.display,'$.stateScope'))))`,
+        `SELECT p.state,p.policy_grant,json_extract(p.error,'$.certainty') AS certainty,
+          json_extract(p.display,'$.incompleteResult') AS incomplete,
+          (SELECT u.id FROM week4_operations u WHERE p.safety='read-only' AND u.run_id=p.run_id
+             AND u.connection_key=p.connection_key AND u.rowid>p.rowid
+             AND (u.state='Unknown' OR (u.state='Failed' AND json_extract(u.error,'$.certainty')='unknown'))
+             AND (json_extract(p.display,'$.stateScope') IS NULL OR json_extract(u.display,'$.stateScope') IS NULL
+               OR json_extract(p.display,'$.stateScope')=json_extract(u.display,'$.stateScope'))
+             ORDER BY u.rowid DESC LIMIT 1) AS stale
+          FROM week4_operations p WHERE p.run_id=? AND p.id=? AND p.kind='tool'`,
       ).get(runId, id);
-      if (parent?.state !== "Success") return "prerequisite_failed";
-      if (parent.incomplete) return "prerequisite_missing";
+      if (!parent) return missing("current_run_call");
+      if (parent.state !== "Success" || parent.stale) return {
+        reason: "prerequisite_failed", blockingOperationIds: parent.stale ? [id,parent.stale] : [id],
+        missingEvidence: [parent.stale || parent.state === "Unknown" || parent.certainty === "unknown"
+          ? "fresh_state_verification" : "successful_prerequisite_result"],
+      };
+      if (parent.incomplete) return missing("complete_prerequisite_result", [id]);
       grants.add(parent.policy_grant);
     }
-    return requiredGrants.every(grant => grants.has(grant)) ? undefined : "prerequisite_missing";
+    if (!requiredGrants.every(grant => grants.has(grant))) return missing("current_run_grant_proof");
   }
   function capture(ctx, dest) {
     if (ctx.privatePayloads) return dest;
@@ -151,6 +163,7 @@ export function createWeek4Execution(db, options = {}) {
           registry: new ToolRegistry(),
           scope,
           policy: effectivePolicy,
+          actionContracts: options.readActionContracts,
           provider: "openai",
           now: this.now,
           attempt: (...args) => this.routingAttempt(ctx, ...args),
@@ -256,6 +269,7 @@ export function createWeek4Execution(db, options = {}) {
           provider: input.provider,
           ...bindings,
           catalog,
+          actionContracts: options.readActionContracts,
           policy,
           registry:
             bindings && registryForMemory(bindings.registry, bindings.memory),
@@ -329,8 +343,32 @@ export function createWeek4Execution(db, options = {}) {
                 ...explicitParents,
               ];
               const prerequisiteCallIds = [...new Set(parents.filter(Boolean))];
-              const dependencyError = () => parents.includes(undefined) ? "prerequisite_missing" :
-                prerequisiteFailure(ctx.id, prerequisiteCallIds, requires);
+              const dependencyError = () => {
+                if (parents.includes(undefined)) return {
+                  reason:"prerequisite_missing", blockingOperationIds:[],
+                  missingEvidence:["current_run_call", ...(requires ?? []).filter((_,i) => !parents[i]).map(id => "grant:" + id)],
+                };
+                const invalid = prerequisiteFailure(ctx.id, prerequisiteCallIds, requires);
+                if (invalid || !connectionId || safety !== "side-effecting") return invalid;
+                // An identical write can only return its existing receipt. New writes
+                // in an uncertain state domain need a fresh, operator-required read.
+                const key = invocationKey(call.toolId, call.arguments);
+                if (ctx.cache.has(key) && db.prepare(`SELECT 1 FROM week4_operations
+                  WHERE run_id=? AND logical_key=? AND state IN ('Failed','Unknown','Success')`).get(ctx.id,key)) return;
+                const blockers = db.prepare(`SELECT u.id FROM week4_operations u
+                  WHERE u.run_id=? AND u.connection_key=? AND u.safety='side-effecting'
+                    AND (u.state='Unknown' OR json_extract(u.error,'$.certainty')='unknown')
+                    AND (? IS NULL OR json_extract(u.display,'$.stateScope') IS NULL OR json_extract(u.display,'$.stateScope')=?)
+                    AND NOT EXISTS (SELECT 1 FROM week4_operations p
+                      WHERE p.run_id=u.run_id AND p.connection_key=u.connection_key AND p.rowid>u.rowid
+                        AND p.safety='read-only' AND p.state='Success'
+                        AND p.id IN (SELECT value FROM json_each(?)) AND p.policy_grant IN (SELECT value FROM json_each(?))
+                        AND json_extract(p.display,'$.stateScope') IS json_extract(u.display,'$.stateScope'))
+                  ORDER BY u.rowid`).all(ctx.id, connectionId, intent.data.stateScope ?? null, intent.data.stateScope ?? null,
+                    JSON.stringify(prerequisiteCallIds), JSON.stringify(requires ?? []));
+                if (blockers.length) return {reason:"independence_after_failure_unproven",
+                  blockingOperationIds:blockers.map(row => row.id), missingEvidence:["fresh_state_verification"]};
+              };
               const error = dependencyError();
               return {
                 allowed: true,
@@ -340,10 +378,17 @@ export function createWeek4Execution(db, options = {}) {
                 grantId,
                 safety,
                 independentInputs,
+                trustedPrerequisites: !!requires?.length,
+                actionContract: intent.data.actionContract,
+                correctableFields: Array.isArray(intent.data.rejectionReceipt?.correctableFields)
+                  ? intent.data.rejectionReceipt.correctableFields.filter(key => typeof key === "string" &&
+                      Object.hasOwn(offered.inputSchema.properties ?? {},key) && !/^(action|operation|method|command|script|code)$/i.test(key))
+                  : undefined,
                 stateScope: intent.data.stateScope,
                 prerequisiteCallIds,
                 ready: !error,
-                prerequisiteFailure: error,
+                prerequisiteFailure: error?.reason,
+                blockingOperationIds: error?.blockingOperationIds, missingEvidence: error?.missingEvidence,
                 check: () => !dependencyError() && check(),
                 invoke: async (signal, _key, correlation) => {
                   const route = () =>
@@ -426,7 +471,8 @@ export function createWeek4Execution(db, options = {}) {
             )));
           }
           const display = {
-            ...(scheduled && operation.correctsOperation ? {correctsOperation: operation.correctsOperation} : {}),
+            actionContract: operation.actionContract,
+            ...(operation.correctsOperation ? {correctsOperation: operation.correctsOperation} : {}),
             proposedArguments,
             proposedFields,
             type: external ? "MCP" : (internal?.executionType ?? "unavailable"),

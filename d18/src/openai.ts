@@ -1,3 +1,5 @@
+import { DEFAULT_ENDPOINTS } from "./provider-endpoints.ts";
+import { billingUsage } from './token-billing.ts';
 import { requestClock, withServerTime } from "./server-time-context.ts";
 import { capabilities } from "./openai-model-catalog.ts";
 import {
@@ -38,6 +40,7 @@ async function respondInternal(
     controller.abort();
   }, 120000);
   let usage: Usage | undefined;
+  let actualModel: string | undefined;
   let text = "";
   try {
     if (!key.trim() || !validSettings({ ...request.settings, parameters: undefined }))
@@ -125,14 +128,9 @@ async function respondInternal(
       };
     }
     const data = await res.json();
-    const number = (n: unknown) =>
-      typeof n === "number" && Number.isFinite(n) && n >= 0 ? n : undefined;
-    if (data.usage)
-      usage = {
-        input: number(data.usage.input_tokens),
-        output: number(data.usage.output_tokens),
-        reasoning: number(data.usage.output_tokens_details?.reasoning_tokens),
-      };
+    actualModel = typeof data.model === "string" ? data.model : undefined;
+    usage = billingUsage("openai", data.usage, data.service_tier);
+    if (usage && endpoint !== DEFAULT_ENDPOINTS.openai) usage.billingIncomplete = true;
     const content = (Array.isArray(data.output) ? data.output : []).flatMap(
       (v: { content?: unknown[] }) =>
         Array.isArray(v.content) ? v.content : [],
@@ -147,7 +145,7 @@ async function respondInternal(
         text: "",
         error:
           "The model refused this request. Review the input before retrying.",
-        usage,
+        usage, actualModel,
         ms: performance.now() - start,
       };
     if (data.status === "incomplete") {
@@ -165,7 +163,7 @@ async function respondInternal(
       return {
         status: "incomplete",
         text,
-        usage,
+        usage, actualModel,
         incompleteReason,
         error: incompleteExplanation(incompleteReason),
         ms: performance.now() - start,
@@ -175,7 +173,7 @@ async function respondInternal(
       return {
         status: "failed",
         text,
-        usage,
+        usage, actualModel,
         error: "No complete text answer was returned.",
         ms: performance.now() - start,
       };
@@ -183,8 +181,7 @@ async function respondInternal(
       status: "succeeded",
       text,
       usage,
-      actualModel:
-        typeof data.model === "string" ? data.model : request.settings.model,
+      actualModel: actualModel ?? request.settings.model,
       ms: performance.now() - start,
     };
   } catch {

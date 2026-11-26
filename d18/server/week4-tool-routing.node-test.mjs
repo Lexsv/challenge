@@ -577,6 +577,8 @@ test("the pre-dispatch and cached authorization gates preserve structured access
     assert.equal(fresh.error.source, "router");
     assert.equal(fresh.error.code, "authorization");
     assert.equal(f.j.attempts(fresh.logicalCallId).length, 0);
+    assert.equal(fresh.error.failureKind, "confirmed_write_failure");
+    assert.equal(fresh.error.effectEvidence, "pre_dispatch");
   });
 });
 
@@ -842,4 +844,34 @@ test("restart resumes a dependent read only with its recorded successful call in
     await recovered.drain();
     reopened.close();
   }
+});
+
+test("action reviews cannot issue grants and stale or ambiguous reviews cannot classify a call as read-only", async () => {
+  const {resolveWeek4Tools} = await import("./week4-tool-routing.mjs");
+  const doc = {name:"catalog", inputSchema:{type:"object",properties:{action:{type:"string"}},required:["action"],additionalProperties:false}};
+  const row = {connectionId:randomUUID(),toolId:randomUUID(),originalName:doc.name,
+    revision:1,document:JSON.stringify(doc),lastSuccess:42,connectionName:"fixture"};
+  const owner=randomUUID(), scope=()=>({sessionId:owner,runId:"fixture"});
+  const pin = {toolId:row.toolId,connectionId:row.connectionId,revision:1,definition:policyDigest(doc)};
+  const review = {...pin,safety:"read-only",argumentSchema:{...doc.inputSchema,properties:{action:{type:"string",const:"list"}}}};
+  let contracts = [review];
+  let grants = [{...pin,sessionId:owner,catalogScope:true,attachedCatalog:true,safety:"side-effecting"}];
+  const open = () => resolveWeek4Tools({provider:"openai",registry:createBuiltInToolRegistry(),catalog:()=>[row],
+    scope,now:()=>42,policy:()=>grants,actionContracts:()=>contracts}).data;
+  const snapshot = open(), name=snapshot.providerNames.idToName.get("mcp:"+row.toolId);
+  assert.equal(snapshot.lookup(name,{action:"list"}).data.safety,"read-only");
+  assert.equal(snapshot.lookup(name,{action:"delete"}).data.safety,"side-effecting");
+  contracts=[];
+  assert.equal(snapshot.lookup(name,{action:"list"}).error.code,"route_changed");
+  for(const invalid of [[{...review,revision:2}],[{...review,definition:"obsolete"}],[review,review],[{...review,argumentSchema:doc.inputSchema}]]) {
+    contracts=invalid;
+    assert.equal(open().lookup(name,{action:"list"}).data.safety,"side-effecting");
+  }
+  contracts=[review];
+  grants=[{...review, sessionId:owner}];
+  const narrow=open();
+  assert.equal(narrow.lookup(name,{action:"list"}).data.safety,"read-only");
+  assert.equal(narrow.lookup(name,{action:"delete"}).error.code,"authorization");
+  grants=[];
+  assert.equal(narrow.lookup(name,{action:"list"}).error.code,"authorization");
 });

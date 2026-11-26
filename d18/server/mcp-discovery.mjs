@@ -29,7 +29,7 @@ export function mcpSession(
   const pool = connectionTlsPool(config, tlsDirectory);
   const send = authenticatedFetch(config, values, controller.signal,
     pool ? (url, init) => fetcher(url, {...init, dispatcher: pool}) : fetcher);
-  let networkError, authorize, observe, closing, pushUnavailable = false;
+  let networkError, authorize, observe, markCallDispatch, closing, pushUnavailable = false;
   const transport = transports[config.transport](new URL(config.endpoint), {
     reconnectionOptions: {
       maxRetries: 0,
@@ -39,22 +39,20 @@ export function mcpSession(
     },
     fetch: async (input, init) => {
       try {
-        if (
-          init?.method === "POST" &&
-          typeof init.body === "string" &&
-          JSON.parse(init.body).method === "tools/call" &&
-          !authorize?.()
-        )
-          throw new McpProblem("permission", 403);
         const rpc =
           init?.method === "POST" && typeof init.body === "string"
             ? JSON.parse(init.body)
             : null;
+        if (rpc?.method === "tools/call" && !authorize?.())
+          throw new McpProblem("permission", 403);
         if (resourceAccess && ["resources/read","resources/subscribe"].includes(rpc?.method) &&
             !resourceAccess(rpc.params?.uri)) throw new McpProblem("permission",403);
         const capture = rpc?.method === "tools/call" ? observe : undefined;
         if (capture) capture("request", sanitizedCapture(init.body, values));
         networkError = undefined;
+        // Once the tool POST crosses this boundary, a transport error cannot
+        // establish absence of effects. Unknown POST encodings stay conservative.
+        if (init?.method === "POST" && (!rpc?.method || rpc.method === "tools/call")) markCallDispatch?.();
         const response = await send(input, init);
         if (init?.method === "GET" && config.transport === "streamable-http" && response.status === 405)
           pushUnavailable = true;
@@ -155,7 +153,8 @@ export function mcpSession(
         throw error;
       }
     },
-    async call(name, args, signal, current, capture) {
+    async call(name, args, signal, current, capture, onDispatch) {
+      markCallDispatch = onDispatch;
       observe = capture;
       authorize = current;
       try {
@@ -169,6 +168,7 @@ export function mcpSession(
       } finally {
         authorize = undefined;
         observe = undefined;
+        markCallDispatch = undefined;
       }
     },
     lastError: () => networkError,

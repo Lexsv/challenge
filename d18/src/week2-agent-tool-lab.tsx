@@ -648,7 +648,6 @@ function SessionChatView({
   const olderLock = useRef(false);
   const pageGeneration = useRef(0);
   const prependAnchor = useRef<{height:number;top:number} | null>(null);
-  const [accountingState, setAccountingState] = useState<ManagerConversationState>();
   const [dialogueCounts, setDialogueCounts] = useState<import('./session-api').HistoryPage['dialogueTokens']>();
   const [savedDialogueCount, setSavedDialogueCount] = useState<number>();
   const [factsRevision, setFactsRevision] = useState(0);
@@ -706,7 +705,7 @@ function SessionChatView({
       setVisibleRuns(new Set(page.events.map(eventRunId)));
       const restored = restoreHistory(initialConversation, page.events);
       const accounting = restoreHistory(initialConversation, page.accountingEvents ?? page.events);
-      setAccountingState(accounting); setDialogueCounts(page.dialogueTokens); setSavedDialogueCount(page.dialogueCount);
+      setDialogueCounts(page.dialogueTokens); setSavedDialogueCount(page.dialogueCount);
       const pair = restoreSessionModelPair(accounting, registry, openAIModel);
       if (!restoredSelection.current) {
         setSelection(pair); setModelChoices(current => ({ ...current, [pair.provider]: pair.model })); restoredSelection.current=true;
@@ -727,7 +726,7 @@ function SessionChatView({
       setConversation(restored.conversation);
       setFactsRevision(n=>n+1);
       setOlderError('');
-      fullHistory.current = true; setAccountingState(undefined); setDialogueCounts(undefined); setSavedDialogueCount(undefined);
+      fullHistory.current = true;  setDialogueCounts(undefined); setSavedDialogueCount(undefined);
       setSaveFailed(false); setHistoryError("");
     }
     catch { setHistoryError("History save failed. Retry to save pending events; tools will not be replayed."); }
@@ -808,7 +807,7 @@ function SessionChatView({
   const [invariantNotice,setInvariantNotice]=useState('');
   const refreshProtectedHistory=()=>{
     pageGeneration.current++;setVisibleRuns(null);setConversation(null);setUiEvents([]);
-    setAccountingState(undefined);setMemoryEntries([]);setSessionMemorySnapshot(undefined);
+    setMemoryEntries([]);setSessionMemorySnapshot(undefined);
     pageEvents.current=[];fullHistory.current=false;setHistoryLoaded(false);
     setHistoryAttempt(n=>n+1);setFactsRevision(n=>n+1);
   };
@@ -893,7 +892,7 @@ function SessionChatView({
           working = restoreHistory(initialConversation, await loadHistory(initialConversation.conversation.id));
           fullHistory.current = true;
         }
-        setAccountingState(undefined); setDialogueCounts(undefined); setSavedDialogueCount(undefined);
+         setDialogueCounts(undefined); setSavedDialogueCount(undefined);
         const savedFunctions = await loadFunctions();
         toolRegistry.replaceCustomTools(savedFunctions.map(executableFunction));
         const adapter = createManagerLlmAdapter({
@@ -1149,7 +1148,7 @@ function SessionChatView({
     </Stack>
     <Box sx={{ minWidth: 0 }}><SessionStatsPanel compact={week3 ? {model:selectedModel,security:policy.status?.counts} : undefined} state={conversation ?? initialConversation} draft={input}
       request={{ providerId: provider, model: selectedModel, registry, requestTokenLimit }} tools={toolRegistry}
-      active={active} loaded={historyLoaded} running={running} accountingState={accountingState} dialogueCounts={dialogueCounts}
+      active={active} loaded={historyLoaded} running={running} usageUrl={chatBase+'/usage'} dialogueCounts={dialogueCounts}
       contextStrategy={fullContext || sliding || memory ? undefined : contextStrategy} recentMessages={recentMessages} factsRevision={factsRevision} fullContext={fullContext || sliding || memory} >
       {!week3 && policy.status && <Box component="dl" sx={{display:"grid",gridTemplateColumns:"1fr auto",gap:.5,m:0,mt:1}}>
         {(["blocked","redacted","withheld"] as const).map(action=><Box key={action} sx={{display:"contents"}}><Typography component="dt" variant="body2">Security {action[0].toUpperCase()+action.slice(1)}</Typography><Typography component="dd" variant="body2" sx={{m:0}}>{policy.status!.counts[action]}</Typography></Box>)}

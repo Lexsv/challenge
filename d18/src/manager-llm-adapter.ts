@@ -366,6 +366,7 @@ export function createManagerLlmAdapter(input: {
   };
 
   const outputTokens = managerContextBudget(input).replyTokens;
+  const prices = (model:string) => input.registry.get(input.providerId)?.limits?.(model)?.price;
   const pricingEndpoint = input.useSavedKey ? DEFAULT_ENDPOINTS[input.providerId] : endpoint;
   const makeBody = (messages: readonly ManagerLlmMessage[], tools: readonly ToolCatalogItem[], output = outputTokens) =>
     buildManagerRequestBody({ providerId: input.providerId, model: input.model, messages, tools, outputTokens: output });
@@ -379,47 +380,52 @@ export function createManagerLlmAdapter(input: {
     const meteredBody = withServerTime(body, await requestClock());
     const estimate = await estimateContextInput(input.model, meteredBody);
     if (proposal && (estimate.estimatedInputTokens ?? Infinity) > (managerContextBudget(input).inputBudget ?? 0)) throw Error("Insufficient budget for the memory proposal schema.");
-    const initial = { ...await beginMeter(input.providerId, input.model, meteredBody, pricingEndpoint), requestKind, sentInputTokens: estimate.estimatedInputTokens };
+    const initial = { ...await beginMeter(input.providerId, input.model, meteredBody, pricingEndpoint, prices), requestKind, sentInputTokens: estimate.estimatedInputTokens };
     await onMeter?.(initial);
+    const record = async (data: unknown, status: RequestMeter['status']) => {
+      const meter = finishMeter(initial, data, pricingEndpoint,prices);
+      if (input.apiKey && meter.actualModel?.includes(input.apiKey)) {
+        delete meter.actualModel; delete meter.actualPricing; delete meter.estimatedRequestCost;
+      }
+      await onMeter?.({...meter, status});
+    };
     let data: unknown;
     try {
       const response = await providerFetch(body, meteredBody, input.providerId === 'openai' ? endpoint : consoleTransportUrl(endpoint));
       if (!response.ok) {
-        const payload = await response.json().catch(() => null);
-        throw new ManagerProviderError(providerError(response.status, payload));
+        data = await response.json().catch(() => null);
+        throw new ManagerProviderError(providerError(response.status, data));
       }
       data = await response.json();
     } catch (error) {
-      await onMeter?.({ ...initial, status: 'failed', endedAt: Date.now() });
+      await record(data, 'failed');
       // Transport errors must not leak headers, credentials or raw upstream text.
       if (error instanceof ManagerProviderError) throw error;
       throw new Error('Manager provider request could not complete. Please retry.');
     }
     if (proposal && data && typeof data==="object") {
       const response=data as {output?:{content?:{type?:string}[]}[];choices?:{message?:{refusal?:string}}[]};
-      if (response.output?.some(o=>o.content?.some(c=>c.type==="refusal")) || response.choices?.some(c=>c.message?.refusal))
+      if (response.output?.some(o=>o.content?.some(c=>c.type==="refusal")) || response.choices?.some(c=>c.message?.refusal)) {
+        await record(data, 'failed');
         throw Error("The provider declined the memory extraction request.");
+      }
     }
     if (requestKind === 'summary' && data && typeof data === 'object') {
       const response = data as {status?: string; incomplete_details?: {reason?: string}; choices?: {finish_reason?: string; message?: {content?: unknown}}[]; output?: unknown[]};
       const exhausted = response.incomplete_details?.reason === 'max_output_tokens' || (requireComplete && response.status === 'incomplete') || response.choices?.some(choice => choice.finish_reason === 'length' && (requireComplete || !choice.message?.content));
       if (exhausted) {
-        await onMeter?.({ ...initial, status: 'failed', endedAt: Date.now() });
+        await record(data, 'failed');
         throw new Error('Context summary exhausted its output allowance without usable text.');
       }
     }
     if (requestKind === 'answer' && data && typeof data === 'object') {
       const result = data as {status?:string; choices?:{finish_reason?:string}[]};
       if (result.status === 'incomplete' || result.choices?.some(choice=>choice.finish_reason === 'length')) {
-        await onMeter?.({...finishMeter(initial,data,pricingEndpoint),status:'incomplete'});
+        await record(data, 'incomplete');
         throw new Error('The provider returned an incomplete answer. Please retry.');
       }
     }
-    const completed = finishMeter(initial, data, pricingEndpoint);
-    if (input.apiKey && completed.actualModel?.includes(input.apiKey)) {
-      delete completed.actualModel; delete completed.actualPricing; delete completed.estimatedRequestCost;
-    }
-    await onMeter?.(completed);
+    await record(data, 'completed');
     const map = buildProviderToolNameMap(tools);
     if(scopedNames) map.scoped=true;
     return input.providerId === 'openai' ? parseOpenAIResponses(data, map) : parseOpenAIChatCompletions(data, map);

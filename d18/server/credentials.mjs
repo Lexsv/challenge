@@ -1,6 +1,7 @@
 import { serverClock, withServerTime } from "../src/server-time-context.ts";
 import { retryAfterMs } from '../src/execution-policy.ts';
 import { providerError } from './provider-error.mjs';
+import { localUiRequest } from './mcp-routes.mjs';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -64,6 +65,11 @@ export function createSavedProviderTransport(store = new MacKeychainStore(), fet
 
 export function createCredentialRoutes(store = new MacKeychainStore(), fetcher = fetch) {
   const statuses = new Map();
+  let openAIModels;
+  const modelIds = (data, key) => {
+    if (!Array.isArray(data?.data)) throw Error('Invalid model list.');
+    return [...new Set(data.data.map(item=>item?.id).filter(id=>typeof id === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,199}$/.test(id) && !id.includes(key)))].sort();
+  };
   const generations = new Map();
   const queues = new Map();
   const clientRevisions = new Map();
@@ -100,7 +106,7 @@ export function createCredentialRoutes(store = new MacKeychainStore(), fetcher =
     }
   };
   return async (req, path, reply) => {
-    const match = path.match(/^\/api\/credentials(?:\/([a-z-]+)(?:\/(verify|request))?)?$/);
+    const match = path.match(/^\/api\/credentials(?:\/([a-z-]+)(?:\/(verify|request|models|reveal))?)?$/);
     if (!match) return false;
     const [, provider, operation] = match;
     if (req.headers.origin !== `http://${req.headers.host}` && req.headers['sec-fetch-site'] !== 'same-origin') {
@@ -120,6 +126,35 @@ export function createCredentialRoutes(store = new MacKeychainStore(), fetcher =
     let revision = generation(provider);
     const record = (result) => { if (generation(provider) === revision) statuses.set(provider, result); };
     try {
+      if (operation === 'reveal') {
+        if (req.method !== 'POST') { reply(405, { error: 'POST required.' }); return true; }
+        if (req.headers['x-day18-ui'] !== 'reveal-provider-key' || !localUiRequest(req, 'reveal-provider-key')) {
+          reply(403, { error: 'Local provider settings access required.' }); return true;
+        }
+        await queues.get(provider);
+        if (!await store.status(provider)) { reply(404, { error: 'No saved key.' }); return true; }
+        if (generation(provider) !== revision) { reply(409, { error: 'Credential changed.' }); return true; }
+        const key = await store.read(provider);
+        if (generation(provider) !== revision) { reply(409, { error: 'Credential changed.' }); return true; }
+        if (!key) { reply(404, { error: 'No saved key.' }); return true; }
+        reply(200, { key }); return true;
+      }
+      if (operation === 'models') {
+        if (provider !== 'openai' || req.method !== 'GET') { reply(405,{error:'OpenAI model discovery requires GET.'}); return true; }
+        await (queues.get(provider) ?? Promise.resolve());
+        if (!await store.status(provider)) { reply(404,{error:'No saved OpenAI key.'}); return true; }
+        if (!openAIModels || openAIModels.revision !== revision || new URL(req.url,'http://localhost').searchParams.has('refresh')) {
+          const key = await store.read(provider);
+          if (!key || generation(provider) !== revision) { reply(409,{error:'Credential changed.'}); return true; }
+          const response = await fetcher('https://api.openai.com/v1/models',{method:'GET',headers:{Authorization:'Bearer '+key},redirect:'error',signal:AbortSignal.timeout(30000)});
+          if (!response.ok) { reply(response.status,{error:'OpenAI model discovery failed.'}); return true; }
+          const ids = modelIds(await response.json(),key);
+          if (generation(provider) !== revision) { reply(409,{error:'Credential changed.'}); return true; }
+          openAIModels = {revision,ids};
+        }
+        if (generation(provider) !== revision) { reply(409,{error:'Credential changed.'}); return true; }
+        reply(200,{ids:openAIModels.ids}); return true;
+      }
       if (!operation && req.method === 'GET') { reply(200, await snapshot(provider)); return true; }
       if (!operation || req.method !== 'POST' || !req.headers['content-type']?.startsWith('application/json')) {
         reply(405, { error: 'Use Verify to save a key after verification.' }); return true;
@@ -172,6 +207,11 @@ export function createCredentialRoutes(store = new MacKeychainStore(), fetcher =
           });
           if (!committed) { reply(409, { error: 'Credential operation superseded.' }); return true; }
         }
+        if (provider === 'openai') {
+          try { const ids = modelIds(await response.json(),key); if (generation(provider) === revision) openAIModels = {revision,ids}; }
+          catch { /* Verification relies on HTTP status. A later refresh can retrieve the catalog. */ }
+        }
+        if (generation(provider) !== revision) { reply(409,{error:'Credential changed.'}); return true; }
         const result = { saved: true, verification: 'verified' };
         record(result); reply(200, result); return true;
       }

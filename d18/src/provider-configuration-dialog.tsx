@@ -1,7 +1,7 @@
 import {CatalogModelField} from "./model-field";
 import { CredentialFeedback, CredentialIndicator, credentialStatusFromText } from "./credential-indicator";
-import type { SavedCredentialStatus } from "./saved-credentials";
-import { useState } from "react";
+import { revealSavedKey, savedProviders, type SavedCredentialStatus } from "./saved-credentials";
+import { useEffect, useRef, useState } from "react";
 import { Accordion, AccordionDetails, AccordionSummary, Alert, Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, IconButton, InputAdornment, MenuItem, Stack, TextField, Typography } from "@mui/material";
 import Close from "@mui/icons-material/Close";
 import ExpandMore from "@mui/icons-material/ExpandMore";
@@ -18,7 +18,39 @@ export function ProviderConfigurationDialog({ draft, onChange, onClose, onSave, 
   draft: ProviderDraft; onChange: (draft: ProviderDraft) => void; onClose: () => void; onSave: () => void;
   onDelete?: () => void; onVerify?: () => void; status: string; onDiscover?: () => void; isVerifying?: boolean; hasSavedKey?: boolean; credentialStatus?: SavedCredentialStatus;
 }) {
-  const [visible, setVisible] = useState(false);
+  const [showDraft, setShowDraft] = useState(false);
+  const [savedValue, setSavedValue] = useState("");
+  const [revealError, setRevealError] = useState(false);
+  const [loadingKey, setLoadingKey] = useState(false);
+  const request = useRef<AbortController | null>(null);
+  const savedProvider = savedProviders.find(id => draft.builtin && id === draft.id);
+  const visible = draft.key ? showDraft : hasSavedKey && !!savedValue;
+  useEffect(() => () => request.current?.abort(), []);
+  const hideKey = () => {
+    request.current?.abort();
+    request.current = null;
+    setSavedValue("");
+    setShowDraft(false);
+    setLoadingKey(false);
+    setRevealError(false);
+  };
+  const toggleKey = async () => {
+    if (visible || request.current) { hideKey(); return; }
+    if (draft.key) { setShowDraft(true); return; }
+    if (!savedProvider || !hasSavedKey) return;
+    const controller = new AbortController();
+    request.current = controller;
+    setLoadingKey(true);
+    setRevealError(false);
+    try {
+      const key = await revealSavedKey(savedProvider, controller.signal);
+      if (!controller.signal.aborted) setSavedValue(key);
+    } catch {
+      if (!controller.signal.aborted) setRevealError(true);
+    } finally {
+      if (!controller.signal.aborted) { request.current = null; setLoadingKey(false); }
+    }
+  };
   const [modelInput, setModelInput] = useState("");
   let validEndpoint = false;
   try { const url = new URL(draft.endpoint); validEndpoint = url.protocol === "https:" && !url.username && !url.password && !url.search && !url.hash; } catch { /* Invalid URL. */ }
@@ -36,8 +68,18 @@ export function ProviderConfigurationDialog({ draft, onChange, onClose, onSave, 
     <DialogContent><Stack spacing={2.5} sx={{ pt: 1 }}>
       <CatalogModelField required={draft.id!=="opencode-console"} value={draft.model} options={draft.models} onChange={model=>onChange({...draft,model})}/>
       <Stack direction={{ xs: "column", sm: "row" }} spacing={2} alignItems="flex-start">
-        <TextField fullWidth label="API Key" type={visible ? "text" : "password"} autoComplete="off" value={draft.key} onChange={(e) => onChange({ ...draft, key: e.target.value })} helperText={draft.builtin && ["openai", "opencode-console"].includes(draft.id) ? "Verify saves an accepted key in this Mac’s Keychain. Saved keys are never displayed. Console checks may use tokens." : "Stored in memory only."} slotProps={{ input: { endAdornment: <InputAdornment position="end"><IconButton aria-label={visible ? "Hide API key" : "Show API key"} onClick={() => setVisible(!visible)}>{visible ? <VisibilityOff /> : <Visibility />}</IconButton></InputAdornment> } }} />
-        <Button variant="contained" size="small" onClick={onVerify} disabled={!onVerify || (!draft.key.trim() && !hasSavedKey) || (!["opencode-console", "opencode-go"].includes(draft.id) && !draft.model) || isVerifying} sx={{ flexShrink: 0 }}>Verify</Button>
+        <TextField fullWidth label="API Key" type={visible ? "text" : "password"} autoComplete="off"
+          placeholder={hasSavedKey ? "••••••••" : undefined} value={visible && !draft.key ? savedValue : draft.key}
+          onChange={e => { setRevealError(false); onChange({ ...draft, key: e.target.value }); }}
+          error={revealError} helperText={revealError ? "Could not show the saved key. Try again." :
+            savedProvider ? "Verify saves an accepted key. Console checks may use tokens." : "Stored in memory only."}
+          slotProps={{ inputLabel: { shrink: true }, input: { readOnly: loadingKey || (!!savedValue && visible),
+            endAdornment: <InputAdornment position="end"><IconButton
+              disabled={isVerifying || (!draft.key && !(hasSavedKey && savedProvider))}
+              aria-label={loadingKey ? "Cancel showing API key" : visible ? "Hide API key" : "Show API key"}
+              aria-pressed={visible} onClick={toggleKey}>{visible || loadingKey ? <VisibilityOff /> : <Visibility />}</IconButton></InputAdornment>,
+          } }} />
+        <Button variant="contained" size="small" onClick={() => { hideKey(); onVerify?.(); }} disabled={!onVerify || (!draft.key.trim() && !hasSavedKey) || (!["opencode-console", "opencode-go"].includes(draft.id) && !draft.model) || isVerifying} sx={{ flexShrink: 0 }}>Verify</Button>
       </Stack>
       <Stack direction={{ xs: "column", sm: "row" }} gap={1} justifyContent="space-between" alignItems={{ sm: "center" }}>
         <Box sx={{ minWidth: 0 }}><CredentialIndicator provider={draft.name} showProvider={false} status={displayedStatus} /></Box>
@@ -57,6 +99,6 @@ export function ProviderConfigurationDialog({ draft, onChange, onClose, onSave, 
         </Stack></AccordionDetails>
       </Accordion>
     </Stack></DialogContent>
-    <DialogActions sx={{ p: 2, justifyContent: "space-between", flexWrap: "wrap", gap: 1 }}><Button color="error" onClick={onDelete} disabled={!onDelete}>Forget key</Button><Box><Button onClick={onClose}>Cancel</Button><Button variant="contained" onClick={onSave} disabled={!draft.name.trim() || !validEndpoint || !!error || (!draft.model && draft.parameters.length > 0) || isVerifying}>Save</Button></Box></DialogActions>
+    <DialogActions sx={{ p: 2, justifyContent: "space-between", flexWrap: "wrap", gap: 1 }}><Button color="error" onClick={() => { hideKey(); onDelete?.(); }} disabled={!onDelete}>Forget key</Button><Box><Button onClick={onClose}>Cancel</Button><Button variant="contained" onClick={onSave} disabled={!draft.name.trim() || !validEndpoint || !!error || (!draft.model && draft.parameters.length > 0) || isVerifying}>Save</Button></Box></DialogActions>
   </Dialog>;
 }

@@ -1162,8 +1162,11 @@ test("four active MCP leases bound one connection and an aborted call releases i
       () => true,
     );
     assert.equal(overflow.error.code, "capacity");
+    assert.equal(overflow.error.effectEvidence, "pre_dispatch");
     controls[0].abort();
-    assert.equal((await pending[0]).error.code, "cancelled");
+    const cancelled = await pending[0];
+    assert.equal(cancelled.error.code, "cancelled");
+    assert.equal(cancelled.error.effectEvidence, undefined);
   } finally {
     finish.resolve();
     await Promise.all(pending);
@@ -2920,4 +2923,124 @@ test("fresh task consent selects tools across two global servers without a chat 
   }
   assert.equal(called.length,3);assert.equal(new Set(called).size,2);
   assert.deepEqual(await api("week3/sessions"),[]);
+});
+
+test("scheduled action contracts isolate a failed page list, preserve uncertain writes and fence arbitrary code", async t => {
+  const folder = await mkdtemp(join(tmpdir(), "d18-action-policy-"));
+  const file = join(folder, "fixture.sqlite");
+  const tracker = await remote(t), design = await remote(t);
+  const schema = {type:"object", properties:{action:{type:"string"}, value:{type:"integer"}}, required:["action"], additionalProperties:false};
+  tracker.state.pages = [[{name:"page",inputSchema:schema, annotations:{readOnlyHint:true}}]];
+  design.state.pages = [[{name:"execute_code",inputSchema:{type:"object", properties:{code:{type:"string"}}, required:["code"]}},
+    {name:"inspect",inputSchema:schema}]];
+  const remoteCalls = [];
+  const error = {isError:true, content:[{type:"text",text:"HTTP 404"}]};
+  tracker.state.execute = ({arguments:args}) => {
+    remoteCalls.push(args.action);
+    if (args.action === "apply" && args.value === 1)
+      return {...error, structuredContent:{disposition:"rejected_before_mutation"}};
+    if (args.action === "apply") return {content:[{type:"text",text:"Applied"}]};
+    return error;
+  };
+  design.state.execute = ({name}) => {
+    remoteCalls.push(name);
+    return {content:[{type:"text",text:"Inspected"}]};
+  };
+  const contracts = [];
+  let steps = [];
+  const options = {schedulerOptions:{pollMs:60000}, executionOptions:{readMcpPolicy:()=>[],readActionContracts:()=>contracts},
+    invariantAdapter:()=>({complete:async ({tools,messages}) => {
+      const count = messages.filter(m=>m.role==="tool").length;
+      if (count >= steps.length) return {text:"See the recorded operations."};
+      const [name,args,parents] = steps[count];
+      const def = tools.find(tool=>tool.kind==="mcp" && tool.originalName===name) ??
+        tools.find(tool=>tool.kind==="mcp" && tool.name===name);
+      assert.ok(def, name);
+      return {toolCalls:[{id:"step"+count,toolId:def.id,providerName:"mcp_"+def.toolId.replaceAll("-",""),arguments:args,dependsOn:parents}]};
+    }})};
+  let app=createSessionServer(file,options), base=await start(app);
+  const db=new DatabaseSync(file,{readOnly:true});
+  t.after(async()=>{db.close();await stop(app);await rm(folder,{recursive:true});});
+  async function api(path,body) {
+    const res=await fetch(base+"/api/"+path,{method:body?"POST":"GET",headers:{"x-day18-ui":"scheduler",origin:base,"content-type":"application/json"},body:body&&JSON.stringify(body)});
+    assert.ok(res.ok,String(res.status));return res.json();
+  }
+  for (const [peer,name] of [[tracker,"Plane fixture"],[design,"Penpot fixture"]]) {
+    const c=await api("mcp-connections",{...peer.config,name});
+    await api("mcp-connections/"+c.connectionId+"/refresh",{});
+  }
+  const catalog=await api("scheduler/catalog");
+  const pins = catalog.map(({connectionId,toolId,definition,revision})=>({connectionId,toolId,definition,revision}));
+  function review(name,action,safety,extra={}) {
+    contracts.push({...pins[catalog.findIndex(tool=>tool.name===name)],safety,independentInputs:true,
+      argumentSchema:{...schema,properties:{...schema.properties, action:{type:"string",const:action}}},...extra});
+  }
+  review("page","list","read-only");
+  review("page","update","side-effecting");
+  review("page","apply","side-effecting",{rejectionReceipt:{field:"disposition",value:"rejected_before_mutation",correctableFields:["value"]}});
+  review("inspect","inspect","read-only");
+  async function run(plan) {
+    steps=plan;
+    const at=Date.now()-5;
+    const task=await api("scheduler/tasks",{name:"Action policy fixture",instructions:"Inspect the page and design using the requested operations.",
+      model:"fixture",provider:"openai",timezone:"UTC",schedule:{kind:"once",at},permissions:pins,authorized:true,enabled:false});
+    app.scheduledTasks.start(task.id);
+    const id=app.scheduledTasks.materialize(task.id,at);
+    const result=await app.scheduledTasks.executeOccurrence(id);
+    const rows=db.prepare(`SELECT o.id,o.safety,o.state,o.display,o.error,(SELECT count(*) FROM week4_attempts a WHERE a.operation_id=o.id) AS attempts
+      FROM week4_operations o WHERE run_id=? AND kind='tool' ORDER BY rowid`).all(id).map(row=>({...row,error:JSON.parse(row.error),display:JSON.parse(row.display)}));
+    return {result,rows,task,id};
+  }
+  const inspected=["inspect",{action:"inspect"}], code=["execute_code",{code:"fixture"}];
+  const read=await run([["page",{action:"list"}],code,[...inspected,["step0"]],inspected]);
+  assert.deepEqual(read.rows.map(r=>r.state),["Failed","Skipped","Skipped","Success"]);
+  assert.equal(read.rows[0].error.failureKind,"read_failure");
+  assert.equal(read.rows[0].error.certainty,"known");
+  assert.equal(read.result.state,"PartialSuccess");
+  for (const skipped of read.rows.slice(1,3)) {
+    assert.equal(skipped.attempts,0);
+    assert.deepEqual(skipped.error.blockingOperationIds,[read.rows[0].id]);
+    assert.ok(skipped.error.missingEvidence.length);
+  }
+  const write=await run([["page",{action:"update"}],["page",{action:"apply",value:2}],inspected]);
+  assert.equal(write.result.state,"RequiresReview");
+  assert.equal(write.rows[0].error.failureKind,"uncertain_write_outcome");
+  assert.equal(write.rows[0].attempts,1);
+  assert.deepEqual(write.rows[1].error.missingEvidence,["fresh_state_verification"]);
+  assert.equal(write.rows[1].attempts,0);
+  assert.deepEqual(remoteCalls,["list","inspect","update","inspect"]);
+  const body = "return canvas.setTitle(input.title);";
+  contracts.push({...pins[catalog.findIndex(tool=>tool.name==="execute_code")],safety:"side-effecting",independentInputs:true,
+    argumentSchema:{type:"object",additionalProperties:false,properties:{code:{type:"string"}},required:["code"]},
+    codeTemplate:{body,inputSchema:{type:"object",additionalProperties:false,required:["title"],
+      properties:{title:{type:"string",const:"Fixture"}}}}});
+  const pinnedCode = 'const input = {"title":"Fixture"};\n' + body;
+  const independent = await run([["page",{action:"list"}],code,["execute_code",{code:pinnedCode}]]);
+  assert.deepEqual(independent.rows.map(r=>r.state),["Failed","Skipped","Success"]);
+  assert.equal(independent.rows[1].attempts,0);
+  assert.equal(independent.result.state,"PartialSuccess");
+  const corrected=await run([["page",{action:"apply",value:1}],["page",{action:"apply",value:2}]]);
+  assert.equal(corrected.rows[0].error.failureKind,"confirmed_write_failure");
+  assert.equal(corrected.rows[0].error.effectEvidence,"atomic_rejection");
+  assert.equal(corrected.rows[1].display.correctsOperation,corrected.rows[0].id);
+  assert.equal(corrected.result.state,"Completed");
+  await stop(app);
+  app=createSessionServer(file,options);base=await start(app);
+  const restored = await api("scheduler/tasks");
+  assert.deepEqual(restored.find(task=>task.id===write.task.id).reviewIds,[write.id]);
+  assert.deepEqual(restored.find(task=>task.id===read.task.id).reviewIds,[]);
+  assert.deepEqual(remoteCalls,["list","inspect","update","inspect","list","execute_code","apply","apply"]);
+  assert.throws(()=>app.scheduledTasks.start(write.task.id),{status:409});
+  // Even a subsequent operator review and reclassification cannot replay the
+  // identical uncertain write from a new occurrence after process restoration.
+  app.scheduledTasks.review(write.task.id,{confirmed:true,revision:write.task.revision,occurrenceIds:[write.id]});
+  contracts.find(rule=>rule.argumentSchema.properties.action?.const==="update").safety="read-only";
+  steps=[["page",{action:"update"}]];
+  const retry=app.scheduledTasks.start(write.task.id);
+  const retryId=app.scheduledTasks.materialize(write.task.id,retry.next_due_at);
+  assert.equal((await app.scheduledTasks.executeOccurrence(retryId)).state,"Failed");
+  const denied=db.prepare("SELECT id,state,error FROM week4_operations WHERE run_id=? AND kind='tool'").get(retryId);
+  assert.equal(JSON.parse(denied.error).code,"authorization");
+  assert.equal(db.prepare("SELECT count(*) AS n FROM week4_attempts WHERE operation_id=?").get(denied.id).n,0);
+  assert.equal(remoteCalls.filter(call=>call==="update").length,1);
 });

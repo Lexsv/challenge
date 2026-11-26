@@ -48,3 +48,11 @@ work/
 *.p12
 *.pfx
 *.keychain*
+
+# Local container packaging
+/Dockerfile*
+/.dockerignore
+/*Dockerfile.dockerignore
+/compose*.y*ml
+/docker-compose*.y*ml
+/docker/

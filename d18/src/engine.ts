@@ -220,7 +220,7 @@ export class Engine {
         ? await selectedAdapter(currentKey, { settings, instructions, input, schema })
         : await executeWithSavedProvider(provider, settings, instructions, input, schema);
       const attempt: Attempt = { id: crypto.randomUUID(), ...outcome };
-      const cost = requestCost(attempt, provider);
+      const cost = requestCost(attempt, provider, attempt.actualModel ? providerAdapter?.limits?.(attempt.actualModel)?.price : undefined);
       if (cost) attempt.cost = cost;
       return attempt;
     } catch {

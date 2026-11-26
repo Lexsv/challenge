@@ -53,7 +53,7 @@ it('migrates old history safely, saves one Library item per request, and restore
       expect(request.tools.some((tool: { name: string }) => tool.name.includes('tiktoken'))).toBe(false);
       count++;
       if (count === 1) return new Response(JSON.stringify({ model: 'gpt-4o-mini', output: [{ type: 'function_call', call_id: 'tax-call', name: 'builtin_tax_calculator', arguments: JSON.stringify({ amount: 100, taxRate: 15 }) }], usage: { input_tokens: 20, output_tokens: 4, total_tokens: 24 }, debug: 'raw-response-must-not-be-copied' }));
-      return new Response(JSON.stringify({ model: 'gpt-4o-mini', output: [{ type: 'message', content: [{ type: 'output_text', text: 'Total: 115' }] }], usage: { input_tokens: 40, output_tokens: 8, total_tokens: 48 }, debug: 'raw-response-must-not-be-copied' }));
+      return new Response(JSON.stringify({ model: 'gpt-4o-mini', output: [{ type: 'message', content: [{ type: 'output_text', text: 'Total: 115' }] }], usage: { input_tokens: 40, output_tokens: 8, total_tokens: 48, input_tokens_details:{cached_tokens:12,cache_write_tokens:0} }, debug: 'raw-response-must-not-be-copied' }));
     });
     const adapter = createManagerLlmAdapter({ providerId: 'openai', model: 'gpt-4o-mini', apiKey: 'placeholder-private-key', registry, fetcher });
     const result = await new ManagerAgent(adapter, tools).run({ state: emptySession(session), userText: 'user-prompt-must-not-be-copied-to-meter', onEvent: async (event) => {
@@ -78,11 +78,27 @@ it('migrates old history safely, saves one Library item per request, and restore
     expect((await api(`/${session.id}/events`, 'POST', badPrice)).status).toBe(400);
     const changedIdentity = { ...meterEvents[0], id: 'changed-identity', payload: { ...meterEvents[0].payload, model: 'different-model' } };
     expect((await api(`/${session.id}/events`, 'POST', changedIdentity)).status).toBe(409);
+    // A separate session exercises the backend meter allowlist and restoration for a billed Console response.
+    const billedSession = await (await api('', 'POST')).json();
+    const consoleAdapter = createManagerLlmAdapter({providerId:'opencode-console',model:'gpt-6-astra',
+      apiKey:'placeholder',registry:new ProviderRegistry(),fetcher:async () => new Response(JSON.stringify({
+        model:'gpt-6-astra',choices:[{message:{content:'Done'},finish_reason:'stop'}],
+        usage:{cost:0.000075,opencode:{tokens:{input:0,output:1,cache_read:0,cache_write_5m:2,cache_write_1h:0}}}
+      }))});
+    const billedRun = await new ManagerAgent(consoleAdapter, tools).run({state:emptySession(billedSession),userText:'Test billing',onEvent:async event=>{
+      expect((await api(`/${billedSession.id}/events`, 'POST', event)).ok).toBe(true);
+    }});
+    expect(billedRun.run.status).toBe('completed');
     await stop(); await start();
+    const billedHistory = restoreHistory(emptySession(billedSession),await (await api(`/${billedSession.id}/events`)).json());
+    expect(billedHistory.requestMeters).toHaveLength(1);
+    expect(billedHistory.requestMeters![0]).toMatchObject({cacheWriteTokens:2,cachedInputTokens:0,providerRequestCost:0.000075,
+      providerCostEstimated:false,estimatedRequestCost:0.000075,actualPricing:{cacheWritePerMillion:12.5}});
     expect(await (await api('/legacy/events')).json()).toMatchObject([{ id: 'legacy-event', payload: oldMessage, sequence: 1 }]);
     const restored = restoreHistory(emptySession(session), await (await api(`/${session.id}/events`)).json());
     expect(restored.requestMeters).toEqual(result.state.requestMeters!.map((meter) => JSON.parse(JSON.stringify(meter))));
     expect(buildWeek2Timeline(restored, tools).filter((event) => event.kind === 'metering')).toHaveLength(2);
+    expect(restored.requestMeters![1]).toMatchObject({cachedInputTokens:12,cacheWriteTokens:0});
     expect(restored.requestMeters![0].estimatedRequestCost).toBeGreaterThan(0);
     const tied = structuredClone(restored);
     for (const message of tied.messages) message.createdAt = 100;

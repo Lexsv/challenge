@@ -1,5 +1,7 @@
 import {
   compileScope,
+  reviewedAction,
+  readActionContracts,
   readGrants,
   matchGrant,
   policyDigest,
@@ -38,6 +40,7 @@ export function resolveWeek4Tools({
   scope,
   attempt,
   policy,
+  actionContracts = readActionContracts,
   now,
 }) {
   const context = scope();
@@ -56,6 +59,7 @@ export function resolveWeek4Tools({
   const entries = new Map();
   const ambiguous = new Set();
   const errors = [];
+  const offeredContracts = structuredClone(actionContracts());
   const connections = new Map();
   function add(entry) {
     const id = entry.tool.id;
@@ -66,6 +70,7 @@ export function resolveWeek4Tools({
       );
     } else entries.set(id, entry);
   }
+  let prepareInput;
   if (permitted()) {
     for (const tool of registry.listExecutable()) {
       const implementation = registry.get(tool.id);
@@ -97,7 +102,6 @@ export function resolveWeek4Tools({
       errors.push(issue("persistence", "storage", "resolution").error);
     }
     const skipped = new Set();
-    let prepareInput;
     for (const row of rows) {
       connections.set(row.connectionId, row.connectionName);
       const ids = { connectionId: row.connectionId };
@@ -226,7 +230,7 @@ export function resolveWeek4Tools({
       toolId: mcp ? tool.toolId : id,
       ...(mcp && { connectionId: tool.connectionId }),
     };
-    let grant;
+    let grant, classification;
     if (mcp) {
       let row;
       try {
@@ -249,6 +253,12 @@ export function resolveWeek4Tools({
         grant = matchGrant(readGrants(row, policy, context.sessionId, args), args, entry.scopes);
         if (!grant || !offered || policyDigest(grant) !== policyDigest(offered))
           return {...issue("authorization", "router", "routing", ids), validation:"passed"};
+        if (grant.catalogScope) {
+          const classify = rules => reviewedAction(rules, row, args, prepareInput, now());
+          classification = classify(offeredContracts);
+          if (policyDigest(classification ?? null) !== policyDigest(classify(actionContracts()) ?? null))
+            return issue("route_changed", "router", "routing", ids);
+        }
       }
     } else {
       try {
@@ -273,15 +283,17 @@ export function resolveWeek4Tools({
           repeatAfterSuccess: grant.catalogScope === true,
           authorization: context.sessionId.startsWith("task:") ? "unattended task grant" : grant.catalogScope ? "connection auto-approve" : grant.confirmedRead ? "session-approved read" : grant.runId && grant.callId ? "approved once" :
             grant.sessionScope ? "attached capability" : "session grant",
-          stateScope: grant.stateScope,
+          actionContract: classification ? policyDigest(classification) : !grant.catalogScope ? policyDigest(grant) : undefined,
+          rejectionReceipt: (classification ?? grant).rejectionReceipt,
+          stateScope: classification?.stateScope ?? grant.stateScope,
           // An exact reviewed read has no model-supplied inputs. Explicit
           // restrictions and declared prerequisites always take precedence.
-          independentInputs: !grant.requires?.length && (grant.independentInputs ??
+          independentInputs: !grant.requires?.length && (classification?.independentInputs ?? grant.independentInputs ??
             (grant.safety === "read-only" && grant.arguments !== undefined)) === true,
           requires: grant.requires ?? [],
         }),
         safety: mcp
-          ? (grant?.safety ?? "side-effecting")
+          ? (classification?.safety ?? grant?.safety ?? "side-effecting")
           : (entry.implementation.safety ?? "side-effecting"),
       },
     };
@@ -301,6 +313,7 @@ export function resolveWeek4Tools({
         correlation,
         mcp,
         ids.grantId,
+        ids.safety,
       );
     } catch {
       return issue("persistence", "storage", "routing", { toolId: ids.toolId });

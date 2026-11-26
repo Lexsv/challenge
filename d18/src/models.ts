@@ -29,7 +29,7 @@ export const resolveExpert = (
       ? defaultModel
       : ""),
 });
-export type Usage = { input?: number; output?: number; reasoning?: number; cachedInput?: number };
+export type Usage = { input?: number; output?: number; reasoning?: number; cachedInput?: number; cacheWriteInput?: number; longCacheWriteInput?: number; billingIncomplete?: boolean };
 export type IncompleteReason =
   "max_output_tokens" | "content_filter" | "max_messages" | "steered";
 export type Attempt = {

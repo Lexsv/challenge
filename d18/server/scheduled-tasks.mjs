@@ -462,14 +462,16 @@ export function createScheduledTasks(
     return !!db.prepare("SELECT 1 FROM week4_runs WHERE task_id=? AND owner IS NOT NULL LIMIT 1").get(id);
   }
   function reviewIds(id) {
-    // Only skip a hold when the durable operation policies establish read-only
-    // execution. Missing records or dispatched writes remain conservative.
+    // A missing journal is inconclusive. A recorded skip without an attempt
+    // and a verified no-effect rejection cannot have changed external state.
     return db.prepare(`SELECT o.id FROM scheduled_occurrences o LEFT JOIN week4_runs r ON r.id=o.id
       WHERE o.task_id=? AND o.started_at IS NOT NULL AND o.reviewed_at IS NULL AND
         (r.id IS NULL OR (r.state='RequiresReview' AND (
-          NOT EXISTS(SELECT 1 FROM week4_operations p WHERE p.run_id=r.id AND p.kind='tool' AND p.safety='read-only')
+          NOT EXISTS(SELECT 1 FROM week4_operations p WHERE p.run_id=r.id AND p.kind='tool')
           OR EXISTS(SELECT 1 FROM week4_operations p
-            WHERE p.run_id=r.id AND p.kind='tool' AND p.safety<>'read-only')))) ORDER BY o.id`).all(id).map(r=>r.id);
+            WHERE p.run_id=r.id AND p.kind='tool' AND p.safety<>'read-only'
+              AND NOT (p.state='Skipped' AND NOT EXISTS(SELECT 1 FROM week4_attempts a WHERE a.operation_id=p.id))
+              AND coalesce(json_extract(p.error,'$.failureKind'),'')<>'confirmed_write_failure')))) ORDER BY o.id`).all(id).map(r=>r.id);
   }
   function lifecycle(row) {
     if (row.deletion_state) return row.deletion_state===2 ? "Deleted" : "Deleting";

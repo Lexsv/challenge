@@ -1,3 +1,4 @@
+import { billingUsage, providerCost } from './token-billing.ts';
 import type { Attempt, Settings } from './models';
 import { parseOpenAIResponses, parseOpenAIChatCompletions } from './manager-llm-adapter';
 import { parameterPayload } from './api-parameters';
@@ -17,11 +18,12 @@ export async function executeWithSavedProvider(provider: string, settings: Setti
     const response = await fetch(`/api/credentials/${provider}/request`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     if (!response.ok) return {status:'failed',text:'',error:`Saved provider request failed (${response.status}).`,ms:performance.now()-started};
     const data: unknown = await response.json();
-    const result = data as {status?:string; choices?:{finish_reason?:string}[]; usage?:{input_tokens?:number;output_tokens?:number;prompt_tokens?:number;completion_tokens?:number}};
-    if (result.status === 'incomplete' || result.choices?.some(choice => choice.finish_reason === 'length')) return {status:'incomplete',text:'',error:'The provider response was incomplete. Please retry.',ms:performance.now()-started};
+    const result = data as {model?:string;service_tier?:unknown;status?:string; choices?:{finish_reason?:string}[]; usage?:{input_tokens?:number;output_tokens?:number;prompt_tokens?:number;completion_tokens?:number}};
+    const billing = {usage:billingUsage(provider, result.usage, result.service_tier), cost:providerCost(provider, result.usage),
+      actualModel:typeof result.model === 'string' ? result.model : undefined};
+    if (result.status === 'incomplete' || result.choices?.some(choice => choice.finish_reason === 'length')) return {...billing,status:'incomplete',text:'',error:'The provider response was incomplete. Please retry.',ms:performance.now()-started};
     const text = (provider === 'openai' ? parseOpenAIResponses(data) : parseOpenAIChatCompletions(data)).text ?? '';
-    if (!text.trim()) return {status:'failed',text:'',error:'The provider returned no response text.',ms:performance.now()-started};
-    const usage = result.usage ? {input:result.usage.input_tokens ?? result.usage.prompt_tokens,output:result.usage.output_tokens ?? result.usage.completion_tokens} : undefined;
-    return {status:'succeeded',text,usage,ms:performance.now()-started};
+    if (!text.trim()) return {...billing,status:'failed',text:'',error:'The provider returned no response text.',ms:performance.now()-started};
+    return {...billing,status:'succeeded',text,ms:performance.now()-started};
   } catch { return {status:'failed',text:'',error:'Saved provider request could not complete. Check settings and retry.',ms:performance.now()-started}; }
 }

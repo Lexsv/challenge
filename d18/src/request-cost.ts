@@ -1,22 +1,18 @@
-import { catalog } from "./opencode-catalog";
+import { tokenCost, tokenPricing } from "./token-billing.ts";
+import { DEFAULT_ENDPOINTS } from "./provider-endpoints.ts";
 import type { Attempt, Run } from "./models";
 
 export type RequestCost = { usd: number; source: "provider" | "catalog"; estimated: boolean; catalogDate?: string };
 const valid = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n) && n >= 0;
 
 /** Calculate only when the actual model and both token rates are available. */
-export function requestCost(attempt: Attempt | undefined, provider?: string): RequestCost | undefined {
+export function requestCost(attempt: Attempt | undefined, provider?: string, discovered?: import("./opencode-catalog").DiscoveredModel["price"]): RequestCost | undefined {
   if (!attempt) return undefined;
   if (attempt.cost && valid(attempt.cost.usd)) return attempt.cost;
-  if (provider !== "opencode-console" || attempt.status !== "succeeded" || !attempt.actualModel) return undefined;
-  const model = catalog.find((item) => item.id === attempt.actualModel);
-  const usage = attempt.usage;
-  if (!model || model.unit !== "per 1M tokens" || !valid(model.price.input) || !valid(model.price.output) || !valid(usage?.input) || !valid(usage?.output)) return undefined;
-  const cached = usage.cachedInput;
-  if (cached !== undefined && (!valid(cached) || cached > usage.input || !valid(model.price.cacheRead))) return undefined;
-  const input = usage.input - (cached ?? 0);
-  const usd = (input * model.price.input + usage.output * model.price.output + (cached ?? 0) * (model.price.cacheRead ?? 0)) / 1_000_000;
-  return { usd, source: "catalog", estimated: true, catalogDate: model.date };
+  if (!provider || attempt.status === "running" || !attempt.actualModel) return undefined;
+  const price = tokenPricing(provider, attempt.actualModel, DEFAULT_ENDPOINTS[provider as keyof typeof DEFAULT_ENDPOINTS], attempt.usage?.input,discovered);
+  const usd = tokenCost(attempt.usage, price);
+  return usd !== undefined && price ? { usd, source: "catalog", estimated: true, catalogDate: price.asOf } : undefined;
 }
 export function formatCost(cost: number): string {
   if (cost > 0 && cost < 0.000000001) return `$${cost.toExponential(4)}`;

@@ -1,3 +1,4 @@
+import {pricingSourceLabels} from "./token-billing";
 import {
   Accordion,
   AccordionDetails,
@@ -58,9 +59,14 @@ export function RequestMeterCard({
           Estimated request cost:{" "}
           {money(meter.estimatedRequestCost, meter.actualPricing?.currency)}
         </Typography>
+        {meter.cachedInputTokens !== undefined && <Typography variant="body2">Cache read tokens: {meter.cachedInputTokens}</Typography>}
+        {meter.cacheWriteTokens !== undefined && <Typography variant="body2">Cache write tokens: {meter.cacheWriteTokens}</Typography>}
+        {meter.providerRequestCost !== undefined && <Typography variant="body2">
+          {meter.providerCostEstimated ? "Provider estimate" : "Provider-reported cost"}: {money(meter.providerRequestCost, "USD")}
+        </Typography>}
         {(meter.actualPricing ?? meter.pricing) && (
           <Typography variant="caption" color="text.secondary">
-            Rates: {(meter.actualPricing ?? meter.pricing)!.source} ·{" "}
+            Rates: {pricingSourceLabels[(meter.actualPricing ?? meter.pricing)!.source]} ·{" "}
             {(meter.actualPricing ?? meter.pricing)!.asOf}
           </Typography>
         )}

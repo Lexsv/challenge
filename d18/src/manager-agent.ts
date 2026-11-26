@@ -45,9 +45,9 @@ export type ManagerToolCall = {
 };
 
 type DurableInvocation = (signal:AbortSignal, key:string, correlation:{toolCallId:string;attemptId:string}) => Promise<ToolExecutionResult<unknown>>;
-type SessionToolPlan = { validation?:string; authorization?:string; prerequisiteCallIds?: readonly string[]; prerequisiteFailure?: DependencyReason } & ({allowed:false; error?:import("./execution-policy").ExecutionError} | {
+type SessionToolPlan = { actionContract?:string; blockingOperationIds?: readonly string[]; missingEvidence?: readonly string[]; validation?:string; authorization?:string; prerequisiteCallIds?: readonly string[]; prerequisiteFailure?: DependencyReason } & ({allowed:false; error?:import("./execution-policy").ExecutionError} | {
   allowed:true; repeatAfterSuccess?:boolean; safety:import("./execution-policy").OperationSafety; connection?:string;grantId?:string;
-  independentInputs?:boolean;stateScope?:string;ready:boolean;check:()=>unknown;invoke:DurableInvocation;
+  independentInputs?:boolean;trustedPrerequisites?:boolean;correctableFields?:readonly string[];stateScope?:string;ready:boolean;check:()=>unknown;invoke:DurableInvocation;
 });
 export type ManagerLlmResponse = {
   text?: string;
@@ -143,7 +143,7 @@ export class ManagerAgent {
     journalSummary?: () => string | undefined;
     executeDurably?: (operation: {
       id: string; call: ManagerToolCall; correctsOperation?: string; safety: import('./execution-policy').OperationSafety;
-      validation?:string; authorization?:string; repeatAfterSuccess?:boolean; allowed: boolean; skip: boolean; skipReason?: DependencyReason; check: () => unknown; connection?:string;grantId?:string;preflightError?:import("./execution-policy").ExecutionError;
+      validation?:string; authorization?:string; repeatAfterSuccess?:boolean; allowed: boolean; skip: boolean; skipReason?: DependencyReason; actionContract?:string; blockingOperationIds?: readonly string[]; missingEvidence?: readonly string[]; check: () => unknown; connection?:string;grantId?:string;preflightError?:import("./execution-policy").ExecutionError;
       prerequisiteCallIds?: readonly string[]; stateScope?:string;
       invoke: DurableInvocation;
     }) => Promise<ToolExecutionResult<unknown>>;
@@ -251,10 +251,12 @@ export class ManagerAgent {
       while (balance < 0 && link.endsWith(")")) { link = link.slice(0, -1); balance++; }
       return link;
     };
-    let correctable: {toolId:string; callId:string; operationId?:string} | undefined;
-    const unresolvedFailures = new Set<string>();
+    let correctable: {toolId:string; callId:string; operationId?:string; contract?:string; args?:Record<string, unknown>} | undefined;
+    const unresolvedFailures = new Map<string, {operationId:string; uncertain:boolean}>();
+    const operationIds = new Map<string,string>();
+    const corrections = new Map<string,string>();
     const callOutcomes = new Map<string,"success" | "failed" | "skipped">();
-    const derivedValues = new Map<string,{available:boolean; value:unknown}>();
+    const derivedValues = new Map<string,{available:boolean; value:unknown; operationId:string}>();
     let history: ManagerLlmMessage[] = [];
     const current: ManagerLlmMessage[] = [{ role: 'user', content: userMessage.text }];
     let llmMessages = [...history, ...current];
@@ -525,7 +527,7 @@ export class ManagerAgent {
             const failedParent = call.dependsOn?.some(parent => callOutcomes.get(parent) === "failed");
             const earlierFailure = unresolvedFailures.size > 0;
             const args = call.arguments && typeof call.arguments === 'object' ? call.arguments as Record<string,unknown> : {};
-            const unresolvedInput = tool?.inputSchema.required.some(field => {
+            const unresolvedInput = tool?.inputSchema.required.find(field => {
               const produced = derivedValues.get(field);
               if (produced) return !produced.available || !Object.is(produced.value, args[field]);
               return pendingCalls.some(({call:other}) => other.id !== call.id && registry.get(other.toolId)?.produces?.includes(field));
@@ -534,19 +536,48 @@ export class ManagerAgent {
             if ((earlierFailure || pendingCalls.length>1) && tool?.independentInputs) {
               try { independent = tool.validate(call.arguments).ok; } catch { /* Missing proof of independence. */ }
             }
-            const correctingArguments = pendingCalls.length === 1 && correctable?.toolId === call.toolId;
-            if (bound?.ready && (correctingArguments || bound.independentInputs || bound.prerequisiteCallIds?.length ||
-                (pendingCalls.length === 1 && bound.safety === "read-only"))) independent=true;
+            // A verified atomic rejection can be superseded only for the same
+            // action and target. The reviewed receipt lists the repairable fields.
+            const changedFields = correctable?.args && Object.keys({...correctable.args,...args}).filter(key =>
+              JSON.stringify(correctable?.args?.[key]) !== JSON.stringify(args[key]));
+            const correctingArguments = pendingCalls.length === 1 && correctable?.toolId === call.toolId &&
+              (!correctable.contract || (correctable.contract === bound?.actionContract && !!changedFields?.length &&
+                changedFields.every(key => bound?.correctableFields?.includes(key))));
+            if (bound?.ready && (correctingArguments || bound.independentInputs || bound.trustedPrerequisites ||
+                (!earlierFailure && pendingCalls.length === 1 && bound.safety === "read-only"))) independent=true;
             let skipReason: DependencyReason | undefined;
             if (allowed) {
               if (absentParent) skipReason = "prerequisite_missing";
               else if (failedParent) skipReason = "prerequisite_failed";
               else if (bound?.ready === false) skipReason = plan?.prerequisiteFailure ?? "prerequisite_missing";
               else if (unresolvedInput) skipReason = "prerequisite_missing";
-              else if (!independent && !call.dependsOn?.length) {
+              else if (!independent && (earlierFailure || !call.dependsOn?.length)) {
                 if (earlierFailure) skipReason = "independence_after_failure_unproven";
                 else if (pendingCalls.length > 1 && !tool?.independentInputs) skipReason = "batch_independence_unproven";
               }
+            }
+            let blockingOperationIds = plan?.blockingOperationIds;
+            let missingEvidence = plan?.missingEvidence;
+            if (absentParent || failedParent) {
+              const parents = (call.dependsOn ?? []).filter(id => callOutcomes.get(id) !== "success");
+              blockingOperationIds = parents.flatMap(id => {
+                const recorded = operationIds.get(id) ?? pendingCalls.find(p => p.call.id === id)?.toolExecution.id;
+                return recorded ? [recorded] : [];
+              });
+              missingEvidence ??= [absentParent ? "current_run_call" :
+                parents.some(id => unresolvedFailures.get(id)?.uncertain) ? "fresh_state_verification" : "successful_prerequisite_result"];
+            } else if (unresolvedInput && !missingEvidence) {
+              const producer = derivedValues.get(unresolvedInput);
+              blockingOperationIds = producer ? [producer.operationId] : pendingCalls.filter(p =>
+                registry.get(p.call.toolId)?.produces?.includes(unresolvedInput)).map(p => p.toolExecution.id);
+              missingEvidence = ["verified_input:" + unresolvedInput];
+            } else if (skipReason === "batch_independence_unproven") {
+              blockingOperationIds = pendingCalls.filter(p => p.call !== call).map(p => p.toolExecution.id);
+              missingEvidence = ["batch_input_independence"];
+            } else if (skipReason === "independence_after_failure_unproven" && !missingEvidence) {
+              const blockers = [...unresolvedFailures.values()];
+              blockingOperationIds = blockers.map(b => b.operationId);
+              missingEvidence = [blockers.some(b => b.uncertain) ? "independence_from_uncertain_effects" : "independent_inputs"];
             }
             execution = await input.executeDurably({
               id: toolExecution.id, call, allowed, safety: bound?.safety ?? tool?.safety ?? 'side-effecting',
@@ -554,22 +585,35 @@ export class ManagerAgent {
               repeatAfterSuccess:bound?.repeatAfterSuccess,
               validation:plan?.validation, authorization:plan?.authorization, connection:bound?.connection ?? (plan && !plan.allowed ? plan.error?.connectionId : undefined),grantId:bound?.grantId,preflightError:plan && !plan.allowed ? plan.error : undefined,
               prerequisiteCallIds:plan?.prerequisiteCallIds, stateScope:bound?.stateScope,
-              skip: !!skipReason, skipReason,
+              skip: !!skipReason, skipReason, blockingOperationIds, missingEvidence, actionContract: bound?.actionContract,
               check: bound?.check ?? (() => allowed && registry.get(call.toolId) === tool),
               invoke: bound?.invoke ?? ((signal,key) => registry.executeById(call.toolId,call.arguments,signal,key)),
             });
             if (execution.ok) execution = {...execution,output:safeToolObservation(execution.output)};
             // A bad input was never dispatched. It is safe to correct it unless an
             // earlier unresolved failure was already blocking dependent operations.
-            if (correctingArguments && correctable) unresolvedFailures.delete(correctable.callId);
-            if (!execution.ok && execution.outcome !== "Skipped") unresolvedFailures.add(call.id);
-            correctable = !execution.ok && execution.error.code === "invalid_arguments" &&
-              execution.error.stage === "validation" &&
-              (!earlierFailure || correctingArguments) ? {toolId:call.toolId, callId:call.id, operationId:execution.logicalCallId} : undefined;
+            if (correctingArguments && correctable && call.id !== correctable.callId) {
+              corrections.set(call.id, correctable.callId);
+              if (execution.ok) {
+                let prior: string | undefined = correctable.callId;
+                while (prior && unresolvedFailures.delete(prior)) prior = corrections.get(prior);
+              }
+            }
+            const operationId = execution.logicalCallId ?? toolExecution.id;
+            operationIds.set(call.id, operationId);
+            if (!execution.ok && execution.outcome !== "Skipped") unresolvedFailures.set(call.id, {
+              operationId, uncertain:execution.error.certainty === "unknown",
+            });
+            const atomicRejection = !execution.ok && execution.error.failureKind === "confirmed_write_failure" &&
+              execution.error.effectEvidence === "atomic_rejection" && bound?.actionContract;
+            correctable = !execution.ok && (atomicRejection ||
+              (execution.error.code === "invalid_arguments" && execution.error.stage === "validation" && execution.error.certainty === "known")) &&
+              (!earlierFailure || correctingArguments) ? {toolId:call.toolId, callId:call.id, operationId,
+                contract:atomicRejection || undefined, args:atomicRejection ? args : undefined} : undefined;
             callOutcomes.set(call.id,execution.ok ? "success" : execution.outcome === "Skipped" ? "skipped" : "failed");
             for (const field of tool?.produces ?? []) {
               const out=execution.ok && execution.output && typeof execution.output==='object' ? execution.output as Record<string,unknown> : {};
-              derivedValues.set(field,{available:execution.ok && Object.hasOwn(out,field),value:out[field]});
+              derivedValues.set(field,{available:execution.ok && Object.hasOwn(out,field),value:out[field],operationId});
             }
           } else {
             execution = await registry.executeById(call.toolId, call.arguments);

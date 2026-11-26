@@ -55,10 +55,10 @@ export type ProviderAdapter = {
   allowUndiscoveredSelection?: boolean;
   executionAvailable?: boolean;
   catalog: () => readonly string[];
-  discover?: () => Promise<readonly DiscoveredModel[]>;
+  discover?: (refresh?:boolean) => Promise<readonly DiscoveredModel[]>;
   capabilities: (model: string) => ProviderModelCapabilities | undefined;
   modelFeatures?: (model: string) => ModelFeatures | undefined;
-  limits?: (model: string) => { contextWindow?: number; maxOutputTokens?: number; maxInputTokens?: number } | undefined;
+  limits?: (model: string) => { contextWindow?: number; maxOutputTokens?: number; maxInputTokens?: number; price?: DiscoveredModel["price"] } | undefined;
   validate: (settings: Settings) => string | undefined;
   validateHistorical?: (settings: Settings) => string | undefined;
   initialParameters?: (model: string, maxTokens: number) => ApiParameter[];
@@ -134,9 +134,23 @@ export function createProviderRegistry(
   options: {catalogFetch?:typeof fetch; catalogStorage?: () => CatalogStorage | undefined} = {},
 ) {
   const registry = new ProviderRegistry();
+  let accountModels: string[] | undefined;
+  let catalogRevision = 0;
   registry.register({
     id: "openai", label:providerInfo.openai.label,
-    catalog: () => openAICatalog,
+    catalog: () => accountModels ?? openAICatalog,
+    onEndpointChanged: () => { accountModels = undefined; catalogRevision++; },
+    discover: async (refresh = true) => {
+      if (registry.endpointFor("openai") !== DEFAULT_ENDPOINTS.openai) throw Error("Saved-key discovery requires the official OpenAI endpoint.");
+      const revision = ++catalogRevision;
+      const response = await (options.catalogFetch ?? fetch)("/api/credentials/openai/models" + (refresh ? "?refresh=1" : ""), {credentials:"same-origin",redirect:"error"});
+      if (!response.ok) throw Error("Model discovery failed (HTTP " + response.status + ").");
+      const data = await response.json();
+      if (!Array.isArray(data?.ids) || !data.ids.every((id:unknown)=>typeof id === "string")) throw Error("Invalid model catalog.");
+      if (revision !== catalogRevision) throw Error("Catalog changed during discovery.");
+      accountModels = [...new Set<string>(data.ids)];
+      return accountModels.map(id=>({id,name:id}));
+    },
     capabilities: (model) => {
       const c = capabilities(model);
       return c

@@ -72,6 +72,7 @@ export function createMcpConnectionManager(db, store, options = {}, repo = creat
     const { connectionId: id, toolId, revision, sessionId } = destination;
     let lease,
       healthy = false,
+      callDispatched = false,
       stage = "dispatch";
     try {
       const check = () =>
@@ -131,6 +132,7 @@ export function createMcpConnectionManager(db, store, options = {}, repo = creat
         signal,
         check,
         destination.capture,
+        () => { callDispatched = true; },
       );
       stage = "response";
       if (!check()) throw new McpProblem("result");
@@ -159,7 +161,9 @@ export function createMcpConnectionManager(db, store, options = {}, repo = creat
       healthy = true;
       return { ok: true, toolId, output };
     } catch (error) {
-      return mcpFailure(toolId, error, signal, stage);
+      const failure = mcpFailure(toolId, error, signal, stage);
+      if (!callDispatched) failure.error.effectEvidence = "pre_dispatch";
+      return failure;
     } finally {
       if (lease) {
         if (!healthy || lease.closed || signal.aborted || stopped)

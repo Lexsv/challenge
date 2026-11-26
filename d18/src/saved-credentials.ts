@@ -7,6 +7,16 @@ export type SavedCredentialStatus = {
   removalFailed?: boolean;
 };
 export const savedProviders: SavedProvider[] = ['openai', 'opencode-console', 'opencode-go'];
+export async function revealSavedKey(provider: SavedProvider, signal: AbortSignal): Promise<string> {
+  const response = await fetch(`/api/credentials/${provider}/reveal`, {
+    method: 'POST', headers: { 'X-Day18-UI': 'reveal-provider-key' },
+    mode: 'same-origin', cache: 'no-store', redirect: 'error', signal,
+  });
+  if (!response.ok) throw new Error('Could not show the saved API key.');
+  const { key } = await response.json();
+  if (typeof key !== 'string' || !key) throw new Error('No saved API key.');
+  return key;
+}
 export const uncheckedCredential: SavedCredentialStatus = { saved: false, verification: 'unchecked' };
 
 export function configuredProviderProblem(status: SavedCredentialStatus): boolean {

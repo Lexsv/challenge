@@ -61,3 +61,14 @@ describe("built-in expert provider configuration", () => {
     expect(disabled).toMatchObject({ enabled: false, value: "0.9" });
   });
 });
+
+it("separates account discovery from verified execution profiles and replaces stale IDs on refresh",async()=>{
+  const fetcher=vi.fn().mockResolvedValueOnce(Response.json({ids:["gpt-6-astra","an-embedding"]})).mockResolvedValueOnce(Response.json({ids:["gpt-6.1-sol"]}));
+  const registry=createProviderRegistry(undefined,{}, {catalogFetch:fetcher});
+  const openai=registry.get("openai")!;
+  await openai.discover!();
+  expect(openai.catalog()).toEqual(["gpt-6-astra","an-embedding"]);
+  expect(registry.modelOptionsFor("openai")).toEqual(["gpt-6-astra"]);
+  await openai.discover!();
+  expect(registry.modelOptionsFor("openai")).toEqual(["gpt-6.1-sol"]);
+});

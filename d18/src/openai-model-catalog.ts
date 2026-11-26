@@ -41,6 +41,12 @@ export const modelCatalog: Record<string, ModelCapabilities> = {
     verificationReasoning: "none",
     verificationTokens: 128,
   },
+  // https://developers.openai.com/api/docs/models/gpt-6-astra
+  "gpt-6-astra": {
+    structuredOutput: true, contextWindow: 1050000, maxOutputTokens: 128000,
+    reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+    defaultReasoning: "low", verificationReasoning: "low", verificationTokens: 2048,
+  },
   "gpt-6.1-sol": {
     structuredOutput: true,
     maxOutputTokens: 128000,
