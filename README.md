@@ -22,6 +22,7 @@ Each training day is maintained as an independent project directory at the repos
 | 16 | MCP Servers — session-scoped tool discovery, multi-server execution, and a durable execution journal | [Day 16 source](d16/) | — | — |
 | 17 | MCP Scheduler Server — a layered TypeScript server for SQLite-backed reminders, atomic task execution, and authenticated Streamable HTTP resource updates over SSE | [Day 17 source](d17/) · [Setup and deployment](d17/README.md) | — | — |
 | 18 | Scheduler & Background Tasks — autonomous MCP execution, task lifecycle and persistent history, weather collection and aggregation, and scheduled table and chart reports | [Day 18 project](d18/README.md) | — | — |
+| 18 | Weather MCP Server — the Scheduler uses `get_weather` to fetch current conditions from Open-Meteo, `save_weather` to store observations in SQLite, and `read_weather_history` to retrieve observations by location and time range | [Weather MCP project](d18-mcp/README.md) | — | — |
 
 Historical tag links point to the original published revisions.
 
